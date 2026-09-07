@@ -52,6 +52,124 @@ describe("Archive Reconciliation", () => {
 		t = createBackend();
 	});
 
+	test("pages archive values and automatic restorations within a pinned transition", async () => {
+		const user = await authenticatedBackend(t, "archive-pages");
+		const projectId = await createProject(user);
+		await bindTwoLocales(user, projectId);
+		const fr = await user.mutation(api.locales.create, {
+			projectId,
+			code: "fr",
+		});
+		await user.action(api.locales.bind, {
+			localeId: fr,
+			catalogPath: "fr.arb",
+		});
+		const full = ["en", "de", "fr"].map((code) => ({
+			catalogPath: `${code}.arb`,
+			content: JSON.stringify({
+				"@@locale": code,
+				...Object.fromEntries(
+					Array.from({ length: 60 }, (_, i) => [`key_${i}`, `${code} ${i}`]),
+				),
+			}),
+		}));
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "full",
+			files: full,
+		});
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "empty",
+			lineage: {
+				baselineCommit: "full",
+				relationship: "descendant",
+				mergeBase: "full",
+			},
+			files: ["en", "de", "fr"].map((code) => ({
+				catalogPath: `${code}.arb`,
+				content: JSON.stringify({ "@@locale": code }),
+			})),
+		});
+		const first = await user.query(api.archiveReconciliation.getActive, {
+			projectId,
+		});
+		if (!first) throw new Error("Expected archive");
+		expect(first.isDone).toBe(false);
+		await expect(
+			user.query(api.archiveReconciliation.getActive, {
+				projectId,
+				cursor: first.continueCursor,
+			}),
+		).rejects.toThrow("projectionId");
+		const archiveOrder = new Set(first.keys.map((key) => key.id));
+		let count = first.keys.reduce((sum, key) => sum + key.values.length, 0);
+		let page = first;
+		while (!page.isDone) {
+			page = await user.query(api.archiveReconciliation.get, {
+				projectId,
+				projectionId: first.projectionId,
+				cursor: page.continueCursor,
+			});
+			for (const key of page.keys) archiveOrder.add(key.id);
+			count += page.keys.reduce((sum, key) => sum + key.values.length, 0);
+		}
+		expect(count).toBe(180);
+		expect([...archiveOrder]).toEqual(
+			Array.from({ length: 60 }, (_, i) => `key_${i}`),
+		);
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "restored",
+			lineage: {
+				baselineCommit: "empty",
+				relationship: "descendant",
+				mergeBase: "empty",
+			},
+			files: full.map((file) =>
+				file.catalogPath === "en.arb"
+					? file
+					: {
+							...file,
+							content: JSON.stringify({
+								"@@locale": file.catalogPath.slice(0, 2),
+							}),
+						},
+			),
+		});
+		const restored = await user.query(api.catalogProjection.getRestorations, {
+			projectId,
+		});
+		if (!restored) throw new Error("Expected restorations");
+		expect(restored.isDone).toBe(false);
+		const remaining = await user.query(api.catalogProjection.getRestorations, {
+			projectId,
+			projectionId: restored.projectionId,
+			cursor: restored.continueCursor,
+		});
+		expect(remaining?.isDone).toBe(true);
+		expect([
+			...new Set(
+				[...restored.keys, ...(remaining?.keys ?? [])].map((key) => key.id),
+			),
+		]).toEqual(Array.from({ length: 60 }, (_, i) => `key_${i}`));
+		expect(
+			restored.keys.reduce((sum, key) => sum + key.values.length, 0) +
+				(remaining?.keys.reduce((sum, key) => sum + key.values.length, 0) ?? 0),
+		).toBe(120);
+		expect(
+			(
+				await user.query(api.archiveReconciliation.get, {
+					projectId,
+					projectionId: first.projectionId,
+				})
+			)?.snapshotId,
+		).toBe(first.snapshotId);
+	});
+
 	test("archives absent source keys and target Locales without losing evidence", async () => {
 		const user = await authenticatedBackend(t, "archive-owner");
 		const projectId = await createProject(user);

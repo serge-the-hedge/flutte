@@ -539,7 +539,7 @@ describe("Agent Translation Proposals", () => {
 				.unique();
 		});
 		if (!navRow) throw new Error("Expected the Navigation digest.");
-		expect(navRow.searchCorpus).toContain("willkommen {name}");
+		expect(navRow.searchCorpus).toEqual(["greeting"]);
 		expect(navRow.targets[0]).toMatchObject({
 			valueState: "settled",
 			touched: true,

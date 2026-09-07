@@ -38,6 +38,22 @@ export type ReleaseBundleArtifact = {
 	}>;
 };
 
+export type ReleaseBundleManifest = Omit<
+	ReleaseBundleArtifact,
+	"version" | "changes"
+> & {
+	version: 2;
+	changeKeyCount: number;
+	chunks: Array<{
+		catalogPath: string;
+		storageId: string;
+		contentHash: string;
+		byteLength: number;
+		changeKeyCount: number;
+	}>;
+};
+export type StoredReleaseBundle = ReleaseBundleArtifact | ReleaseBundleManifest;
+
 export type DeliveryTreeResult = {
 	files: Array<{ catalogPath: string; content: string }>;
 	applied: string[];

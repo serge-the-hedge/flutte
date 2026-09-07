@@ -8,6 +8,10 @@
  * @module
  */
 
+import type * as catalogBrowse from "../catalogBrowse.js";
+import type * as catalogProcessing from "../catalogProcessing.js";
+import type * as snapshotUploads from "../snapshotUploads.js";
+import type * as releaseUploadDelivery from "../releaseUploadDelivery.js";
 import type * as accessControl from "../accessControl.js";
 import type * as agentRetrieval from "../agentRetrieval.js";
 import type * as catalogSearch from "../catalogSearch.js";
@@ -66,6 +70,10 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  catalogBrowse: typeof catalogBrowse;
+  catalogProcessing: typeof catalogProcessing;
+  snapshotUploads: typeof snapshotUploads;
+  releaseUploadDelivery: typeof releaseUploadDelivery;
   accessControl: typeof accessControl;
   agentRetrieval: typeof agentRetrieval;
   catalogSearch: typeof catalogSearch;

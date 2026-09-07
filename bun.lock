@@ -66,6 +66,7 @@
         "@convex-dev/rate-limiter": "^0.3.2",
         "@convex-dev/resend": "^0.2.7",
         "@convex-dev/workflow": "^0.4.4",
+        "@noble/hashes": "^2.2.0",
         "better-auth": "catalog:",
         "convex": "^1.45.0",
         "dotenv": "^17.4.2",

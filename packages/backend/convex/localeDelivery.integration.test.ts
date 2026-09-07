@@ -1,5 +1,5 @@
 import { getFunctionName } from "convex/server";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
@@ -15,6 +15,9 @@ import {
 } from "./catalogWorkspaceDecisionQueries";
 import { sha256Hex } from "./lib";
 import { realizeLocaleBinding } from "./snapshots";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 const sourceContent = JSON.stringify({
 	"@@locale": "en",

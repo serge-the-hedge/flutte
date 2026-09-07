@@ -24,7 +24,10 @@ import {
 	requireEditor,
 	requireViewer,
 } from "./permissions";
-import type { ReleaseBundleArtifact } from "./releaseBundleModel";
+import type {
+	ReleaseBundleArtifact,
+	ReleaseBundleManifest,
+} from "./releaseBundleModel";
 import { isReleaseDelta } from "./releaseRecordModel";
 import {
 	isCurrentSourceProposalHeadForSource,
@@ -32,9 +35,11 @@ import {
 	sourceProposalHeadFor,
 } from "./sourceProposals";
 
-const MAX_RELEASE_BUNDLE_BYTES = 8 * 1024 * 1024;
-const MAX_RELEASE_BUNDLE_FILES = 20;
-const MAX_RELEASE_BUNDLE_PAGE = 32;
+const MAX_RELEASE_BUNDLE_FILES = MAX_PROJECTED_LOCALES;
+// One key fits the catalog processing budget; its current heads can double the read.
+const MAX_RELEASE_BUNDLE_PAGE = 1;
+const RELEASE_CHUNK_TARGET_BYTES = 1024 * 1024;
+const MAX_RELEASE_MANIFEST_BYTES = 1024 * 1024;
 
 const buildSummaryValidator = v.object({
 	runId: v.id("releaseBuildRuns"),
@@ -141,6 +146,11 @@ export const build = mutation({
 		await ctx.scheduler.runAfter(0, internal.releaseBundles.buildArtifact, {
 			runId,
 		});
+		await ctx.scheduler.runAfter(
+			24 * 60 * 60 * 1000,
+			internal.releaseBundles.cleanupChunks,
+			{ runId },
+		);
 		const run = await ctx.db.get(runId);
 		if (!run) throw new ConvexError("Release Build Run was not created.");
 		return buildSummary(run);
@@ -285,7 +295,11 @@ export const bundleChangePage = internalQuery({
 					.eq("projectId", record.projectId)
 					.eq("projectionId", record.projectionId),
 			)
-			.paginate(args.paginationOpts);
+			.paginate({
+				...args.paginationOpts,
+				numItems: 1,
+				maximumBytesRead: 1024 * 1024,
+			});
 		const changes = [];
 		for (const key of page.page) {
 			if (!isReleaseDelta(key)) continue;
@@ -427,6 +441,9 @@ export const failBuild = internalMutation({
 			failure: args.failure,
 			completedAt: now(),
 		});
+		await ctx.scheduler.runAfter(0, internal.releaseBundles.cleanupChunks, {
+			runId: args.runId,
+		});
 		return null;
 	},
 });
@@ -442,7 +459,56 @@ export const buildArtifact = internalAction({
 			} = await ctx.runQuery(internal.releaseBundles.bundleContext, {
 				runId: args.runId,
 			});
-			const changes: ReleaseBundleArtifact["changes"] = [];
+			const chunks: ReleaseBundleManifest["chunks"] = [];
+			let manifestBytes =
+				new TextEncoder().encode(JSON.stringify(context.artifact)).byteLength +
+				256;
+			const pending = new Map<string, ReleaseBundleArtifact["changes"]>();
+			let pendingBytes = 0;
+			let changeKeyCount = 0;
+			async function flush() {
+				for (const [catalogPath, changes] of pending) {
+					const content = JSON.stringify(changes);
+					const storageId = await ctx.storage.store(
+						new Blob([content], { type: "application/json" }),
+					);
+					try {
+						await ctx.runMutation(internal.releaseBundles.registerChunk, {
+							runId: args.runId,
+							storageId,
+						});
+					} catch (error) {
+						await ctx.storage.delete(storageId);
+						throw error;
+					}
+					const reference = {
+						catalogPath,
+						storageId,
+						contentHash: await sha256Hex(content),
+						byteLength: new Blob([content]).size,
+						changeKeyCount: changes.length,
+					};
+					manifestBytes +=
+						new TextEncoder().encode(JSON.stringify(reference)).byteLength + 1;
+					if (manifestBytes > MAX_RELEASE_MANIFEST_BYTES)
+						throw new ConvexError({
+							code: "LIMIT_EXCEEDED",
+							message:
+								"Release manifest metadata exceeds its 1 MiB limit. Prepare a smaller release.",
+						});
+					chunks.push(reference);
+				}
+				pending.clear();
+				pendingBytes = 0;
+			}
+			const sourceCatalog = context.artifact.catalogs.find(
+				(catalog) => catalog.isSource,
+			);
+			if (!sourceCatalog)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Release Bundle needs a Source catalog.",
+				});
 			let cursor: string | null = null;
 			let done = false;
 			while (!done) {
@@ -452,27 +518,46 @@ export const buildArtifact = internalAction({
 					isDone: boolean;
 				} = await ctx.runQuery(internal.releaseBundles.bundleChangePage, {
 					runId: args.runId,
-					paginationOpts: {
-						cursor,
-						numItems: MAX_RELEASE_BUNDLE_PAGE,
-					},
+					paginationOpts: { cursor, numItems: MAX_RELEASE_BUNDLE_PAGE },
 				});
-				changes.push(...page.page);
+				for (const change of page.page) {
+					const paths = new Set([
+						sourceCatalog.catalogPath,
+						...change.values.map((value) => value.catalogPath),
+					]);
+					for (const catalogPath of paths) {
+						const entry = {
+							...change,
+							values: change.values.filter(
+								(value) => value.catalogPath === catalogPath,
+							),
+						};
+						const bytes =
+							new TextEncoder().encode(JSON.stringify(entry)).byteLength + 1;
+						if (
+							pendingBytes &&
+							pendingBytes + bytes > RELEASE_CHUNK_TARGET_BYTES
+						)
+							await flush();
+						const entries = pending.get(catalogPath) ?? [];
+						entries.push(entry);
+						pending.set(catalogPath, entries);
+						pendingBytes += bytes;
+					}
+					changeKeyCount++;
+				}
 				cursor = page.continueCursor;
 				done = page.isDone;
 			}
-			const artifact: ReleaseBundleArtifact = {
+			await flush();
+			const artifact: ReleaseBundleManifest = {
 				...context.artifact,
-				changes,
+				version: 2,
+				chunks,
+				changeKeyCount,
 			};
 			const content = JSON.stringify(artifact);
 			const byteLength = new TextEncoder().encode(content).byteLength;
-			if (byteLength > MAX_RELEASE_BUNDLE_BYTES) {
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message: "Release Bundle exceeds its supported byte envelope.",
-				});
-			}
 			storedBundleId = await ctx.storage.store(
 				new Blob([content], { type: "application/json" }),
 			);
@@ -482,8 +567,10 @@ export const buildArtifact = internalAction({
 					runId: args.runId,
 					bundleStorageId: storedBundleId,
 					bundleHash: await sha256Hex(content),
-					bundleByteLength: byteLength,
-					changeKeyCount: changes.length,
+					bundleByteLength:
+						byteLength +
+						chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
+					changeKeyCount,
 				},
 			);
 			if (!completed) {
@@ -559,6 +646,16 @@ export const recordDeliveryCapture = internalMutation({
 		recordId: v.id("releaseRecords"),
 		runId: v.id("releaseBuildRuns"),
 		actor: repositoryAdapterActorValidator,
+		files: v.optional(
+			v.array(
+				v.object({
+					catalogPath: v.string(),
+					storageId: v.id("_storage"),
+					contentHash: v.string(),
+					byteLength: v.number(),
+				}),
+			),
+		),
 		captureStorageId: v.id("_storage"),
 		captureHash: v.string(),
 		captureByteLength: v.number(),
@@ -593,7 +690,7 @@ export const recordDeliveryCapture = internalMutation({
 			await ctx.storage.delete(args.captureStorageId);
 			return existing._id;
 		}
-		return await ctx.db.insert("releaseDeliveryCaptures", {
+		const captureId = await ctx.db.insert("releaseDeliveryCaptures", {
 			projectId: args.projectId,
 			recordId: record._id,
 			runId: run._id,
@@ -605,5 +702,59 @@ export const recordDeliveryCapture = internalMutation({
 			skippedCount: args.skippedCount,
 			createdAt: now(),
 		});
+		for (const file of args.files ?? [])
+			await ctx.db.insert("releaseDeliveryCaptureFiles", {
+				captureId,
+				...file,
+			});
+		return captureId;
+	},
+});
+
+/** Chunk references are registered before publication so interrupted builds can
+ * clean up in bounded transactions without touching a Ready artifact. */
+export const registerChunk = internalMutation({
+	args: { runId: v.id("releaseBuildRuns"), storageId: v.id("_storage") },
+	handler: async (ctx, args) => {
+		const run = await ctx.db.get(args.runId);
+		if (run?.status !== "building")
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "Release build stopped.",
+			});
+		await ctx.db.insert("releaseBuildChunks", args);
+	},
+});
+export const cleanupChunks = internalMutation({
+	args: { runId: v.id("releaseBuildRuns") },
+	handler: async (ctx, args) => {
+		const run = await ctx.db.get(args.runId);
+		if (run?.status === "ready") return;
+		if (run?.status === "building") {
+			if (run.createdAt + 24 * 60 * 60 * 1000 > Date.now()) return;
+			await ctx.db.patch(run._id, {
+				status: "failed",
+				completedAt: Date.now(),
+				failure: {
+					code: "EXPIRED",
+					message: "Release build expired before publication.",
+					failedAt: Date.now(),
+				},
+			});
+		}
+		const chunks = await ctx.db
+			.query("releaseBuildChunks")
+			.withIndex("by_runId", (q) => q.eq("runId", args.runId))
+			.take(32);
+		for (const chunk of chunks) {
+			await ctx.storage.delete(chunk.storageId);
+			await ctx.db.delete(chunk._id);
+		}
+		if (chunks.length === 32)
+			await ctx.scheduler.runAfter(
+				0,
+				internal.releaseBundles.cleanupChunks,
+				args,
+			);
 	},
 });

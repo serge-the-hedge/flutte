@@ -41,6 +41,10 @@ void main() {
                       'baseline': null,
                       'limits': {'maxFiles': 1000, 'maxBytes': 8388608},
                     }
+                  : request.uri.path.endsWith('/snapshot-uploads')
+                  ? {'sessionId': 'upload_1', 'maxFileBytes': 8388608}
+                  : request.uri.path.endsWith('/file')
+                  ? {}
                   : {
                       'version': 1,
                       'run': {
@@ -473,11 +477,28 @@ void main() {
             'limits': {'maxFiles': 1000, 'maxBytes': 8388608},
           }),
         );
-      } else {
-        expect(
-          await utf8.decoder.bind(request).join(),
-          contains('intl_en.arb'),
+      } else if (request.uri.path.endsWith('/snapshot-uploads')) {
+        final body =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        expect(body['expectedFiles'], 1);
+        expect(body.containsKey('files'), isFalse);
+        request.response.write(
+          jsonEncode({'sessionId': 'upload_1', 'maxFileBytes': 8388608}),
         );
+      } else if (request.uri.path.endsWith('/file')) {
+        final body =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        expect(body['catalogPath'], 'intl_en.arb');
+        expect(body['content'], '{}');
+        expect(
+          body['contentHash'],
+          '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+        );
+        request.response.write('{}');
+      } else {
+        expect(await utf8.decoder.bind(request).join(), contains('upload_1'));
         request.response.write(
           jsonEncode({
             'version': 1,
@@ -512,7 +533,9 @@ void main() {
     expect(receipt.snapshotId, 'snapshot_1');
     expect(requests, [
       '/api/repository-adapter/v1/snapshot-context',
-      '/api/repository-adapter/v1/snapshots',
+      '/api/repository-adapter/v1/snapshot-uploads',
+      '/api/repository-adapter/v1/snapshot-uploads/file',
+      '/api/repository-adapter/v1/snapshot-uploads/finalize',
     ]);
   });
 }

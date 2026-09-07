@@ -72,7 +72,7 @@ const MAX_NAVIGATION_VERIFY_ROWS_PER_MUTATION = 256;
 const NAVIGATION_BACKFILL_STEP_LEASE_MS = 60_000;
 /** Step budget for the ingest action's staging loop; 32 keys per step over
  * the working-catalog key envelope leaves a generous safety margin. */
-export const MAX_NAVIGATION_STAGE_STEPS = 512;
+export const MAX_NAVIGATION_STAGE_STEPS = MAX_WORKING_CATALOG_KEYS + 1;
 
 const ordinaryImportCountsValidatorFields = {
 	total: v.number(),
@@ -155,6 +155,8 @@ export async function deriveNavigationDigest(input: {
 	/** Projection-stable target identities whose visible imported content repeats
 	 * in a Locale. */
 	repeatedValueIdentities?: ReadonlySet<string>;
+	/** Public search reads current values separately; production digests store IDs only. */
+	compactSearchCorpus?: boolean;
 	sourceProposalHead: Doc<"catalogWorkspaceSourceProposalHeads"> | null;
 	sourceProposalResolution: SourceProposalResolution | null;
 }): Promise<CatalogWorkspaceNavigationDigest> {
@@ -223,7 +225,7 @@ export async function deriveNavigationDigest(input: {
 	const targets: CatalogWorkspaceNavigationTargetDigest[] = [];
 	const searchCorpus = new Set([
 		foldCase(sourceRow.messageId),
-		foldCase(sourceEffective.value),
+		...(input.compactSearchCorpus ? [] : [foldCase(sourceEffective.value)]),
 	]);
 
 	for (const targetRow of targetRows) {
@@ -317,7 +319,7 @@ export async function deriveNavigationDigest(input: {
 				: { gitValueFingerprint: targetRow.gitValueFingerprint }),
 			firstReviewPending: pendingIntroductionLocales.has(targetRow.localeId),
 		});
-		searchCorpus.add(foldCase(effective.value));
+		if (!input.compactSearchCorpus) searchCorpus.add(foldCase(effective.value));
 	}
 
 	return {
@@ -350,9 +352,9 @@ const ORDINARY_IMPORT_COUNT_FIELDS = [
 ] as const satisfies readonly (keyof OrdinaryImportConfirmationCounts)[];
 
 /** Bump when the meaning of persisted ordinary-import categories changes. */
-const ORDINARY_IMPORT_POLICY_VERSION = 3;
+export const ORDINARY_IMPORT_POLICY_VERSION = 3;
 
-function backfillStepIsPending(
+export function backfillStepIsPending(
 	state: Pick<
 		Doc<"catalogWorkspaceNavigationStates">,
 		"backfillStepPending" | "backfillStepPendingAt"
@@ -550,6 +552,25 @@ async function navigationKeyBatchForProjection(
 		maxKeys: number;
 	},
 ) {
+	// Each Locale can require several indexed decision and provenance lookups.
+	// Limit total Locale rows as well as bytes to stay below transaction range limits.
+	const projection = await ctx.db.get(input.projectionId);
+	if (!projection)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Catalog projection not found.",
+		});
+	const localeCount = Math.max(
+		1,
+		Math.ceil(
+			projection.expectedMessageCount /
+				Math.max(1, projection.expectedKeyCount),
+		),
+	);
+	const maxKeys = Math.min(
+		input.maxKeys,
+		Math.max(1, Math.floor(128 / localeCount)),
+	);
 	const page = await ctx.db
 		.query("catalogProjectionMessages")
 		.withIndex("by_projection_and_catalogIndex", (q) =>
@@ -559,7 +580,7 @@ async function navigationKeyBatchForProjection(
 		)
 		.paginate({
 			cursor: null,
-			numItems: (input.maxKeys + 1) * MAX_PROJECTED_LOCALES,
+			numItems: (maxKeys + 1) * localeCount,
 			maximumBytesRead: 2 * 1024 * 1024,
 		});
 	const last = page.page[page.page.length - 1];
@@ -600,15 +621,22 @@ async function navigationKeyBatchForProjection(
 	let byteLength = 0;
 	for (const [messageId, keyRows] of grouped) {
 		const keyHeads = await workspaceHeadsForRows(ctx, input.projectId, keyRows);
+		const keyBytes = encodedSize(keyRows) + encodedSize(keyHeads);
+		if (keyBytes > 6 * 1024 * 1024)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"A key's catalog and working values exceed the 6 MiB processing budget.",
+			});
+		if (messageIds.length > 0 && byteLength + keyBytes > 2 * 1024 * 1024) break;
 		rows.push(...keyRows);
 		heads.push(...keyHeads);
-		byteLength += encodedSize(keyRows) + encodedSize(keyHeads);
+		byteLength += keyBytes;
 		messageIds.push(messageId);
 		// catalogIndex is the Source key ordinal, shared by every Locale row.
 		// Resuming strictly after it skips the whole completed key.
 		lastCatalogIndex = keyRows[0]?.catalogIndex ?? lastCatalogIndex;
-		if (messageIds.length >= input.maxKeys || byteLength >= 2 * 1024 * 1024)
-			break;
+		if (messageIds.length >= maxKeys || byteLength >= 2 * 1024 * 1024) break;
 	}
 	return {
 		rows,
@@ -619,7 +647,7 @@ async function navigationKeyBatchForProjection(
 	};
 }
 
-function navigationStateFor(
+export function navigationStateFor(
 	ctx: MutationCtx | QueryCtx,
 	projectId: Id<"projects">,
 ): Promise<Doc<"catalogWorkspaceNavigationStates"> | null> {
@@ -642,7 +670,7 @@ type ReadyNavigationState = Omit<
 	ordinaryImportCounts: OrdinaryImportConfirmationCounts;
 };
 
-function normalizedOrdinaryImportCounts(
+export function normalizedOrdinaryImportCounts(
 	counts: NonNullable<
 		Doc<"catalogWorkspaceNavigationStates">["ordinaryImportCounts"]
 	>,
@@ -819,6 +847,11 @@ async function upsertNavigationRow(
 		input.digest.messageId,
 	);
 	const nextByteLength = navigationDigestByteLength(input.digest);
+	if (nextByteLength > 512 * 1024)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "A Navigation digest exceeds the 512 KiB document budget.",
+		});
 	const rowCount =
 		input.envelope.kind === "active"
 			? input.envelope.state.rowCount
@@ -1166,6 +1199,13 @@ async function deriveDigestForMessage(
 			message: "Catalog Workspace found too many value heads for one key.",
 		});
 	}
+	if (encodedSize(rows) + encodedSize(heads) > 6 * 1024 * 1024) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"A key's catalog and working values exceed the 6 MiB processing budget.",
+		});
+	}
 	const sourceProposalResolution = proposalHead
 		? await publishedResolutionFor(ctx, {
 				_id: proposalHead.proposalId,
@@ -1193,6 +1233,7 @@ async function deriveDigestForMessage(
 		repeatedValueIdentitiesForRows(ctx, input.projectionId, rows),
 	]);
 	return await deriveNavigationDigest({
+		compactSearchCorpus: true,
 		projectId: input.projectId,
 		projectionId: input.projectionId,
 		rows,
@@ -2280,7 +2321,7 @@ export type CatalogWorkspaceNavigationRead =
 			keys: PublicNavigationDigest[];
 	  };
 
-function navigationReadIdentity(projection: Doc<"catalogProjections">) {
+export function navigationReadIdentity(projection: Doc<"catalogProjections">) {
 	return {
 		projectionId: projection._id,
 		repository: projection.repository,
@@ -2427,6 +2468,7 @@ export const window = query({
 		projectId: v.id("projects"),
 		expectedProjectionId: v.id("catalogProjections"),
 		messageIds: v.array(v.string()),
+		localeIds: v.optional(v.array(v.id("locales"))),
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
@@ -2454,6 +2496,37 @@ export const window = query({
 					"The expected Catalog Projection is no longer the active Baseline.",
 			});
 		}
+		const project = await ctx.db.get(args.projectId);
+		const sourceLocaleId = project?.sourceLocaleId;
+		if (!sourceLocaleId)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Project Source is missing.",
+			});
+		if (
+			args.localeIds &&
+			(args.localeIds.length > 4 ||
+				new Set(args.localeIds).size !== args.localeIds.length)
+		)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A window can compare up to four target languages.",
+			});
+		for (const localeId of args.localeIds ?? []) {
+			const locale = await ctx.db.get(localeId);
+			if (
+				!locale ||
+				locale.projectId !== args.projectId ||
+				locale.isSource ||
+				locale.archivedAt !== undefined ||
+				!locale.catalogPath
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Choose active bound target languages for a window.",
+				});
+			}
+		}
 		// Point-read every requested key's rows; nothing scans the project.
 		// Whole storage envelopes are larger than one interactive read. Stop while
 		// enough transaction headroom remains for the last complete key and decisions.
@@ -2469,13 +2542,35 @@ export const window = query({
 				});
 		};
 		const requestedRows: Doc<"catalogProjectionMessages">[] = [];
+		let requestedTargetCount = 0;
 		for (const messageId of args.messageIds) {
-			const rows = await ctx.db
-				.query("catalogProjectionMessages")
-				.withIndex("by_projection_and_messageId", (q) =>
-					q.eq("projectionId", projection._id).eq("messageId", messageId),
-				)
-				.take(MAX_PROJECTED_LOCALES + 1);
+			const rows = args.localeIds
+				? (
+						await Promise.all(
+							[...new Set([sourceLocaleId, ...args.localeIds])].map(
+								(localeId) =>
+									ctx.db
+										.query("catalogProjectionMessages")
+										.withIndex(
+											"by_projection_and_messageId_and_localeId",
+											(q) =>
+												q
+													.eq("projectionId", projection._id)
+													.eq("messageId", messageId)
+													.eq("localeId", localeId),
+										)
+										.unique(),
+							),
+						)
+					).filter(
+						(row): row is Doc<"catalogProjectionMessages"> => row !== null,
+					)
+				: await ctx.db
+						.query("catalogProjectionMessages")
+						.withIndex("by_projection_and_messageId", (q) =>
+							q.eq("projectionId", projection._id).eq("messageId", messageId),
+						)
+						.take(MAX_PROJECTED_LOCALES + 1);
 			if (rows.length > MAX_PROJECTED_LOCALES) {
 				throw new ConvexError({
 					code: "INTEGRITY",
@@ -2488,6 +2583,15 @@ export const window = query({
 					message: `The window key ${messageId} is not an active Catalog key.`,
 				});
 			}
+			requestedTargetCount += rows.filter((row) => !row.isSource).length;
+			// Bound per-target head/decision lookups while preserving the existing
+			// 32-key, six-language comparison window.
+			if (requestedTargetCount > 256)
+				throw new ConvexError({
+					code: "WINDOW_TOO_LARGE",
+					message:
+						"This Catalog window compares too many target values. Request fewer keys or languages.",
+				});
 			accountRead(rows);
 			requestedRows.push(...rows);
 		}

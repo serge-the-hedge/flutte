@@ -41,7 +41,7 @@ describe("Catalog Workspace Window read", () => {
 		vi.useFakeTimers({
 			toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
 		});
-		t = createBackend();
+		t = createBackend({ transactionLimits: true });
 	});
 
 	afterEach(() => {

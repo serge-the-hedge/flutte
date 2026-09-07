@@ -124,7 +124,8 @@ const MAX_RECONCILIATION_REPORT_ROWS =
 	MAX_WORKING_CATALOG_KEYS * 2 + MAX_PROJECTED_LOCALES;
 const MAX_RECONCILIATION_REPORT_FACTS =
 	MAX_WORKING_CATALOG_ROWS * 2 + MAX_PROJECTED_LOCALES;
-const MAX_RECONCILIATION_REPORT_BYTES = 12 * 1024 * 1024;
+// Total stored facts are paged on every read; this is not a response budget.
+const MAX_RECONCILIATION_REPORT_BYTES = MAX_RECONCILIATION_REPORT_FACTS * 1024;
 const MAX_RECONCILIATION_REPORT_FACTS_PER_ROW = MAX_PROJECTED_LOCALES * 5;
 const MAX_RECONCILIATION_REPORT_STAGE_ROWS = 64;
 const MAX_RECONCILIATION_REPORT_STAGE_BYTES = 512_000;
@@ -402,6 +403,7 @@ function sourceChangeResidue(code: TranslationResidueCode): boolean {
  * into the next snapshot's durable record.
  */
 export function reconciliationReportDraft(input: {
+	hadPreviousBaseline?: boolean;
 	previousMessages: readonly ProjectedMessage[];
 	currentMessages: readonly ProjectedMessage[];
 	gitChanges: readonly GitAuthoredChange[];
@@ -535,7 +537,7 @@ export function reconciliationReportDraft(input: {
 		});
 	}
 
-	if (previousSource.size > 0) {
+	if (input.hadPreviousBaseline ?? previousSource.size > 0) {
 		for (const message of input.currentMessages) {
 			if (message.isSource) continue;
 			const source = currentSource.get(message.messageId);
@@ -766,7 +768,7 @@ function draftEnvelope(draft: ReconciliationReportDraft): {
 	};
 }
 
-function reconciliationReportEnvelope(
+export function reconciliationReportEnvelope(
 	draft: ReconciliationReportDraft | null,
 ): {
 	rowCount: number;
@@ -811,6 +813,38 @@ function stagingBatches<T>(
 	}
 	if (batch.length > 0) batches.push(batch);
 	return batches;
+}
+
+/** Append a disjoint set of message/file rows to an already declared report. */
+export async function stageReconciliationReportChunk(
+	ctx: ActionCtx,
+	args: {
+		projectId: Id<"projects">;
+		projectionId: Id<"catalogProjections">;
+		draft: ReconciliationReportDraft | null;
+		actor?: RepositoryAdapterActor;
+	},
+): Promise<void> {
+	if (!args.draft) return;
+	for (const rows of stagingBatches(args.draft.rows, rowByteLength)) {
+		await ctx.runMutation(internal.reconciliationReports.stageRows, {
+			projectId: args.projectId,
+			projectionId: args.projectionId,
+			rows,
+			actor: args.actor,
+		});
+	}
+	for (const keys of stagingBatches(
+		args.draft.handoffKeys,
+		handoffKeyByteLength,
+	)) {
+		await ctx.runMutation(internal.reconciliationReports.stageHandoffKeys, {
+			projectId: args.projectId,
+			projectionId: args.projectionId,
+			keys,
+			actor: args.actor,
+		});
+	}
 }
 
 /** Stage one report beside a private catalog projection. Callers provide the

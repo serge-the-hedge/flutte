@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
 	authenticatedBackend,
@@ -13,8 +13,11 @@ import type { Id } from "./_generated/dataModel";
 let t: Backend;
 
 beforeEach(() => {
+	vi.useFakeTimers();
 	t = createBackend();
 });
+
+afterEach(() => vi.useRealTimers());
 
 async function repositoryRequest(
 	token: string,
@@ -251,6 +254,13 @@ describe("Release Records", () => {
 		await t.action(internal.releaseBundles.buildArtifact, {
 			runId: started.runId,
 		});
+		expect(
+			(
+				await user.query(api.releaseBundles.forRecord, {
+					recordId: record.recordId,
+				})
+			)?.failure,
+		).toBeNull();
 		await expect(
 			user.query(api.releaseBundles.forRecord, {
 				recordId: record.recordId,
@@ -886,4 +896,109 @@ describe("Release Records", () => {
 			outsider.mutation(api.releaseRecords.prepare, { projectId }),
 		).rejects.toThrow();
 	});
+});
+
+test("delivers one uploaded catalog at a time with export-only authorization and retained input evidence", async () => {
+	const { sha256Hex } = await import("./lib");
+	const user = await authenticatedBackend(t, "release-file-delivery");
+	const { projectId, targetId } = await createCatalog(user);
+	await save(user, projectId, targetId, "Guten Tag");
+	const record = await prepareAndFinish(user, projectId);
+	const started = await user.mutation(api.releaseBundles.build, {
+		recordId: record.recordId,
+	});
+	await t.action(internal.releaseBundles.buildArtifact, {
+		runId: started.runId,
+	});
+	const token = (
+		await user.mutation(api.apiTokens.create, {
+			projectId,
+			name: "export only",
+			scopes: ["export"],
+		})
+	).token;
+	const post = async (suffix: string, body: unknown) =>
+		await repositoryRequest(
+			token,
+			`/api/repository-adapter/v1/snapshot-uploads${suffix}`,
+			{ method: "POST", body: JSON.stringify(body) },
+		);
+	const begin = await post("", {
+		kind: "release",
+		releaseRecordId: record.recordId,
+		repository: "repo",
+		commit: "baseline",
+		expectedFiles: 2,
+	});
+	expect(begin.status).toBe(200);
+	const { sessionId } = (await begin.json()) as {
+		sessionId: Id<"snapshotUploadSessions">;
+	};
+	const uploadState = await t.run(async (ctx) => await ctx.db.get(sessionId));
+	if (!uploadState) throw new Error("Expected upload session");
+	const { finalizeUpload } = await import("./snapshotUploads");
+	await expect(
+		t.action(
+			async (ctx) =>
+				await finalizeUpload(ctx, {
+					sessionId,
+					projectId,
+					tokenId: uploadState.tokenId,
+				}),
+		),
+	).rejects.toThrow("Release delivery finalization");
+	expect(
+		(await t.run(async (ctx) => await ctx.db.get(sessionId)))?.status,
+	).toBe("uploading");
+	for (const file of [
+		{ catalogPath: "en.arb", content: '{"@@locale":"en","greeting":"Hello"}' },
+		{ catalogPath: "de.arb", content: '{"@@locale":"de","greeting":"Servus"}' },
+	]) {
+		expect(
+			(
+				await post("/file", {
+					kind: "release",
+					sessionId,
+					...file,
+					contentHash: await sha256Hex(file.content),
+				})
+			).status,
+		).toBe(200);
+	}
+	const finalized = await post("/finalize", { kind: "release", sessionId });
+	expect(finalized.status).toBe(200);
+	expect(await finalized.json()).toMatchObject({
+		catalogPaths: ["de.arb", "en.arb"],
+		applied: ["greeting"],
+		skipped: [],
+	});
+	const delivered = await post("/download", {
+		sessionId,
+		catalogPath: "de.arb",
+	});
+	expect(delivered.status).toBe(200);
+	expect(await delivered.json()).toMatchObject({
+		content: '{"@@locale":"de","greeting":"Guten Tag"}',
+	});
+	const inputs = await t.run(async (ctx) => {
+		const files = await ctx.db
+			.query("snapshotUploadFiles")
+			.withIndex("by_session_and_catalogPath", (q) =>
+				q.eq("sessionId", sessionId),
+			)
+			.take(3);
+		await ctx.db.patch(sessionId, { expiresAt: 0 });
+		return files;
+	});
+	await t.mutation(internal.snapshotUploads.cleanup, { sessionId });
+	for (const file of inputs) {
+		expect(
+			await t.run(async (ctx) => await ctx.db.system.get(file.storageId)),
+		).not.toBeNull();
+		if (!file.outputStorageId) throw new Error("Expected output artifact");
+		const outputStorageId = file.outputStorageId;
+		expect(
+			await t.run(async (ctx) => await ctx.db.system.get(outputStorageId)),
+		).toBeNull();
+	}
 });

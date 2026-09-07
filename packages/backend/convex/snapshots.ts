@@ -13,7 +13,7 @@ import {
 } from "./_generated/server";
 import {
 	type AbsentTargetLocale,
-	type ArchiveState,
+	type ArchivedValue,
 	archiveEnvelope,
 	archiveKeyBatches,
 	archiveLocaleBatches,
@@ -30,6 +30,10 @@ import {
 	parse,
 } from "./catalogDocument";
 import {
+	MAX_PROCESSING_KEY_BYTES,
+	type ProcessingInput,
+} from "./catalogProcessing";
+import {
 	assignGitValueRevisions,
 	assignValueFingerprints,
 	attachIntroductionReviews,
@@ -40,12 +44,11 @@ import {
 	gitChangeBatches,
 	gitChangeEnvelope,
 	MAX_PROJECTED_LOCALES,
-	MAX_RECONCILIATION_READ_PAGE_ROWS,
 	MAX_WORKING_CATALOG_BYTES,
 	MAX_WORKING_CATALOG_KEYS,
 	MAX_WORKING_CATALOG_ROWS,
-	materializeRepeatedGitContent,
 	type ProjectedMessage,
+	projectedMessageByteLength,
 	projectionEnvelope,
 	type SourceProposalObservation,
 	sourceProposalObservationBatches,
@@ -85,7 +88,8 @@ import {
 	assertStagedReconciliationReport,
 	publishStagedReconciliationReport,
 	reconciliationReportDraft,
-	stageReconciliationReport,
+	reconciliationReportEnvelope,
+	stageReconciliationReportChunk,
 	type UnboundLocaleFile,
 } from "./reconciliationReports";
 import {
@@ -174,8 +178,6 @@ const lineageValidator = v.object({
 const MAX_PROJECT_LOCALES = 1_000;
 const MAX_LISTED_SNAPSHOTS = 100;
 const MAX_SNAPSHOT_FILES = MAX_PROJECT_LOCALES;
-const MAX_RECONCILIATION_READ_PAGES =
-	Math.ceil(MAX_WORKING_CATALOG_ROWS / MAX_RECONCILIATION_READ_PAGE_ROWS) + 1;
 const MAX_INGEST_CONFLICT_RESTAGES = 2;
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_SYNC_SETUP_DIAGNOSTICS = 32;
@@ -535,6 +537,8 @@ export const repositoryAdapterContext = internalQuery({
 			limits: {
 				maxFiles: MAX_SNAPSHOT_FILES,
 				maxBytes: MAX_SNAPSHOT_BYTES,
+				maxFileBytes: MAX_SNAPSHOT_BYTES,
+				uploadProtocol: "file-manifest-v1",
 				maxBoundLocales: MAX_PROJECTED_LOCALES,
 				maxWorkingCatalogRows: MAX_WORKING_CATALOG_ROWS,
 				maxWorkingCatalogBytes: MAX_WORKING_CATALOG_BYTES,
@@ -1271,9 +1275,29 @@ export const finalizeIngestion = internalMutation({
 	},
 });
 
-async function projectionRows(
+async function sourceDetailsFor(document: CatalogDocument) {
+	return new Map(
+		await Promise.all(
+			document.messages.map(async (message) => {
+				return [
+					message.id,
+					{
+						sourceFingerprint: await sha256Hex(message.value),
+						declaredFacts: storedFactNames(
+							declaredPlaceholderNames(message.metadata),
+						),
+					},
+				] as const;
+			}),
+		),
+	);
+}
+
+async function* projectionRows(
 	files: readonly ProjectionFile[],
-): Promise<ProjectedMessage[]> {
+	localeId: Id<"locales">,
+	sourceDetails: Awaited<ReturnType<typeof sourceDetailsFor>>,
+): AsyncGenerator<ProjectedMessage> {
 	if (files.length > MAX_PROJECTED_LOCALES) {
 		throw new ConvexError({
 			code: "VALIDATION",
@@ -1300,23 +1324,9 @@ async function projectionRows(
 			message: `A catalog projection supports at most ${MAX_WORKING_CATALOG_ROWS} message values.`,
 		});
 	}
-	const sourceDetails = new Map(
-		await Promise.all(
-			source.document.messages.map(async (message) => {
-				return [
-					message.id,
-					{
-						sourceFingerprint: await sha256Hex(message.value),
-						declaredFacts: storedFactNames(
-							declaredPlaceholderNames(message.metadata),
-						),
-					},
-				] as const;
-			}),
-		),
-	);
-	const rows: ProjectedMessage[] = [];
+
 	for (const file of files) {
+		if (localeId !== undefined && file.localeId !== localeId) continue;
 		const messages = new Map(
 			file.document.messages.map((message) => [message.id, message] as const),
 		);
@@ -1337,7 +1347,7 @@ async function projectionRows(
 					message: "Source message facts could not be derived.",
 				});
 			}
-			rows.push({
+			yield {
 				localeId: file.localeId,
 				localeCode: file.localeCode,
 				catalogPath: file.catalogPath,
@@ -1365,10 +1375,9 @@ async function projectionRows(
 						}
 					: {}),
 				materialized: message === undefined,
-			});
+			};
 		}
 	}
-	return rows;
 }
 
 async function discardStagingProjection(
@@ -1400,182 +1409,6 @@ async function discardStagingProjection(
 	}
 }
 
-async function reconciliationBaseMessages(
-	ctx: ActionCtx,
-	projectId: Id<"projects">,
-	projectionId: Id<"catalogProjections">,
-	actor?: RepositoryAdapterActor,
-): Promise<{
-	messages: ProjectedMessage[];
-	previousSnapshotId: Id<"sourceSnapshots"> | null;
-	previousProjectionId: Id<"catalogProjections"> | null;
-}> {
-	const messages: ProjectedMessage[] = [];
-	let cursor: string | null = null;
-	let expectedMessageCount: number | undefined;
-	let previousSnapshotId: Id<"sourceSnapshots"> | null | undefined;
-	let previousProjectionId: Id<"catalogProjections"> | null | undefined;
-	for (
-		let pageIndex = 0;
-		pageIndex < MAX_RECONCILIATION_READ_PAGES;
-		pageIndex++
-	) {
-		const page: {
-			totalMessageCount: number;
-			previousSnapshotId: Id<"sourceSnapshots"> | null;
-			previousProjectionId: Id<"catalogProjections"> | null;
-			page: ProjectedMessage[];
-			isDone: boolean;
-			continueCursor: string;
-		} = await ctx.runQuery(internal.catalogProjection.reconciliationBasePage, {
-			projectId,
-			projectionId,
-			paginationOpts: {
-				numItems: MAX_RECONCILIATION_READ_PAGE_ROWS,
-				cursor,
-			},
-			actor,
-		});
-		if (
-			!Number.isInteger(page.totalMessageCount) ||
-			page.totalMessageCount < 0 ||
-			page.totalMessageCount > MAX_WORKING_CATALOG_ROWS ||
-			(expectedMessageCount !== undefined &&
-				expectedMessageCount !== page.totalMessageCount) ||
-			(previousSnapshotId !== undefined &&
-				previousSnapshotId !== page.previousSnapshotId) ||
-			(previousProjectionId !== undefined &&
-				previousProjectionId !== page.previousProjectionId)
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"The prior Baseline catalog projection changed while it was read.",
-			});
-		}
-		expectedMessageCount = page.totalMessageCount;
-		previousSnapshotId = page.previousSnapshotId;
-		previousProjectionId = page.previousProjectionId;
-		messages.push(...page.page);
-		if (messages.length > expectedMessageCount) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "The prior Baseline catalog projection exceeds its envelope.",
-			});
-		}
-		if (page.isDone) {
-			if (messages.length !== expectedMessageCount) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "The prior Baseline catalog projection is incomplete.",
-				});
-			}
-			return {
-				messages,
-				previousSnapshotId: previousSnapshotId ?? null,
-				previousProjectionId: previousProjectionId ?? null,
-			};
-		}
-		cursor = page.continueCursor;
-	}
-	throw new ConvexError({
-		code: "INTEGRITY",
-		message:
-			"The prior Baseline catalog projection could not be read in bounds.",
-	});
-}
-
-/** Read the complete, bounded archive state captured by the active Baseline
- * projection before deriving the next one. It remains separate from the
- * transition's Archive Reconciliation history, which is intentionally
- * unbounded and paginated for viewers. */
-async function activeArchiveState(
-	ctx: ActionCtx,
-	projectId: Id<"projects">,
-	actor?: RepositoryAdapterActor,
-): Promise<{
-	projectionId: Id<"catalogProjections"> | null;
-	state: ArchiveState;
-}> {
-	const values: ArchiveState["values"] = [];
-	let cursor: string | null = null;
-	let projectionId: Id<"catalogProjections"> | null | undefined;
-	let expectedValueCount: number | undefined;
-	let expectedByteLength: number | undefined;
-	for (
-		let pageIndex = 0;
-		pageIndex < MAX_RECONCILIATION_READ_PAGES;
-		pageIndex++
-	) {
-		const page: {
-			projectionId: Id<"catalogProjections"> | null;
-			totalValueCount: number;
-			byteLength: number;
-			page: ArchiveState["values"];
-			isDone: boolean;
-			continueCursor: string;
-		} = await ctx.runQuery(internal.archiveReconciliation.statePage, {
-			projectId,
-			paginationOpts: {
-				numItems: MAX_RECONCILIATION_READ_PAGE_ROWS,
-				cursor,
-			},
-			actor,
-		});
-		if (
-			!Number.isInteger(page.totalValueCount) ||
-			page.totalValueCount < 0 ||
-			page.totalValueCount > MAX_WORKING_CATALOG_ROWS ||
-			!Number.isInteger(page.byteLength) ||
-			page.byteLength < 0 ||
-			(expectedValueCount !== undefined &&
-				expectedValueCount !== page.totalValueCount) ||
-			(expectedByteLength !== undefined &&
-				expectedByteLength !== page.byteLength) ||
-			(projectionId !== undefined && projectionId !== page.projectionId)
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "The active archive state changed while it was read.",
-			});
-		}
-		projectionId = page.projectionId;
-		expectedValueCount = page.totalValueCount;
-		expectedByteLength = page.byteLength;
-		values.push(...page.page);
-		if (values.length > page.totalValueCount) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "The active archive state exceeds its envelope.",
-			});
-		}
-		if (page.isDone) {
-			if (values.length !== page.totalValueCount) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "The active archive state is incomplete.",
-				});
-			}
-			const state = { values };
-			if (archiveStateEnvelope(state).byteLength !== page.byteLength) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "The active archive state does not match its byte envelope.",
-				});
-			}
-			return { projectionId: projectionId ?? null, state };
-		}
-		cursor = page.continueCursor;
-	}
-	throw new ConvexError({
-		code: "INTEGRITY",
-		message: "The active archive state could not be read in bounds.",
-	});
-}
-
-/** A missing target is an ingest-time observation. Reading the prior
- * Snapshot's evidence prevents a still-missing Locale from generating the
- * same automatic Archive Reconciliation on every later Baseline. */
 async function previousAbsentTargetLocaleIds(
 	ctx: ActionCtx,
 	projectId: Id<"projects">,
@@ -1596,9 +1429,6 @@ async function previousAbsentTargetLocaleIds(
 	return evidence.absentTargetLocales.map((locale) => locale.localeId);
 }
 
-/** Read only the prior source Catalog Document. Contract Transforms compare
- * two immutable Source Snapshots; they never infer an old contract from a
- * mutable Locale Binding or a projected fact summary. */
 async function sourceDocumentFor(
 	ctx: ActionCtx,
 	projectId: Id<"projects">,
@@ -1658,81 +1488,60 @@ async function previousSubmittedTargetFingerprintsFor(
 			message: "Prior Source Snapshot evidence belongs to another project.",
 		});
 	}
-	const neededLocaleIds = new Set(missing.map((message) => message.localeId));
-	const messagesByLocale = new Map<
-		Id<"locales">,
-		Map<string, CatalogDocument["messages"][number]>
-	>();
+	const fingerprints = new Map<string, SubmittedTargetFingerprint>();
+	const missingByLocale = new Map<Id<"locales">, ProjectedMessage[]>();
+	for (const row of missing) {
+		const rows = missingByLocale.get(row.localeId) ?? [];
+		rows.push(row);
+		missingByLocale.set(row.localeId, rows);
+	}
 	for (const file of evidence.files) {
-		if (file.isSource || !neededLocaleIds.has(file.localeId)) continue;
+		const rows = missingByLocale.get(file.localeId);
+		if (file.isSource || !rows) continue;
 		const blob = await ctx.storage.get(file.storageId);
-		if (!blob) {
+		if (!blob)
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: "Prior target Catalog Document evidence is missing.",
 			});
-		}
-		messagesByLocale.set(
-			file.localeId,
-			new Map(
-				parse(await blob.text()).messages.map((message) => [
-					message.id,
-					message,
-				]),
-			),
+		const messages = new Map(
+			parse(await blob.text()).messages.map((message) => [message.id, message]),
 		);
-	}
-	const fingerprints = new Map<string, SubmittedTargetFingerprint>();
-	for (const row of missing) {
-		const message = messagesByLocale.get(row.localeId)?.get(row.messageId);
-		if (!message && !row.materialized) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"A prior target projection value is missing from its Source Snapshot evidence.",
+		for (const row of rows) {
+			const message = messages.get(row.messageId);
+			if (!message && !row.materialized)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message:
+						"A prior target projection value is missing from its Source Snapshot evidence.",
+				});
+			fingerprints.set(contractValueIdentity(row), {
+				value: await sha256Hex(message?.value ?? ""),
 			});
 		}
-		fingerprints.set(contractValueIdentity(row), {
-			value: await sha256Hex(message?.value ?? ""),
-		});
+		missingByLocale.delete(file.localeId);
 	}
+	if (missingByLocale.size)
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "A prior target catalog has no immutable Snapshot file.",
+		});
+
 	return fingerprints;
 }
 
-function targetMetadataByValue(
-	files: readonly ProjectionFile[],
-): Map<string, JsonObject | undefined> {
-	const metadata = new Map<string, JsonObject | undefined>();
-	const source = files.find((file) => file.isSource);
-	if (!source) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "A catalog projection needs one source Locale.",
-		});
-	}
-	for (const file of files) {
-		if (file.isSource) continue;
-		const messages = new Map(
-			file.document.messages.map((message) => [message.id, message]),
-		);
-		for (const sourceMessage of source.document.messages) {
-			metadata.set(
-				contractValueIdentity({
-					localeId: file.localeId,
-					messageId: sourceMessage.id,
-				}),
-				messages.get(sourceMessage.id)?.metadata,
-			);
-		}
-	}
-	return metadata;
-}
+type OpenSourceProposalObservation = {
+	proposalId: Id<"sourceProposals">;
+	messageId: string;
+	basisGitValueFingerprint: string;
+};
 
 async function sourceProposalObservationsFor(
 	ctx: ActionCtx,
 	projectId: Id<"projects">,
 	rows: readonly ProjectedMessage[],
 	archivedSourceMessageIds: ReadonlySet<string>,
+	openSourceProposals: readonly OpenSourceProposalObservation[],
 	actor?: RepositoryAdapterActor,
 ): Promise<SourceProposalObservation[]> {
 	const sourceValues = new Map<
@@ -1823,51 +1632,259 @@ async function sourceProposalObservationsFor(
 		}
 		for (const proposal of result.proposals) appendObservation(proposal);
 	}
-	const sourceProposalResult: {
-		proposals: {
-			proposalId: Id<"sourceProposals">;
-			messageId: string;
-			basisGitValueFingerprint: string;
-		}[];
-	} = await ctx.runQuery(internal.sourceProposals.openForProject, {
-		projectId,
-		actor,
-	});
-	for (const proposal of sourceProposalResult.proposals)
-		appendObservation(proposal);
+	for (const proposal of openSourceProposals) appendObservation(proposal);
 	return observations;
+}
+
+function addProcessingTotals<T extends Record<string, number>>(
+	total: T,
+	increment: T,
+): void {
+	for (const key of Object.keys(total) as (keyof T)[])
+		total[key] = (total[key] + increment[key]) as T[keyof T];
+}
+
+/** Read a single immutable message partition. Database pages are byte-bounded;
+ * the action rejects an oversized key before retaining the complete partition. */
+async function processingValues(
+	ctx: ActionCtx,
+	identity: Identity,
+	projectionId: Id<"catalogProjections">,
+	messageIds: readonly string[],
+	kind: "input" | "previous" | "archive",
+) {
+	const messageId = messageIds[0];
+	const endMessageId = messageIds[messageIds.length - 1];
+	if (messageId === undefined || endMessageId === undefined) return [];
+	const values: ProcessingInput[] = [];
+	let cursor: string | null = null;
+	let bytes = 0;
+	do {
+		const page: {
+			page: ProcessingInput[];
+			isDone: boolean;
+			continueCursor: string;
+		} = await ctx.runQuery(internal.catalogProcessing.valuesPage, {
+			projectId: identity.projectId,
+			projectionId,
+			messageId,
+			endMessageId,
+			kind,
+			paginationOpts: { numItems: 500, cursor },
+			actor: identity.actor,
+		});
+		bytes += new TextEncoder().encode(JSON.stringify(page.page)).length;
+		if (bytes > MAX_PROCESSING_KEY_BYTES)
+			throw new ConvexError({
+				code: "PROCESSING_PARTITION_TOO_LARGE",
+				message: "Catalog processing partition exceeds its byte budget.",
+			});
+		values.push(...page.page);
+		if (page.isDone) return values;
+		if (page.continueCursor === cursor)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Catalog processing did not advance its cursor.",
+			});
+		cursor = page.continueCursor;
+	} while (cursor !== null);
+	return values;
+}
+
+async function processingKeys(
+	ctx: ActionCtx,
+	identity: Identity,
+	projectionId: Id<"catalogProjections">,
+	source: CatalogDocument,
+) {
+	const keys = new Set(source.messages.map((message) => message.id));
+	for (const kind of ["previous", "archive"] as const) {
+		let cursor: string | null = null;
+		do {
+			const page: { page: string[]; isDone: boolean; continueCursor: string } =
+				await ctx.runQuery(internal.catalogProcessing.keyPage, {
+					projectId: identity.projectId,
+					projectionId,
+					kind,
+					paginationOpts: { numItems: 500, cursor },
+					actor: identity.actor,
+				});
+			for (const key of page.page) keys.add(key);
+			if (keys.size > MAX_WORKING_CATALOG_KEYS * 3)
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message: "Catalog key reconciliation exceeds its identity budget.",
+				});
+			if (page.isDone) break;
+			if (page.continueCursor === cursor)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Catalog key processing did not advance its cursor.",
+				});
+			cursor = page.continueCursor;
+		} while (cursor !== null);
+	}
+	return [...keys].sort();
+}
+
+async function deriveProcessingChunk(
+	ctx: ActionCtx,
+	identity: Identity,
+	projectionId: Id<"catalogProjections">,
+	messageIds: readonly string[],
+	source: CatalogDocument,
+	previousSourceDocument: CatalogDocument | null,
+	previous: {
+		previousProjectionId: Id<"catalogProjections"> | null;
+		previousSnapshotId: Id<"sourceSnapshots"> | null;
+	},
+	absentTargetLocales: readonly AbsentTargetLocale[],
+	priorAbsentTargetLocaleIds: readonly Id<"locales">[],
+	introducedAt: number,
+	openSourceProposals: readonly OpenSourceProposalObservation[],
+) {
+	const inputs = await processingValues(
+		ctx,
+		identity,
+		projectionId,
+		messageIds,
+		"input",
+	);
+	const previousMessages = (
+		await processingValues(ctx, identity, projectionId, messageIds, "previous")
+	).map((input) => input.message);
+	const archived = (
+		await processingValues(ctx, identity, projectionId, messageIds, "archive")
+	).map((input) => input.message as ArchivedValue);
+	if (
+		new TextEncoder().encode(
+			JSON.stringify([inputs, previousMessages, archived]),
+		).length > MAX_PROCESSING_KEY_BYTES
+	)
+		throw new ConvexError({
+			code: "PROCESSING_PARTITION_TOO_LARGE",
+			message:
+				"Catalog reconciliation evidence exceeds its partition byte budget.",
+		});
+	const state = { values: archived };
+	const raw = inputs.map((input) => input.message);
+	const restorationRows = restoreByteIdenticalArchivedTargets(
+		preserveArchivedTargetSourceFingerprint(raw, state),
+		state,
+	);
+	const contract = reconcileContractTransforms({
+		previousMessages,
+		currentMessages: restorationRows,
+		previousSourceDocument,
+		currentSourceDocument: source,
+		targetMetadataByValue: new Map(
+			inputs
+				.filter((input) => !input.message.isSource)
+				.map((input) => [contractValueIdentity(input.message), input.metadata]),
+		),
+		previousSubmittedTargetFingerprintsByValue:
+			await previousSubmittedTargetFingerprintsFor(
+				ctx,
+				identity.projectId,
+				previous.previousSnapshotId,
+				previousMessages,
+				identity.actor,
+			),
+	});
+	const withIntroductions = attachIntroductionReviews({
+		hadPreviousBaseline: previous.previousProjectionId !== null,
+		previousMessages,
+		retainedMessages: state.values,
+		currentMessages: contract.messages,
+		introducedAt,
+	});
+	const rows: ProjectedMessage[] = (
+		await assignValueFingerprints(
+			assignGitValueRevisions(previousMessages, withIntroductions),
+		)
+	).map(
+		({
+			repeatedGitContent: _repeat,
+			repeatedGitContentVersion: _version,
+			...row
+		}) => row,
+	);
+	const residues = translationResidues(contract.consequences);
+	const sourceProposalObservations = await sourceProposalObservationsFor(
+		ctx,
+		identity.projectId,
+		rows,
+		new Set(
+			archived
+				.filter((row) => row.isSource && row.keyArchived)
+				.map((row) => row.messageId),
+		),
+		openSourceProposals,
+		identity.actor,
+	);
+	const gitChanges = gitAuthoredChanges(previousMessages, rows);
+	const restorations = automaticRestorations(previousMessages, rows);
+	const archives = archiveReconciliation(
+		previousMessages,
+		rows,
+		absentTargetLocales,
+		previous.previousSnapshotId,
+		priorAbsentTargetLocaleIds,
+	);
+	// Locale/file facts belong to the transition, rather than each message.
+	archives.locales = [];
+	const nextState = nextArchiveState(state, rows, archives);
+	const report = reconciliationReportDraft({
+		hadPreviousBaseline: previous.previousProjectionId !== null,
+		previousMessages,
+		currentMessages: rows,
+		gitChanges,
+		archives,
+		restorations,
+		residues,
+		contractConsequences: contract.consequences,
+	});
+	const sourceById = new Map(
+		rows.filter((row) => row.isSource).map((row) => [row.messageId, row]),
+	);
+	const quietHandoff = !report
+		? [...sourceById.values()]
+				.filter((source) =>
+					rows.some(
+						(row) =>
+							!row.isSource &&
+							row.messageId === source.messageId &&
+							(row.value.length === 0 ||
+								row.sourceFingerprint !== source.sourceFingerprint),
+					),
+				)
+				.map((source) => ({
+					catalogIndex: source.catalogIndex,
+					messageId: source.messageId,
+				}))
+		: [];
+	return {
+		rows,
+		residues,
+		sourceProposalObservations,
+		gitChanges,
+		restorations,
+		archives,
+		nextState,
+		report,
+		quietHandoff,
+	};
 }
 
 async function stageProjection(
 	ctx: ActionCtx,
 	identity: Identity,
-	files: readonly ProjectionFile[],
+	files: readonly ProjectionFile[] | AsyncIterable<ProjectionFile>,
 	absentTargetLocales: readonly AbsentTargetLocale[],
 	unboundLocaleFiles: readonly UnboundLocaleFile[],
-	deliveryFiles: readonly SubmittedFile[] = [],
+	deliveryFiles: readonly SubmittedFile[] | AsyncIterable<SubmittedFile> = [],
 	expectedBindingBasis?: BindingBasis,
 ): Promise<StagedProjection> {
-	if (files.length + absentTargetLocales.length > MAX_PROJECTED_LOCALES) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: `A catalog projection supports at most ${MAX_PROJECTED_LOCALES} bound Locales.`,
-		});
-	}
-	const priorArchiveState = await activeArchiveState(
-		ctx,
-		identity.projectId,
-		identity.actor,
-	);
-	const sourceRows = await projectionRows(files);
-	const archivedCurrencyRows = preserveArchivedTargetSourceFingerprint(
-		sourceRows,
-		priorArchiveState.state,
-	);
-	const restorationRows = restoreByteIdenticalArchivedTargets(
-		archivedCurrencyRows,
-		priorArchiveState.state,
-	);
-	const envelope = projectionEnvelope(restorationRows);
 	const projectionId: Id<"catalogProjections"> = await ctx.runMutation(
 		internal.catalogProjection.begin,
 		{
@@ -1876,17 +1893,125 @@ async function stageProjection(
 			repository: identity.repository,
 			commit: identity.commit,
 			manifestHash: identity.manifestHash,
-			expectedKeyCount: envelope.keyCount,
-			expectedMessageCount: envelope.messageCount,
-			expectedByteLength: envelope.byteLength,
+			expectedKeyCount: 0,
+			expectedMessageCount: 0,
+			expectedByteLength: 0,
 			actor: identity.actor,
 		},
 	);
+	const scope = {
+		projectId: identity.projectId,
+		projectionId,
+		actor: identity.actor,
+	};
 	try {
-		const previous = await reconciliationBaseMessages(
+		let currentSource: ProjectionFile | undefined;
+		let sourceDetails: Awaited<ReturnType<typeof sourceDetailsFor>> | undefined;
+		const boundFiles: Binding[] = [];
+		const orderedFiles:
+			| Iterable<ProjectionFile>
+			| AsyncIterable<ProjectionFile> =
+			Symbol.asyncIterator in files
+				? files
+				: [...files].sort((a, b) => Number(b.isSource) - Number(a.isSource));
+		for await (const file of orderedFiles) {
+			if (
+				boundFiles.some(
+					(bound) =>
+						bound.localeId === file.localeId ||
+						bound.catalogPath === file.catalogPath,
+				)
+			)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message:
+						"A processing input repeats a bound language or catalog path.",
+				});
+			boundFiles.push({
+				localeId: file.localeId,
+				localeCode: file.localeCode,
+				catalogPath: file.catalogPath,
+				isSource: file.isSource,
+			});
+			if (
+				boundFiles.length + absentTargetLocales.length >
+				MAX_PROJECTED_LOCALES
+			)
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message: "The Snapshot exceeds the project binding resource budget.",
+				});
+			if (file.isSource) {
+				if (currentSource)
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "A projection contains multiple Source catalogs.",
+					});
+				currentSource = file;
+				sourceDetails = await sourceDetailsFor(file.document);
+			}
+			if (!currentSource || !sourceDetails)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message:
+						"Streaming catalog input must start with the Source catalog.",
+				});
+			const rows = projectionRows(
+				file.isSource ? [file] : [currentSource, file],
+				file.localeId,
+				sourceDetails,
+			);
+			const metadata = new Map(
+				file.document.messages.map((message) => [message.id, message.metadata]),
+			);
+			let inputs: { message: ProjectedMessage; metadata?: string }[] = [];
+			let bytes = 2;
+			for await (const message of rows) {
+				const value = metadata.get(message.messageId);
+				const input = {
+					message,
+					...(value === undefined ? {} : { metadata: JSON.stringify(value) }),
+				};
+				const size = new TextEncoder().encode(JSON.stringify(input)).length + 1;
+				if (size > 500_000)
+					throw new ConvexError({
+						code: "LIMIT_EXCEEDED",
+						message:
+							"A catalog message and its metadata exceed the processing input budget.",
+					});
+				if (
+					inputs.length > 0 &&
+					(inputs.length >= 500 || bytes + size > 500_000)
+				) {
+					await ctx.runMutation(internal.catalogProcessing.stageInputs, {
+						...scope,
+						inputs,
+					});
+					inputs = [];
+					bytes = 2;
+				}
+				inputs.push(input);
+				bytes += size;
+			}
+			if (inputs.length)
+				await ctx.runMutation(internal.catalogProcessing.stageInputs, {
+					...scope,
+					inputs,
+				});
+		}
+		if (!currentSource)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "A catalog projection is missing its Source catalog.",
+			});
+		const previous: {
+			previousProjectionId: Id<"catalogProjections"> | null;
+			previousSnapshotId: Id<"sourceSnapshots"> | null;
+		} = await ctx.runQuery(internal.catalogProcessing.basis, scope);
+		const previousSourceDocument = await sourceDocumentFor(
 			ctx,
 			identity.projectId,
-			projectionId,
+			previous.previousSnapshotId,
 			identity.actor,
 		);
 		const previousUnboundLocaleFiles: UnboundLocaleFile[] =
@@ -1896,117 +2021,177 @@ async function stageProjection(
 						actor: identity.actor,
 					})
 				: [];
-		if (previous.previousProjectionId !== priorArchiveState.projectionId) {
-			throw new ConvexError({
-				code: "CONFLICT",
-				message:
-					"The Baseline Snapshot changed while its archive state was read.",
-			});
-		}
-		const currentSource = files.find((file) => file.isSource);
-		if (!currentSource) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "A catalog projection is missing its source Catalog Document.",
-			});
-		}
-		const previousSourceDocument = await sourceDocumentFor(
-			ctx,
-			identity.projectId,
-			previous.previousSnapshotId,
-			identity.actor,
-		);
-		const previousSubmittedTargetFingerprints =
-			await previousSubmittedTargetFingerprintsFor(
-				ctx,
-				identity.projectId,
-				previous.previousSnapshotId,
-				previous.messages,
-				identity.actor,
-			);
-		const contract = reconcileContractTransforms({
-			previousMessages: previous.messages,
-			currentMessages: restorationRows,
-			previousSourceDocument,
-			currentSourceDocument: currentSource.document,
-			targetMetadataByValue: targetMetadataByValue(files),
-			previousSubmittedTargetFingerprintsByValue:
-				previousSubmittedTargetFingerprints,
-		});
-		const rowsWithIntroductions = attachIntroductionReviews({
-			hadPreviousBaseline: previous.previousProjectionId !== null,
-			previousMessages: previous.messages,
-			retainedMessages: priorArchiveState.state.values,
-			currentMessages: contract.messages,
-			introducedAt: now(),
-		});
-		const rows = materializeRepeatedGitContent(
-			await assignValueFingerprints(
-				assignGitValueRevisions(previous.messages, rowsWithIntroductions),
-			),
-		);
-		const residues = translationResidues(contract.consequences);
-		const archivedSourceMessageIds = new Set(
-			priorArchiveState.state.values
-				.filter((value) => value.isSource && value.keyArchived)
-				.map((value) => value.messageId),
-		);
-		const sourceProposalObservations = await sourceProposalObservationsFor(
-			ctx,
-			identity.projectId,
-			rows,
-			archivedSourceMessageIds,
-			identity.actor,
-		);
-		// The staging projection claims its total before rows are written. It must
-		// therefore agree with the reconciled rows, not merely the raw Snapshot.
-		const reconciledEnvelope = projectionEnvelope(rows);
-		await ctx.runMutation(
-			internal.catalogProjection.setWorkingCatalogEnvelope,
-			{
-				projectId: identity.projectId,
-				projectionId,
-				expectedKeyCount: reconciledEnvelope.keyCount,
-				expectedMessageCount: reconciledEnvelope.messageCount,
-				expectedByteLength: reconciledEnvelope.byteLength,
-				actor: identity.actor,
-			},
-		);
-		const gitChanges = gitAuthoredChanges(previous.messages, rows);
-		const gitChangeTotals = gitChangeEnvelope(gitChanges);
-		const residueTotals = translationResidueEnvelope(residues);
-		const restorations = automaticRestorations(previous.messages, rows);
-		const restorationTotals = automaticRestorationEnvelope(restorations);
-		const sourceProposalObservationTotals = sourceProposalObservationEnvelope(
-			sourceProposalObservations,
-		);
 		const priorAbsentTargetLocaleIds = await previousAbsentTargetLocaleIds(
 			ctx,
 			identity.projectId,
 			previous.previousSnapshotId,
 			identity.actor,
 		);
-		const archives = archiveReconciliation(
-			previous.messages,
-			rows,
+		const keys = await processingKeys(
+			ctx,
+			identity,
+			projectionId,
+			currentSource.document,
+		);
+		// One compact proposal capture feeds both passes. The projection's
+		// sourceProposalHeadVersion still rejects a racing proposal at publish.
+		const {
+			proposals: openSourceProposals,
+		}: { proposals: OpenSourceProposalObservation[] } = await ctx.runQuery(
+			internal.sourceProposals.openForProject,
+			{ projectId: identity.projectId, actor: identity.actor },
+		);
+		const introducedAt = now();
+		const sourceDocument = currentSource.document;
+		async function* chunks(
+			messageIds: readonly string[],
+		): AsyncGenerator<Awaited<ReturnType<typeof deriveProcessingChunk>>> {
+			try {
+				yield await deriveProcessingChunk(
+					ctx,
+					identity,
+					projectionId,
+					messageIds,
+					sourceDocument,
+					previousSourceDocument,
+					previous,
+					absentTargetLocales,
+					priorAbsentTargetLocaleIds,
+					introducedAt,
+					openSourceProposals,
+				);
+			} catch (error) {
+				if (
+					!(error instanceof ConvexError) ||
+					typeof error.data !== "object" ||
+					error.data === null ||
+					!("code" in error.data) ||
+					error.data.code !== "PROCESSING_PARTITION_TOO_LARGE"
+				)
+					throw error;
+				if (messageIds.length === 1)
+					throw new ConvexError({
+						code: "LIMIT_EXCEEDED",
+						message:
+							"One catalog message and its reconciliation evidence exceed the 6 MiB processing budget.",
+					});
+				const middle = Math.floor(messageIds.length / 2);
+				yield* chunks(messageIds.slice(0, middle));
+				yield* chunks(messageIds.slice(middle));
+			}
+		}
+		async function* allChunks() {
+			for (let offset = 0; offset < keys.length; offset += 32)
+				yield* chunks(keys.slice(offset, offset + 32));
+		}
+
+		const transitionArchives = archiveReconciliation(
+			[],
+			[],
 			absentTargetLocales,
 			previous.previousSnapshotId,
 			priorAbsentTargetLocaleIds,
 		);
-		const archiveTotals = archiveEnvelope(archives);
-		const reportWithArchives = reconciliationReportDraft({
-			previousMessages: previous.messages,
-			currentMessages: rows,
-			gitChanges,
-			archives,
-			restorations,
-			residues,
-			contractConsequences: contract.consequences,
+		const transitionReport = reconciliationReportDraft({
+			previousMessages: [],
+			currentMessages: [],
+			gitChanges: [],
+			archives: transitionArchives,
+			restorations: [],
+			residues: [],
+			contractConsequences: [],
 			unboundLocaleFiles,
 			previousUnboundLocaleFiles,
 		});
-		const nextState = nextArchiveState(priorArchiveState.state, rows, archives);
-		const archiveStateTotals = archiveStateEnvelope(nextState);
+		const reconciledEnvelope = projectionEnvelope([]);
+		const gitChangeTotals = gitChangeEnvelope([]);
+		const residueTotals = translationResidueEnvelope([]);
+		const restorationTotals = automaticRestorationEnvelope([]);
+		const sourceProposalObservationTotals = sourceProposalObservationEnvelope(
+			[],
+		);
+		const archiveTotals = archiveEnvelope(transitionArchives);
+		const archiveStateTotals = archiveStateEnvelope({ values: [] });
+		const reportTotals = reconciliationReportEnvelope(transitionReport);
+		// Cache only fixed-size fingerprints, with a strict entry cap. Larger
+		// catalogs retain the indexed fallback for identities outside this cache.
+		const repeatedCounts = new Map<
+			string,
+			{ count: number; falseBytes: number; trueBytes: number }
+		>();
+		const repeatIdentity = (row: ProjectedMessage) =>
+			JSON.stringify([row.localeId, row.valueFingerprint]);
+
+		for await (const chunk of allChunks()) {
+			addProcessingTotals(reconciledEnvelope, projectionEnvelope(chunk.rows));
+			for (const row of chunk.rows) {
+				if (row.isSource) continue;
+				const identity = repeatIdentity(row);
+				const existing = repeatedCounts.get(identity);
+				if (existing) {
+					existing.count++;
+					continue;
+				}
+				if (repeatedCounts.size >= 32_000) continue;
+				const base = projectedMessageByteLength(row);
+				repeatedCounts.set(identity, {
+					count: 1,
+					falseBytes:
+						projectedMessageByteLength({
+							...row,
+							repeatedGitContent: false,
+							repeatedGitContentVersion: 2,
+						}) - base,
+					trueBytes:
+						projectedMessageByteLength({
+							...row,
+							repeatedGitContent: true,
+							repeatedGitContentVersion: 2,
+						}) - base,
+				});
+			}
+
+			addProcessingTotals(gitChangeTotals, gitChangeEnvelope(chunk.gitChanges));
+			addProcessingTotals(
+				residueTotals,
+				translationResidueEnvelope(chunk.residues),
+			);
+			addProcessingTotals(
+				restorationTotals,
+				automaticRestorationEnvelope(chunk.restorations),
+			);
+			addProcessingTotals(
+				sourceProposalObservationTotals,
+				sourceProposalObservationEnvelope(chunk.sourceProposalObservations),
+			);
+			addProcessingTotals(archiveTotals, archiveEnvelope(chunk.archives));
+			addProcessingTotals(
+				archiveStateTotals,
+				archiveStateEnvelope(chunk.nextState),
+			);
+			addProcessingTotals(
+				reportTotals,
+				reconciliationReportEnvelope(chunk.report),
+			);
+			reportTotals.handoffKeyCount += chunk.quietHandoff.length;
+			reportTotals.handoffByteLength += chunk.quietHandoff.reduce(
+				(total, key) =>
+					total + new TextEncoder().encode(JSON.stringify(key)).length,
+				0,
+			);
+		}
+		for (const entry of repeatedCounts.values())
+			reconciledEnvelope.byteLength +=
+				entry.count * (entry.count > 1 ? entry.trueBytes : entry.falseBytes);
+		await ctx.runMutation(
+			internal.catalogProjection.setWorkingCatalogEnvelope,
+			{
+				...scope,
+				expectedKeyCount: reconciledEnvelope.keyCount,
+				expectedMessageCount: reconciledEnvelope.messageCount,
+				expectedByteLength: reconciledEnvelope.byteLength,
+			},
+		);
 		await ctx.runMutation(internal.catalogProjection.declareGitChanges, {
 			projectId: identity.projectId,
 			projectionId,
@@ -2056,91 +2241,159 @@ async function stageProjection(
 			expectedArchiveStateByteLength: archiveStateTotals.byteLength,
 			actor: identity.actor,
 		});
-		for (const messages of stageBatches(rows)) {
-			await ctx.runMutation(internal.catalogProjection.stageBatch, {
-				projectId: identity.projectId,
-				projectionId,
-				messages,
-				actor: identity.actor,
-			});
+
+		if (reportTotals.rowCount === 0) {
+			reportTotals.handoffKeyCount = 0;
+			reportTotals.handoffByteLength = 0;
 		}
-		const changeBatches = gitChangeBatches(gitChanges);
-		for (const [index, changes] of changeBatches.entries()) {
-			await ctx.runMutation(internal.catalogProjection.stageGitChangeBatch, {
-				projectId: identity.projectId,
-				projectionId,
-				changes,
-				isFinal: index === changeBatches.length - 1,
-				actor: identity.actor,
-			});
-		}
-		const residueBatches = translationResidueBatches(residues);
-		for (const [index, batch] of residueBatches.entries()) {
-			await ctx.runMutation(internal.translationResidue.stageBatch, {
-				projectId: identity.projectId,
-				projectionId,
-				residues: batch,
-				isFinal: index === residueBatches.length - 1,
-				actor: identity.actor,
-			});
-		}
-		const restorationBatches = automaticRestorationBatches(restorations);
-		for (const [index, values] of restorationBatches.entries()) {
-			await ctx.runMutation(internal.catalogProjection.stageRestorationBatch, {
-				projectId: identity.projectId,
-				projectionId,
-				restorations: values,
-				isFinal: index === restorationBatches.length - 1,
-				actor: identity.actor,
-			});
-		}
-		const proposalObservationBatches = sourceProposalObservationBatches(
+		await ctx.runMutation(internal.reconciliationReports.declare, {
+			...scope,
+			expectedRowCount: reportTotals.rowCount,
+			expectedFactCount: reportTotals.factCount,
+			expectedByteLength: reportTotals.byteLength,
+			expectedHandoffKeyCount: reportTotals.handoffKeyCount,
+			expectedHandoffByteLength: reportTotals.handoffByteLength,
+		});
+		let stagedChanges = 0;
+		let stagedResidues = 0;
+		let stagedRestorations = 0;
+		let stagedObservations = 0;
+		for await (const {
+			rows,
+			gitChanges,
+			residues,
+			restorations,
 			sourceProposalObservations,
-		);
-		for (const [index, observations] of proposalObservationBatches.entries()) {
-			await ctx.runMutation(
-				internal.catalogProjection.stageSourceProposalObservationBatch,
-				{
+			archives,
+			nextState,
+			report,
+			quietHandoff,
+		} of allChunks()) {
+			for (const row of rows) {
+				if (row.isSource) continue;
+				const entry = repeatedCounts.get(repeatIdentity(row));
+				if (entry) {
+					row.repeatedGitContent = entry.count > 1;
+					row.repeatedGitContentVersion = 2;
+				}
+			}
+			for (const messages of stageBatches(rows)) {
+				await ctx.runMutation(internal.catalogProjection.stageBatch, {
 					projectId: identity.projectId,
 					projectionId,
-					observations,
-					isFinal: index === proposalObservationBatches.length - 1,
+					messages,
 					actor: identity.actor,
-				},
+				});
+			}
+			const changeBatches = gitChangeBatches(gitChanges);
+			for (const changes of changeBatches) {
+				await ctx.runMutation(internal.catalogProjection.stageGitChangeBatch, {
+					projectId: identity.projectId,
+					projectionId,
+					changes,
+					isFinal:
+						stagedChanges + changes.length === gitChangeTotals.changeCount,
+					actor: identity.actor,
+				});
+				stagedChanges += changes.length;
+			}
+			const residueBatches = translationResidueBatches(residues);
+			for (const batch of residueBatches) {
+				await ctx.runMutation(internal.translationResidue.stageBatch, {
+					projectId: identity.projectId,
+					projectionId,
+					residues: batch,
+					isFinal: stagedResidues + batch.length === residueTotals.count,
+					actor: identity.actor,
+				});
+				stagedResidues += batch.length;
+			}
+			const restorationBatches = automaticRestorationBatches(restorations);
+			for (const values of restorationBatches) {
+				await ctx.runMutation(
+					internal.catalogProjection.stageRestorationBatch,
+					{
+						projectId: identity.projectId,
+						projectionId,
+						restorations: values,
+						isFinal:
+							stagedRestorations + values.length ===
+							restorationTotals.valueCount,
+						actor: identity.actor,
+					},
+				);
+				stagedRestorations += values.length;
+			}
+			const proposalObservationBatches = sourceProposalObservationBatches(
+				sourceProposalObservations,
 			);
+			for (const observations of proposalObservationBatches) {
+				await ctx.runMutation(
+					internal.catalogProjection.stageSourceProposalObservationBatch,
+					{
+						projectId: identity.projectId,
+						projectionId,
+						observations,
+						isFinal:
+							stagedObservations + observations.length ===
+							sourceProposalObservationTotals.count,
+						actor: identity.actor,
+					},
+				);
+				stagedObservations += observations.length;
+			}
+			for (const keys of archiveKeyBatches(archives.keys)) {
+				await ctx.runMutation(internal.archiveReconciliation.stageKeys, {
+					projectId: identity.projectId,
+					projectionId,
+					keys,
+					actor: identity.actor,
+				});
+			}
+			for (const locales of archiveLocaleBatches(archives.locales)) {
+				await ctx.runMutation(internal.archiveReconciliation.stageLocales, {
+					projectId: identity.projectId,
+					projectionId,
+					locales,
+					actor: identity.actor,
+				});
+			}
+			for (const values of archiveValueBatches(archives.values)) {
+				await ctx.runMutation(internal.archiveReconciliation.stageValues, {
+					projectId: identity.projectId,
+					projectionId,
+					values,
+					actor: identity.actor,
+				});
+			}
+			for (const values of archiveValueBatches(nextState.values)) {
+				await ctx.runMutation(internal.archiveReconciliation.stageStateValues, {
+					projectId: identity.projectId,
+					projectionId,
+					values,
+					actor: identity.actor,
+				});
+			}
+
+			if (reportTotals.rowCount > 0) {
+				await stageReconciliationReportChunk(ctx, { ...scope, draft: report });
+				if (quietHandoff.length)
+					await ctx.runMutation(
+						internal.reconciliationReports.stageHandoffKeys,
+						{ ...scope, keys: quietHandoff },
+					);
+			}
 		}
-		for (const keys of archiveKeyBatches(archives.keys)) {
-			await ctx.runMutation(internal.archiveReconciliation.stageKeys, {
-				projectId: identity.projectId,
-				projectionId,
-				keys,
-				actor: identity.actor,
-			});
-		}
-		for (const locales of archiveLocaleBatches(archives.locales)) {
+		for (const locales of archiveLocaleBatches(transitionArchives.locales))
 			await ctx.runMutation(internal.archiveReconciliation.stageLocales, {
-				projectId: identity.projectId,
-				projectionId,
+				...scope,
 				locales,
-				actor: identity.actor,
 			});
-		}
-		for (const values of archiveValueBatches(archives.values)) {
-			await ctx.runMutation(internal.archiveReconciliation.stageValues, {
-				projectId: identity.projectId,
-				projectionId,
-				values,
-				actor: identity.actor,
+		if (reportTotals.rowCount > 0)
+			await stageReconciliationReportChunk(ctx, {
+				...scope,
+				draft: transitionReport,
 			});
-		}
-		for (const values of archiveValueBatches(nextState.values)) {
-			await ctx.runMutation(internal.archiveReconciliation.stageStateValues, {
-				projectId: identity.projectId,
-				projectionId,
-				values,
-				actor: identity.actor,
-			});
-		}
 		await ctx.runMutation(internal.archiveReconciliation.complete, {
 			projectId: identity.projectId,
 			projectionId,
@@ -2151,12 +2404,13 @@ async function stageProjection(
 			projectionId,
 			actor: identity.actor,
 		});
-		await stageReconciliationReport(ctx, {
-			projectId: identity.projectId,
-			projectionId,
-			draft: reportWithArchives,
-			actor: identity.actor,
-		});
+		if (reportTotals.rowCount > 0)
+			await ctx.runMutation(internal.reconciliationReports.complete, scope);
+		while (
+			!(await ctx.runMutation(internal.catalogProcessing.discardInputs, scope))
+		) {
+			/* bounded cleanup */
+		}
 		await stageLocaleDeliveries(ctx, {
 			projectId: identity.projectId,
 			projectionId,
@@ -2164,7 +2418,7 @@ async function stageProjection(
 			commit: identity.commit,
 			source: currentSource.document,
 			files: deliveryFiles,
-			boundFiles: files,
+			boundFiles,
 			actor: identity.actor,
 		});
 		// Stage the complete Navigation Index for the pending generation so the
@@ -2219,47 +2473,38 @@ async function stageStoredProjection(
 			message: "Source Snapshot evidence belongs to another project.",
 		});
 	}
-	const files: ProjectionFile[] = [];
-	const deliveryFiles: SubmittedFile[] = [];
-	for (const file of evidence.files) {
-		const blob = await ctx.storage.get(file.storageId);
-		if (!blob) {
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Stored catalog evidence is missing.",
-			});
+	async function* projectionFiles(): AsyncGenerator<ProjectionFile> {
+		for (const file of [...evidence.files].sort(
+			(a, b) => Number(b.isSource) - Number(a.isSource),
+		)) {
+			const blob = await ctx.storage.get(file.storageId);
+			if (!blob)
+				throw new ConvexError({
+					code: "NOT_FOUND",
+					message: "Stored catalog evidence is missing.",
+				});
+			yield { ...file, document: parse(await blob.text()) };
 		}
-		deliveryFiles.push({
-			catalogPath: file.catalogPath,
-			content: await blob.text(),
-		});
-		files.push({
-			localeId: file.localeId,
-			localeCode: file.localeCode,
-			catalogPath: file.catalogPath,
-			isSource: file.isSource,
-			document: parse(await blob.text()),
-		});
 	}
-	for (const file of evidence.unboundLocaleFiles) {
-		const blob = await ctx.storage.get(file.storageId);
-		if (!blob)
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Stored Unbound Locale File is missing.",
-			});
-		deliveryFiles.push({
-			catalogPath: file.catalogPath,
-			content: await blob.text(),
-		});
+	async function* submittedFiles(): AsyncGenerator<SubmittedFile> {
+		for (const file of [...evidence.files, ...evidence.unboundLocaleFiles]) {
+			const blob = await ctx.storage.get(file.storageId);
+			if (!blob)
+				throw new ConvexError({
+					code: "NOT_FOUND",
+					message: "Stored catalog evidence is missing.",
+				});
+			yield { catalogPath: file.catalogPath, content: await blob.text() };
+		}
 	}
+
 	return await stageProjection(
 		ctx,
 		identity,
-		files,
+		projectionFiles(),
 		evidence.absentTargetLocales,
 		evidence.unboundLocaleFiles,
-		deliveryFiles,
+		submittedFiles(),
 		{
 			projectionId: evidence.projectionId,
 			localeBindingRevision: evidence.localeBindingRevision,
@@ -3077,9 +3322,7 @@ export async function realizeLocaleBinding(
 		internal.snapshots.projectionEvidenceFor,
 		{ snapshotId: input.snapshotId },
 	);
-	const files: ProjectionFile[] = [];
-	const deliveryFiles: SubmittedFile[] = [];
-	for (const file of [
+	const storedFiles = [
 		...evidence.files.filter((file) => file.localeId !== input.localeId),
 		{
 			localeId: input.localeId,
@@ -3088,21 +3331,29 @@ export async function realizeLocaleBinding(
 			catalogPath: input.catalogPath,
 			storageId: plan.unboundFile.storageId,
 		},
-	]) {
+	].sort((a, b) => Number(b.isSource) - Number(a.isSource));
+	async function load(
+		file: (typeof storedFiles)[number],
+	): Promise<SubmittedFile> {
 		const blob = await ctx.storage.get(file.storageId);
 		if (!blob)
 			throw new ConvexError({
 				code: "INTEGRITY",
 				message: "Stored Baseline file is missing.",
 			});
-		const content = await blob.text();
-		const document = parseBoundCatalog(
-			{ catalogPath: file.catalogPath, content },
-			file.localeCode,
-		);
-		files.push({ ...file, document });
-		deliveryFiles.push({ catalogPath: file.catalogPath, content });
+		return { catalogPath: file.catalogPath, content: await blob.text() };
 	}
+	async function* files(): AsyncGenerator<ProjectionFile> {
+		for (const file of storedFiles)
+			yield {
+				...file,
+				document: parseBoundCatalog(await load(file), file.localeCode),
+			};
+	}
+	async function* deliveryFiles(): AsyncGenerator<SubmittedFile> {
+		for (const file of storedFiles) yield await load(file);
+	}
+
 	const identity: Identity = {
 		projectId: input.projectId,
 		repository: plan.snapshot.repository,
@@ -3112,14 +3363,14 @@ export async function realizeLocaleBinding(
 	const staged = await stageProjection(
 		ctx,
 		identity,
-		files,
+		files(),
 		evidence.absentTargetLocales.filter(
 			(locale) => locale.localeId !== input.localeId,
 		),
 		evidence.unboundLocaleFiles.filter(
 			(file) => file.catalogPath !== input.catalogPath,
 		),
-		deliveryFiles,
+		deliveryFiles(),
 		{
 			projectionId: evidence.projectionId,
 			localeBindingRevision: evidence.localeBindingRevision,
@@ -3134,4 +3385,228 @@ export async function realizeLocaleBinding(
 		await discardStagingProjection(ctx, input.projectId, staged.projectionId);
 		throw error;
 	}
+}
+
+/** File uploads enter the same publication protocol as inline ingestion, while
+ * retaining only one parsed catalog at a time. Uploaded blobs become immutable
+ * Snapshot evidence directly; the upload session cleans up unreferenced blobs. */
+export async function ingestUploadedSnapshot(
+	ctx: ActionCtx,
+	args: Omit<IngestArgs, "files"> & {
+		files: readonly {
+			catalogPath: string;
+			storageId: Id<"_storage">;
+			contentHash: string;
+			byteLength: number;
+		}[];
+	},
+	remainingConflictRetries = MAX_INGEST_CONFLICT_RESTAGES,
+): Promise<PublicIngestionResult> {
+	const { sha256 } = await import("@noble/hashes/sha2.js");
+	const { bytesToHex } = await import("@noble/hashes/utils.js");
+	const encoder = new TextEncoder();
+	const manifest = sha256.create().update(encoder.encode("["));
+	const sorted = [...args.files].sort((a, b) =>
+		a.catalogPath.localeCompare(b.catalogPath),
+	);
+	const bindingBasis: BindingBasis & { bindings: Binding[] } =
+		await ctx.runQuery(internal.snapshots.bindingsFor, {
+			projectId: args.projectId,
+			actor: args.actor,
+		});
+	const bindings = new Map(
+		bindingBasis.bindings.map((binding) => [binding.catalogPath, binding]),
+	);
+	const submitted = new Set<string>();
+	const diagnostics: Diagnostic[] = [];
+	const storedFiles: StoredSnapshotFile[] = [];
+	const unboundFiles: StoredUnboundSnapshotFile[] = [];
+	if (sorted.length > MAX_SNAPSHOT_FILES)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Too many catalog files in the upload.",
+		});
+	async function load(file: (typeof sorted)[number]) {
+		const blob = await ctx.storage.get(file.storageId);
+		if (!blob || blob.size !== file.byteLength || blob.size > 8 * 1024 * 1024)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: `Uploaded catalog ${file.catalogPath} is missing or has an invalid size.`,
+			});
+		const content = await blob.text();
+		if ((await sha256Hex(content)) !== file.contentHash)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: `Uploaded catalog ${file.catalogPath} has changed.`,
+			});
+		return { catalogPath: file.catalogPath, content };
+	}
+	for (const [index, file] of sorted.entries()) {
+		const loaded = await load(file);
+		if (index > 0) manifest.update(encoder.encode(","));
+		manifest.update(
+			encoder.encode(JSON.stringify([file.catalogPath, loaded.content])),
+		);
+		if (submitted.has(file.catalogPath))
+			diagnostics.push({
+				catalogPath: file.catalogPath,
+				message: "More than one file was submitted for this catalog.",
+			});
+		submitted.add(file.catalogPath);
+		const binding = bindings.get(file.catalogPath);
+		if (binding) {
+			try {
+				parseBoundCatalog(loaded, binding.localeCode);
+				storedFiles.push({
+					...binding,
+					storageId: file.storageId,
+					byteLength: file.byteLength,
+				});
+			} catch (error) {
+				diagnostics.push({
+					catalogPath: file.catalogPath,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+		} else {
+			const inspected = inspectUnboundLocaleFile(loaded);
+			unboundFiles.push({
+				catalogPath: file.catalogPath,
+				storageId: file.storageId,
+				byteLength: file.byteLength,
+				...(inspected.declaredLocaleCode === undefined
+					? {}
+					: { declaredLocaleCode: inspected.declaredLocaleCode }),
+				...(inspected.messageCount === undefined
+					? {}
+					: { messageCount: inspected.messageCount }),
+			});
+		}
+	}
+	manifest.update(encoder.encode("]"));
+	const identity: Identity = {
+		projectId: args.projectId,
+		repository: args.repository,
+		commit: args.commit,
+		lineage: args.lineage,
+		actor: args.actor,
+		manifestHash: bytesToHex(manifest.digest()),
+	};
+	const reused: IngestionResult | null = await ctx.runMutation(
+		internal.snapshots.reusePublished,
+		identity,
+	);
+	if (reused) {
+		const result = await resolveProjectionNeed(ctx, identity, reused);
+		return { runId: result.runId, snapshotId: result.snapshotId };
+	}
+	const absentTargetLocales: AbsentTargetLocale[] = [];
+	for (const binding of bindingBasis.bindings) {
+		if (submitted.has(binding.catalogPath)) continue;
+		if (binding.isSource)
+			diagnostics.push({
+				catalogPath: binding.catalogPath,
+				message: `No file submitted for the "${binding.localeCode}" Source Locale.`,
+			});
+		else
+			absentTargetLocales.push({
+				localeId: binding.localeId,
+				localeCode: binding.localeCode,
+				catalogPath: binding.catalogPath,
+			});
+	}
+	if (!storedFiles.some((file) => file.isSource))
+		diagnostics.push({
+			message: "The project has no valid bound Source catalog.",
+		});
+	if (diagnostics.length) {
+		const result: IngestionResult = await ctx.runMutation(
+			internal.snapshots.finalizeIngestion,
+			{
+				...identity,
+				diagnostics,
+				files: [],
+				absentTargetLocales: [],
+				unboundLocaleFiles: [],
+			},
+		);
+		return { runId: result.runId, snapshotId: result.snapshotId };
+	}
+	const sourceFirst = [...sorted].sort(
+		(a, b) =>
+			Number(bindings.get(b.catalogPath)?.isSource ?? false) -
+			Number(bindings.get(a.catalogPath)?.isSource ?? false),
+	);
+	async function* projectionFiles(): AsyncGenerator<ProjectionFile> {
+		for (const file of sourceFirst) {
+			const binding = bindings.get(file.catalogPath);
+			if (!binding) continue;
+			yield {
+				...binding,
+				document: parseBoundCatalog(await load(file), binding.localeCode),
+			};
+		}
+	}
+	async function* deliveryFiles(): AsyncGenerator<SubmittedFile> {
+		for (const file of sorted) yield await load(file);
+	}
+	let stagedProjection: StagedProjection | undefined;
+	let result: IngestionResult;
+	try {
+		const shouldStage: boolean = await ctx.runQuery(
+			internal.snapshots.shouldStageProjection,
+			{ projectId: args.projectId, lineage: args.lineage, actor: args.actor },
+		);
+		if (shouldStage)
+			stagedProjection = await stageProjection(
+				ctx,
+				identity,
+				projectionFiles(),
+				absentTargetLocales,
+				unboundFiles,
+				deliveryFiles(),
+				{
+					projectionId: bindingBasis.projectionId,
+					localeBindingRevision: bindingBasis.localeBindingRevision,
+				},
+			);
+		result = await ctx.runMutation(internal.snapshots.finalizeIngestion, {
+			...identity,
+			...(stagedProjection
+				? { projectionId: stagedProjection.projectionId }
+				: {}),
+			diagnostics: [],
+			files: storedFiles,
+			absentTargetLocales,
+			unboundLocaleFiles: unboundFiles,
+		});
+	} catch (error) {
+		if (stagedProjection)
+			await discardStagingProjection(
+				ctx,
+				args.projectId,
+				stagedProjection.projectionId,
+				args.actor,
+			);
+		if (
+			error instanceof ConvexError &&
+			error.data.code === "CONFLICT" &&
+			remainingConflictRetries > 0
+		)
+			return await ingestUploadedSnapshot(
+				ctx,
+				args,
+				remainingConflictRetries - 1,
+			);
+		return await recordFailure(ctx, identity, error);
+	}
+	if (stagedProjection && !result.publishedProjection)
+		await discardStagingProjection(
+			ctx,
+			args.projectId,
+			stagedProjection.projectionId,
+			args.actor,
+		);
+	const resolved = await resolveProjectionNeed(ctx, identity, result);
+	return { runId: resolved.runId, snapshotId: resolved.snapshotId };
 }

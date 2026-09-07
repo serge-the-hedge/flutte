@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import 'cli_version.dart';
 import 'command_runner.dart';
 import 'repository_policy.dart';
@@ -188,20 +190,13 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     required List<SnapshotFile> files,
     SnapshotLineage? lineage,
   }) async {
-    final response = await _request(
+    final upload = await _request(
       'POST',
-      '/snapshots',
+      '/snapshot-uploads',
       body: {
         'repository': repository,
         'commit': commit,
-        'files': files
-            .map(
-              (file) => {
-                'catalogPath': file.catalogPath,
-                'content': file.content,
-              },
-            )
-            .toList(growable: false),
+        'expectedFiles': files.length,
         if (lineage != null)
           'lineage': {
             'baselineCommit': lineage.baselineCommit,
@@ -209,6 +204,24 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
             'mergeBase': lineage.mergeBase,
           },
       },
+    );
+    final sessionId = _requiredString(upload, 'sessionId');
+    for (final file in files) {
+      await _request(
+        'POST',
+        '/snapshot-uploads/file',
+        body: {
+          'sessionId': sessionId,
+          'catalogPath': file.catalogPath,
+          'content': file.content,
+          'contentHash': sha256.convert(utf8.encode(file.content)).toString(),
+        },
+      );
+    }
+    final response = await _request(
+      'POST',
+      '/snapshot-uploads/finalize',
+      body: {'sessionId': sessionId},
     );
     final run = _object(response['run']);
     final diagnostics = _requiredList(run, 'diagnostics')
@@ -444,24 +457,12 @@ class RepositorySyncAdapter {
         'This checkout contains more than ${context.maxFiles} catalog files. Remove extras or bind them deliberately before syncing.',
       );
     }
-    final bytes = utf8
-        .encode(
-          jsonEncode(
-            files
-                .map(
-                  (file) => {
-                    'catalogPath': file.catalogPath,
-                    'content': file.content,
-                  },
-                )
-                .toList(growable: false),
-          ),
-        )
-        .length;
-    if (bytes > context.maxBytes || bytes > _maxBytes) {
-      throw RepositoryAdapterException(
-        'The submitted catalogs exceed the ${context.maxBytes}-byte sync limit.',
-      );
+    for (final file in files) {
+      if (utf8.encode(file.content).length > _maxBytes) {
+        throw RepositoryAdapterException(
+          'Catalog ${file.catalogPath} exceeds the $_maxBytes-byte per-file sync limit.',
+        );
+      }
     }
     return files;
   }

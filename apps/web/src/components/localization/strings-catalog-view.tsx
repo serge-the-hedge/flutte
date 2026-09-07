@@ -1726,8 +1726,7 @@ function StringsCatalogNavigator({
 	workHandoff?: { keyCount: number; onClear: () => void };
 	onCreateTranslationTask?: CreateTranslationTask;
 }) {
-	// Search and Catalog Scopes stay local over the compact digests: typing
-	// never executes a server query, only the visible window hydrates.
+	// Legacy callers filter local digests; paged server results arrive prefiltered.
 	const deferredQuery = useDeferredValue(navigationState.query);
 	const matching = useMemo(
 		() =>

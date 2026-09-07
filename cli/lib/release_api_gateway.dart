@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import 'cli_version.dart';
 import 'release_delivery_adapter.dart';
 
@@ -29,30 +31,58 @@ class HttpReleaseGateway implements ReleaseGateway {
     String recordId,
     List<DeliveryTreeFile> files,
   ) async {
-    final response = await _request(
+    final summary = await readRelease(recordId);
+    final upload = await _request(
       'POST',
-      _endpoint('$recordId/delivery-tree'),
+      _uploadEndpoint(''),
       body: jsonEncode({
-        'files': files
-            .map(
-              (file) => {
-                'catalogPath': file.catalogPath,
-                'content': file.content,
-              },
-            )
-            .toList(),
+        'kind': 'release',
+        'releaseRecordId': recordId,
+        'repository': summary.releaseRecord.repository,
+        'commit': summary.releaseRecord.baselineCommit,
+        'expectedFiles': files.length,
       }),
     );
+    final sessionId = _requiredString(upload, 'sessionId');
+    for (final file in files) {
+      await _request(
+        'POST',
+        _uploadEndpoint('/file'),
+        body: jsonEncode({
+          'kind': 'release',
+          'sessionId': sessionId,
+          'catalogPath': file.catalogPath,
+          'content': file.content,
+          'contentHash': sha256.convert(utf8.encode(file.content)).toString(),
+        }),
+      );
+    }
+    final response = await _request(
+      'POST',
+      _uploadEndpoint('/finalize'),
+      body: jsonEncode({'kind': 'release', 'sessionId': sessionId}),
+    );
+    final deliveredFiles = <DeliveryTreeFile>[];
+    for (final path in _requiredList(response, 'catalogPaths')) {
+      final file = await _request(
+        'POST',
+        _uploadEndpoint('/download'),
+        body: jsonEncode({
+          'sessionId': sessionId,
+          'catalogPath': _string(path),
+        }),
+      );
+      deliveredFiles.add(
+        DeliveryTreeFile(
+          catalogPath: _requiredString(file, 'catalogPath'),
+          content: _requiredString(file, 'content'),
+        ),
+      );
+    }
     return _decodeResponse(
       () => ReleaseDeliveryTree(
         releaseRecord: _record(_requiredObject(response, 'releaseRecord')),
-        files: _requiredList(response, 'files').map((value) {
-          final file = _object(value);
-          return DeliveryTreeFile(
-            catalogPath: _requiredString(file, 'catalogPath'),
-            content: _requiredString(file, 'content'),
-          );
-        }).toList(),
+        files: deliveredFiles,
         applied: _requiredList(
           response,
           'applied',
@@ -91,6 +121,13 @@ class HttpReleaseGateway implements ReleaseGateway {
         manifestHash: _requiredString(record, 'manifestHash'),
         integrationBranch: _requiredString(record, 'integrationBranch'),
       );
+
+  Uri _uploadEndpoint(String suffix) {
+    final release = _endpoint('');
+    return release.replace(
+      path: release.path.replaceFirst('/releases/', '/snapshot-uploads$suffix'),
+    );
+  }
 
   Uri _endpoint(String suffix) {
     final prefix = baseUrl.path == '/'

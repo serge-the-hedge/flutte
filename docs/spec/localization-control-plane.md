@@ -440,15 +440,19 @@ marks itself and **never sorts ahead**: a list that rearranges as you work it is
 the failure this map has rejected twice. [Decide how a translator finds their
 way through the catalog](https://github.com/serge-the-hedge/flutte/issues/25)
 
-**Navigation loads the whole key set, but not the Locale values.** It returns
-one compact digest per key, including Catalog Order, the search corpus, and the
-state facts needed by local scopes. The uncached response is capped at 8 MiB,
-against Convex's 16 MiB transaction and return limits. The browser virtualizes
-the DOM and asks for exact cards through a bounded Window read (at most 32
-keys), so search, filtering, and `⌘↵` traversal stay local while hydrated values
-remain proportional to the visible work. A catalog that exceeds the measured
-Navigation envelope needs a deliberately paged Navigation contract; it must not
-silently grow the response.
+**Navigation is paged in Catalog Order.** Strings selects one working Locale
+alongside Source, reads compact key digests in bounded pages, and hydrates at most
+32 visible cards through a Window. The index retains identifiers and state facts,
+not a copy of every translated value. A browse query scans at most 64 digests
+with a 512 KiB read budget. Search stops when its effective-text reads reach
+2 MiB, allowing the final bounded value read to cross that threshold. Empty pages can have a continuation when the scan budget is exhausted.
+The browser shows page counts, rather than presenting them as catalog totals.
+
+The older whole-Navigation endpoint remains capped at 8 MiB for compatible
+callers. It is no longer the Strings loading path. Windows select Source and
+requested target Locales; the UI requests one target, and the endpoint permits
+up to four for bounded comparisons. Changing the working language preserves the
+unsaved-edit navigation guard. Publication changes invalidate browse generations.
 
 An upgraded deployment whose active Navigation generation predates the
 materialized ordinary-import counts is explicitly incomplete for the Agent
@@ -460,15 +464,13 @@ re-arms the bounded worker. This is a maintenance command, not an unattended
 repair. The ordinary-import run uses the same readiness gate, so neither its
 preview nor its confirmation mutation can start against an incomplete index.
 
-**Search is one box over active bound Locales plus key, run client-side as a
-substring scan.** No language selector. It filters in place, in Catalog Order,
-and never ranks — a substring scan produces no honest relevance signal. An index
-cannot preserve these semantics: the retired `searchText` index contains no
-value text, and native Convex tokenization misses internal terms in unspaced
-Chinese. A real-backend fixture evaluation found only 10 of 122 literal usages
-of `积木`; see the [native search evaluation](../../reports/native-convex-search-evaluation-2026-09-07.md). Code Area and tag are deliberately not copied into the compact
-Navigation read: they are derived Code Context and mutable metadata, and belong
-to a separate bounded context/scope read when that contract is implemented.
+**Search is a literal substring scan over key, Source, and the working Locale.**
+It runs through bounded backend reads of effective workspace values, preserves
+Catalog Order, and does not rank. Native Convex tokenization misses internal
+terms in unspaced Chinese: a real-backend fixture evaluation found only 10 of
+122 literal usages of `积木`; see the
+[native search evaluation](../../reports/native-convex-search-evaluation-2026-09-07.md).
+Code Area and tag remain separate context and metadata concerns.
 
 **A key is a genuine way to find a string**, never the only one: it is on the
 card, a search term, the disambiguator that 382 keys sharing an English value
@@ -477,12 +479,11 @@ highlights rather than filtering.
 
 **Catalog Scopes** compose as AND, live in the URL, and render as dismissible
 chips with live counts. The initial Navigation contract supports search text,
-key prefix, a waiting state, and an **Unconfirmed Import**. Code Area, tag,
-Locale, a **Sibling Set**, expansion, a **Work Hand-off**, and archived keys
-remain valid domain concepts, but are deferred to bounded context, metadata, or
-handoff reads rather than approximated in Navigation. A scope selects whole
-keys, never (key, Locale) pairs. A Locale scope, when added, chooses which keys
-are listed and never narrows the card.
+a working Locale, a waiting state, an **Unconfirmed Import**, and a Work
+Hand-off. Code Area, tag, a **Sibling Set**, expansion, and archived keys remain
+valid domain concepts, but require their own bounded context or metadata reads.
+The working Locale selects the target shown alongside Source; scopes apply to
+that view. A Work Hand-off narrows the keys without changing Catalog Order.
 
 First-class filters in the initial Navigation contract are **the four phrases a
 value already says** — `needs a value`, `English changed`, `English, not chosen`,
@@ -1108,9 +1109,10 @@ answered differently later.
 - **Layout-constraint context**, which needs a resolver and a bootstrapped,
   fully code-generated checkout. It travels with that price or not at all.
 - **Performance and retention targets beyond the measured Brickit catalog.**
-  §8.1 states the measured choice and its trigger: compact Navigation is capped
-  at 8 MiB and cards are read through bounded Windows; a substantially larger
-  catalog needs a new Navigation paging decision.
+  §8.1 defines bounded Navigation and Window reads. See
+  [capacity and storage trade-offs](../adding-languages.md#several-languages-and-capacity);
+  structural guards do not establish latency or quota guarantees for 50 or
+  100 full-size languages.
 - **Generalizing the module beyond Flutter ARB.** The first interface should
   expose real variation before anyone judges whether other formats are adapters
   or a redesign.

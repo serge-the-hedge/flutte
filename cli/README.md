@@ -14,8 +14,11 @@ git pull --ff-only origin develop
 blabla sync
 ```
 
-`sync` reads the bound ARB files from the checkout, submits one durable Source
-Snapshot, and prints the receipt. It exits with status `0` only when ingestion
+`sync` reads the bound ARB files from the checkout, uploads each catalog separately,
+then finalizes one durable Source Snapshot and prints the receipt. Each file is
+limited to 8 MiB; there is no combined upload byte limit. Uploaded files remain
+private staging evidence until finalization succeeds. Incomplete uploads expire
+after 24 hours, and cleanup preserves files owned by a published Snapshot. It exits with status `0` only when ingestion
 succeeds; a failed run returns `1` with its diagnostics. It is read-only locally: it never edits the
 checkout, fetches or pushes Git, or opens a pull request. The web Sync page can
 create a single workspace connection with the `snapshot-submission` permission
@@ -70,6 +73,10 @@ reviewed Release Delta; and adds the complete configured Catalog Document. Flutt
 runs first as a clean-tree drift check and again over the combined candidate.
 Blabla supplies the catalog bytes and provenance; the adapter owns only local
 Git and Flutter toolchain I/O.
+
+Delivery uses the same per-file upload protocol as sync and downloads each result
+separately. See [Repository Adapter transport](../docs/repository-adapter.md) for
+session retries, cleanup, and version 2 release manifests.
 
 It never receives Git credentials, pushes, or opens a pull request.
 

@@ -31,10 +31,19 @@ function pathFor(code: LocaleCode) {
 	return `packages/brickit_generated/lib/l10n/intl_${code}.arb`;
 }
 
-function allFiles() {
+// Lifecycle cases need representative syntax, not repeated full-corpus work.
+// The explicit corpus test below still exercises all six original files.
+function allFiles(fullCorpus = false) {
 	return localeCodes.map((code) => ({
 		catalogPath: pathFor(code),
-		content: catalogs[code],
+		content: fullCorpus
+			? catalogs[code]
+			: JSON.stringify({
+					"@@locale": code,
+					greeting: `${code} welcome`,
+					count: "{count}",
+					"@count": { placeholders: { count: { type: "int" } } },
+				}),
 	}));
 }
 
@@ -108,7 +117,7 @@ describe("source snapshot ingestion", () => {
 
 	test("publishes a snapshot from the six real catalogs", async () => {
 		const { user, projectId } = await boundProject();
-		const result = await ingest(user, projectId);
+		const result = await ingest(user, projectId, allFiles(true));
 
 		expect(result.snapshotId).not.toBeNull();
 
@@ -257,7 +266,9 @@ describe("source snapshot ingestion", () => {
 				snapshotId: result.snapshotId!,
 				localeCode: code,
 			});
-			expect(text).toBe(catalogs[code]);
+			expect(text).toBe(
+				allFiles().find((file) => file.catalogPath === pathFor(code))?.content,
+			);
 		},
 	);
 

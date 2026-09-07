@@ -125,3 +125,42 @@ export async function readWorkspaceKeyCards(
 		keys,
 	};
 }
+
+/** Collect a pinned public catalog for tests that explicitly inspect all rows. */
+export async function readAllCatalogPages(
+	user: AuthenticatedBackend,
+	projectId: Id<"projects">,
+) {
+	const first = await user.query(api.catalogProjection.getActive, {
+		projectId,
+	});
+	if (!first) return null;
+	const keys = new Map<string, (typeof first.keys)[number]>();
+	let page = first;
+	for (;;) {
+		for (const key of page.keys) {
+			const previous = keys.get(key.id);
+			const values = new Map(
+				previous?.values.map((value) => [value.localeId, value]),
+			);
+			for (const value of key.values) values.set(value.localeId, value);
+			keys.set(key.id, {
+				...key,
+				values: [...values.values()].sort(
+					(a, b) =>
+						Number(b.isSource) - Number(a.isSource) ||
+						a.localeCode.localeCompare(b.localeCode),
+				),
+			});
+		}
+		if (page.isDone) break;
+		const next = await user.query(api.catalogProjection.getActive, {
+			projectId,
+			projectionId: first.projectionId,
+			cursor: page.continueCursor,
+		});
+		if (!next) throw new Error("Pinned catalog disappeared");
+		page = next;
+	}
+	return { ...first, keys: [...keys.values()] };
+}

@@ -299,8 +299,9 @@ blank reason when applicable, and a stable reference. Full results additionally
 carry bounded ICU facts and the legacy candidate `basis`; use context when those
 facts are needed. Search uses the same effective values as submission and review.
 
-Pages scan at most 64 Navigation keys and hydrate at most 64 candidate pairs;
-responses stay below 512 KiB. An exact key query uses the existing equality index.
+Pages scan at most 64 Navigation keys within a 512 KiB index-read budget and
+hydrate at most 64 candidate pairs or 2 MiB of values; responses stay below
+512 KiB. An exact key query uses the existing equality index.
 `nextCursor: null` means completion. A non-null cursor can accompany an empty
 page or a page with fewer than `limit` results; `hasMore` means there is more
 scope to scan, not that another match is guaranteed. Changing filters requires
@@ -470,7 +471,9 @@ strings plus every applicable reason. The opaque `nextCursor` is `null` at the
 end; pass a non-null cursor back unchanged. It is pinned to the active Catalog
 Projection, so a Baseline change returns `STALE_BASIS` instead of combining two
 catalog versions. The queue scans only a bounded Navigation Index range and
-hydrates full values only for matches. `q` searches the message identifier,
+hydrates candidate values within a 2 MiB / 64-target budget. An empty page
+can still carry a continuation when either scan or hydration budget is exhausted;
+always follow it until `nextCursor` is null. `q` searches the message identifier,
 effective Source, and the returned target's text, respecting `localeCode`.
 Archived Locales are excluded.
 
@@ -829,9 +832,11 @@ Repository Adapter API uses the site root rather than the `/api/agent/v1` base:
 
 - `GET /api/repository-adapter/v1/releases/:recordId` returns the repository,
   Baseline, integration branch, exact bound catalogs, and change-key count.
-- `POST /api/repository-adapter/v1/releases/:recordId/delivery-tree` accepts the
-  current contents of every bound catalog and returns complete server-authored
-  catalog files plus applied and skipped key reports.
+- The current CLI uses `/api/repository-adapter/v1/snapshot-uploads` sessions
+  with `kind: "release"` to upload and download each catalog independently. See
+  [transport and artifact contracts](repository-adapter.md).
+- `POST /api/repository-adapter/v1/releases/:recordId/delivery-tree` remains
+  available for older clients, with its 8 MiB combined request limit.
 
 The server overwrites target drift with the reviewed value. If the current
 Source value changed or disappeared relative to the Release Bundle's Baseline,
@@ -862,3 +867,7 @@ form remains valid.
 Retired. Returns `410 Gone`. The old endpoint synthesized output from the
 pre-Catalog-Workspace model and is not a lossless Brickit release surface. Use
 the immutable Release Bundle workflow above.
+
+Repository checkout synchronization and release delivery use the separate
+[Repository Adapter transport](repository-adapter.md). Its file-manifest uploads
+keep catalog requests bounded as the number of languages grows.

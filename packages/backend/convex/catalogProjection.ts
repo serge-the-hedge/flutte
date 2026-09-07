@@ -22,24 +22,16 @@ import {
 	requireViewer,
 } from "./permissions";
 
-/**
- * A projection is intentionally smaller than the snapshot-ingestion envelope:
- * its rows are immediately readable working state, whereas the original
- * Catalog Documents remain the immutable evidence in file storage. The
- * envelope supports the measured ten-Locale rollout over the Brickit corpus.
- * Browse exposes compact Navigation digests and bounded card Windows; the
- * complete composer remains an internal parity/reference path rather than the
- * public read contract.
- */
-export const MAX_PROJECTED_LOCALES = 10;
+/** Storage cardinality guards are independent of transaction read budgets.
+ * Processing and public reads page by bytes; no whole-generation response is
+ * admitted by these totals. Per-value limits bound the scalar byte counters. */
+export const MAX_PROJECTED_LOCALES = 1_000;
 export const MAX_WORKING_CATALOG_KEYS = 8_192;
-export const MAX_WORKING_CATALOG_ROWS = 20_000;
-export const MAX_WORKING_CATALOG_BYTES = 12 * 1024 * 1024;
+export const MAX_WORKING_CATALOG_ROWS = 1_000_000;
+export const MAX_WORKING_CATALOG_BYTES = MAX_WORKING_CATALOG_ROWS * 256 * 1024;
 export const MAX_RESTORE_PROPOSAL_MESSAGE_ID_BYTES = 512;
-// An Archive Reconciliation can retain a whole accepted working catalog plus
-// its archive provenance. It remains comfortably below Convex's 16 MiB return
-// limit while allowing every valid working-catalog row to be archived.
-export const MAX_ARCHIVE_RECONCILIATION_BYTES = 12 * 1024 * 1024;
+export const MAX_ARCHIVE_RECONCILIATION_BYTES =
+	MAX_WORKING_CATALOG_ROWS * 320 * 1024;
 const MAX_MESSAGES_PER_STAGE_BATCH = 500;
 const MAX_STAGE_BATCH_BYTES = 512_000;
 const MAX_PROJECTED_MESSAGE_BYTES = 256 * 1024;
@@ -260,7 +252,7 @@ function encodedSize(value: unknown): number {
 	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function projectedMessageByteLength(message: ProjectedMessage): number {
+export function projectedMessageByteLength(message: ProjectedMessage): number {
 	return encodedSize(message);
 }
 
@@ -1219,6 +1211,13 @@ export const begin = internalMutation({
 			projectionId,
 			status: "staging",
 		});
+		// A terminated action cannot execute its catch block. Expire private
+		// generations as well; publication makes this cleanup a no-op.
+		await ctx.scheduler.runAfter(
+			24 * 60 * 60 * 1000,
+			internal.catalogProjection.continueDiscard,
+			{ projectionId },
+		);
 		return projectionId;
 	},
 });
@@ -1350,7 +1349,7 @@ export const stageBatch = internalMutation({
 	},
 });
 
-function projectedMessageFromRow(
+export function projectedMessageFromRow(
 	row: Doc<"catalogProjectionMessages">,
 ): ProjectedMessage {
 	return {
@@ -1413,26 +1412,6 @@ function projectedMessageFromRow(
 					introducedAt: row.introducedAt,
 					introductionLocaleIds: [...(row.introductionLocaleIds ?? [])],
 				}),
-		materialized: row.materialized,
-	};
-}
-
-function gitAuthoredChangeFromRow(
-	row: Doc<"catalogProjectionGitChanges">,
-): GitAuthoredChange {
-	return {
-		localeId: row.localeId,
-		localeCode: row.localeCode,
-		isSource: row.isSource,
-		catalogIndex: row.catalogIndex,
-		messageId: row.messageId,
-		previousCatalogPath: row.previousCatalogPath,
-		catalogPath: row.catalogPath,
-		previousValue: row.previousValue,
-		value: row.value,
-		previousSourceFingerprint: row.previousSourceFingerprint,
-		sourceFingerprint: row.sourceFingerprint,
-		previousMaterialized: row.previousMaterialized,
 		materialized: row.materialized,
 	};
 }
@@ -2036,6 +2015,15 @@ async function discardBatch(
 ): Promise<boolean> {
 	const projection = await ctx.db.get(projectionId);
 	if (projection?.status !== "staging") return true;
+	const processingRows = await ctx.db
+		.query("catalogProcessingInputs")
+		.withIndex("by_projection", (q) => q.eq("projectionId", projectionId))
+		.take(MAX_DELETES_PER_MUTATION);
+	if (processingRows.length > 0) {
+		for (const row of processingRows) await ctx.db.delete(row._id);
+		return false;
+	}
+
 	// Delete one normalized row kind per transaction. A row caps at 320 KiB, so
 	// sixteen deletes stay below a conservative 8 MiB payload budget even when
 	// a pathological catalog key or bound path is unusually large.
@@ -2489,49 +2477,6 @@ export function assertWorkingCatalogEnvelope(
 	}
 }
 
-export async function workingCatalogRows(
-	ctx: QueryCtx | MutationCtx,
-	projection: Doc<"catalogProjections">,
-): Promise<Doc<"catalogProjectionMessages">[]> {
-	assertWorkingCatalogEnvelope(projection);
-	const rows = await ctx.db
-		.query("catalogProjectionMessages")
-		.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-		.take(MAX_WORKING_CATALOG_ROWS + 1);
-	if (
-		rows.length > MAX_WORKING_CATALOG_ROWS ||
-		rows.length !== projection.expectedMessageCount
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Catalog projection does not match its declared envelope.",
-		});
-	}
-	const sourceCount = rows.filter((row) => row.isSource).length;
-	if (
-		sourceCount > MAX_WORKING_CATALOG_KEYS ||
-		sourceCount !== projection.expectedKeyCount
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Catalog projection does not match its declared key envelope.",
-		});
-	}
-	return rows;
-}
-
-export async function activeWorkingCatalog(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-): Promise<{
-	projection: Doc<"catalogProjections">;
-	rows: Doc<"catalogProjectionMessages">[];
-} | null> {
-	const projection = await activeProjectionFor(ctx, projectId);
-	if (!projection) return null;
-	return { projection, rows: await workingCatalogRows(ctx, projection) };
-}
-
 /** Shape a verified working catalog for public readers without exposing the
  * projection's internal staging records. The Catalog Workspace uses this same
  * adapter after it has substituted current translator-authored values. */
@@ -2544,9 +2489,7 @@ export function readActiveCatalog(
 	archiveReconciliationEnvelopeFor(projection);
 	archiveStateEnvelopeFor(projection);
 
-	// This deliberately returns the whole measured Brickit catalog in one query.
-	// It is bounded at staging time and here defensively, so every client receives
-	// one internally consistent Baseline Snapshot.
+	// Shape either a bounded page or an internal complete reference catalog.
 	const valuesByCatalogIndex = new Map<number, typeof rows>();
 	for (const row of rows) {
 		valuesByCatalogIndex.set(row.catalogIndex, [
@@ -2637,13 +2580,80 @@ export function readActiveCatalog(
 	};
 }
 
+/** Continuations must pin the published generation returned on the first page. */
+export async function publishedReadProjection(
+	ctx: QueryCtx,
+	args: {
+		projectId: Id<"projects">;
+		projectionId?: Id<"catalogProjections">;
+		cursor?: string | null;
+	},
+) {
+	if (args.cursor && !args.projectionId)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "A continuation requires its projectionId.",
+		});
+	const projection = args.projectionId
+		? await ctx.db.get(args.projectionId)
+		: await activeProjectionFor(ctx, args.projectId);
+	if (
+		projection &&
+		(projection.projectId !== args.projectId ||
+			projection.status !== "published")
+	)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Published catalog not found.",
+		});
+	if (args.projectionId && !projection)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Published catalog not found.",
+		});
+	return projection;
+}
+
 export const getActive = query({
-	args: { projectId: v.id("projects") },
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.optional(v.id("catalogProjections")),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		const active = await activeWorkingCatalog(ctx, args.projectId);
-		if (!active) return null;
-		return readActiveCatalog(active.projection, active.rows);
+		const projection = await publishedReadProjection(ctx, args);
+		if (!projection) return null;
+		const page = await ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_catalogIndex", (q) =>
+				q.eq("projectionId", projection._id),
+			)
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 32,
+				maximumBytesRead: 512 * 1024,
+			});
+		const rows = [...page.page];
+		for (const messageId of new Set(rows.map((row) => row.messageId))) {
+			if (rows.some((row) => row.messageId === messageId && row.isSource))
+				continue;
+			const source = await ctx.db
+				.query("catalogProjectionMessages")
+				.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+					q
+						.eq("projectionId", projection._id)
+						.eq("messageId", messageId)
+						.eq("isSource", true),
+				)
+				.unique();
+			if (source) rows.push(source);
+		}
+		return {
+			...readActiveCatalog(projection, rows),
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+		};
 	},
 });
 
@@ -2651,27 +2661,27 @@ export const getActive = query({
  * transition. They are derived from durable projection provenance rather than
  * from a transient action response, so readers can inspect them later. */
 export const getRestorations = query({
-	args: { projectId: v.id("projects") },
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.optional(v.id("catalogProjections")),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		const projection = await activeProjectionFor(ctx, args.projectId);
+		const projection = await publishedReadProjection(ctx, args);
 		if (!projection) return null;
-		const envelope = restorationEnvelopeFor(projection);
-		const rows = await ctx.db
+		restorationEnvelopeFor(projection);
+		const page = await ctx.db
 			.query("catalogProjectionRestorations")
-			.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-			.take(MAX_WORKING_CATALOG_ROWS + 1);
-		const restorations = rows.map(restorationFromRow);
-		if (
-			rows.length > MAX_WORKING_CATALOG_ROWS ||
-			rows.length !== envelope.valueCount ||
-			automaticRestorationsByteLength(restorations) !== envelope.byteLength
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Automatic restorations do not match their declared envelope.",
+			.withIndex("by_projection_and_catalogIndex", (q) =>
+				q.eq("projectionId", projection._id),
+			)
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 100,
+				maximumBytesRead: 512 * 1024,
 			});
-		}
+		const restorations = page.page.map(restorationFromRow);
 		const valuesByCatalogIndex = new Map<number, AutomaticRestoration[]>();
 		for (const restoration of restorations) {
 			valuesByCatalogIndex.set(restoration.catalogIndex, [
@@ -2734,6 +2744,8 @@ export const getRestorations = query({
 			snapshotId: projection.snapshotId,
 			previousSnapshotId: projection.previousBaselineSnapshotId ?? null,
 			keys,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
 		};
 	},
 });
@@ -2742,10 +2754,14 @@ export const getRestorations = query({
  * review surface, not translator history: both sides deliberately retain
  * Snapshot provenance. */
 export const getGitChanges = query({
-	args: { projectId: v.id("projects") },
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.optional(v.id("catalogProjections")),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		const projection = await activeProjectionFor(ctx, args.projectId);
+		const projection = await publishedReadProjection(ctx, args);
 		if (!projection) return null;
 		const reconciliation = reconciliationEnvelopeFor(projection);
 		const previousSnapshotId = projection.previousBaselineSnapshotId;
@@ -2766,30 +2782,17 @@ export const getGitChanges = query({
 				});
 			}
 		}
-		const rows = await ctx.db
+		const page = await ctx.db
 			.query("catalogProjectionGitChanges")
-			.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-			.take(MAX_WORKING_CATALOG_ROWS + 1);
-		if (
-			rows.length > MAX_WORKING_CATALOG_ROWS ||
-			rows.length !== reconciliation.changeCount
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"Git-authored changes do not match the active reconciliation envelope.",
+			.withIndex("by_projection_and_catalogIndex", (q) =>
+				q.eq("projectionId", projection._id),
+			)
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 32,
+				maximumBytesRead: 512 * 1024,
 			});
-		}
-		if (
-			reconciliation.byteLength !==
-			gitChangesByteLength(rows.map(gitAuthoredChangeFromRow))
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"Git-authored changes do not match their declared byte envelope.",
-			});
-		}
+		const rows = page.page;
 
 		const valuesByCatalogIndex = new Map<number, typeof rows>();
 		for (const row of rows) {
@@ -2862,6 +2865,8 @@ export const getGitChanges = query({
 			snapshotId: projection.snapshotId,
 			previousSnapshotId: previousSnapshotId ?? null,
 			keys,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
 		};
 	},
 });

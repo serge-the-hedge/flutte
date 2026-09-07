@@ -30,6 +30,8 @@ const MAX_DISCOVERY_RESPONSE_BYTES = 512 * 1024;
 const MAX_WORK_QUEUE_ITEMS = 16;
 const MAX_WORK_QUEUE_SCAN_ROWS = 64;
 const MAX_WORK_QUEUE_RESPONSE_BYTES = 768 * 1024;
+const MAX_DISCOVERY_READ_BYTES = 2 * 1024 * 1024;
+const MAX_DISCOVERY_INDEX_BYTES = 512 * 1024;
 
 const translationWorkReasonValidator = v.union(
 	v.literal("missing"),
@@ -140,6 +142,7 @@ function nextTranslationWorkCursor(
 	rowIndex: number,
 	targetIndex: number,
 	projectionId: Id<"catalogProjections">,
+	moreRows: boolean,
 ): string | null {
 	const row = rows[rowIndex];
 	if (row && targetIndex + 1 < row.targets.length) {
@@ -156,7 +159,13 @@ function nextTranslationWorkCursor(
 				catalogIndex: nextRow.catalogIndex,
 				targetIndex: 0,
 			})
-		: null;
+		: moreRows && row
+			? encodeTranslationWorkCursor({
+					projectionId,
+					catalogIndex: row.catalogIndex + 1,
+					targetIndex: 0,
+				})
+			: null;
 }
 
 function discoveryEntry(
@@ -440,18 +449,21 @@ export const workspaceSearch = internalQuery({
 				});
 		}
 		const exactKey = options.searchIn === "key" && options.match === "exact";
-		const rows = exactKey
-			? [
-					await ctx.db
-						.query("catalogWorkspaceNavigationRows")
-						.withIndex("by_project_and_projection_and_messageId", (q) =>
-							q
-								.eq("projectId", token.projectId)
-								.eq("projectionId", projection._id)
-								.eq("messageId", options.q),
-						)
-						.unique(),
-				].filter((row) => row !== null)
+		const indexedPage = exactKey
+			? {
+					page: [
+						await ctx.db
+							.query("catalogWorkspaceNavigationRows")
+							.withIndex("by_project_and_projection_and_messageId", (q) =>
+								q
+									.eq("projectId", token.projectId)
+									.eq("projectionId", projection._id)
+									.eq("messageId", options.q),
+							)
+							.unique(),
+					].filter((row) => row !== null),
+					isDone: true,
+				}
 			: await ctx.db
 					.query("catalogWorkspaceNavigationRows")
 					.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
@@ -460,7 +472,12 @@ export const workspaceSearch = internalQuery({
 							.eq("projectionId", projection._id)
 							.gte("catalogIndex", position.catalogIndex),
 					)
-					.take(MAX_SEARCH_SCAN_KEYS + 1);
+					.paginate({
+						cursor: null,
+						numItems: MAX_SEARCH_SCAN_KEYS,
+						maximumBytesRead: MAX_DISCOVERY_INDEX_BYTES,
+					});
+		const rows = indexedPage.page;
 		type Entry = ReturnType<typeof discoveryEntry> & {
 			evidence: Awaited<ReturnType<typeof readWorkspaceTargetEvidence>>;
 			matchedFields: ReturnType<typeof matchedFields>;
@@ -475,6 +492,7 @@ export const workspaceSearch = internalQuery({
 		const results: Array<Entry | CompactEntry> = [];
 		let resultBytes = 0;
 		let hydrated = 0;
+		let hydratedBytes = 0;
 		const continuation = (catalogIndex: number, targetIndex: number) =>
 			JSON.stringify({
 				version: 1,
@@ -490,17 +508,8 @@ export const workspaceSearch = internalQuery({
 			hasMore: nextCursor !== null,
 			nextCursor,
 		});
-		for (const [rowIndex, row] of rows
-			.slice(0, MAX_SEARCH_SCAN_KEYS)
-			.entries()) {
-			if (
-				!row.messageId.startsWith(options.keyPrefix) ||
-				(options.q &&
-					!row.searchCorpus.some((value) =>
-						value.includes(options.q.toLowerCase()),
-					))
-			)
-				continue;
+		for (const [rowIndex, row] of rows.entries()) {
+			if (!row.messageId.startsWith(options.keyPrefix)) continue;
 			const start =
 				row.catalogIndex === position.catalogIndex ? position.targetIndex : 0;
 			if (start > row.targets.length)
@@ -525,7 +534,10 @@ export const workspaceSearch = internalQuery({
 					(target.valueState !== "settled" || target.firstReviewPending)
 				)
 					continue;
-				if (hydrated >= MAX_SEARCH_SCAN_KEYS)
+				if (
+					hydrated >= MAX_SEARCH_SCAN_KEYS ||
+					hydratedBytes >= MAX_DISCOVERY_READ_BYTES
+				)
 					return finish(continuation(row.catalogIndex, targetIndex));
 				hydrated++;
 				const current = await currentWorkspaceTarget(
@@ -534,6 +546,7 @@ export const workspaceSearch = internalQuery({
 					row.messageId,
 					target.localeId,
 				);
+				hydratedBytes += byteLength(current);
 				const matches = matchedFields(options, {
 					key: row.messageId,
 					source: current.source.value,
@@ -583,13 +596,19 @@ export const workspaceSearch = internalQuery({
 							? continuation(row.catalogIndex, targetIndex + 1)
 							: nextRow
 								? continuation(nextRow.catalogIndex, 0)
-								: null;
+								: !indexedPage.isDone
+									? continuation(row.catalogIndex + 1, 0)
+									: null;
 					return finish(next);
 				}
 			}
 		}
-		const overflow = rows[MAX_SEARCH_SCAN_KEYS];
-		return finish(overflow ? continuation(overflow.catalogIndex, 0) : null);
+		const last = rows[rows.length - 1];
+		return finish(
+			!indexedPage.isDone && last
+				? continuation(last.catalogIndex + 1, 0)
+				: null,
+		);
 	},
 });
 
@@ -662,7 +681,7 @@ export const workspaceWorkPage = internalQuery({
 			catalogIndex: 0,
 			targetIndex: 0,
 		};
-		const rows = await ctx.db
+		const indexedPage = await ctx.db
 			.query("catalogWorkspaceNavigationRows")
 			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
 				q
@@ -670,10 +689,15 @@ export const workspaceWorkPage = internalQuery({
 					.eq("projectionId", projection._id)
 					.gte("catalogIndex", cursor.catalogIndex),
 			)
-			.take(MAX_WORK_QUEUE_SCAN_ROWS + 1);
-		const pageRows = rows.slice(0, MAX_WORK_QUEUE_SCAN_ROWS);
+			.paginate({
+				cursor: null,
+				numItems: MAX_WORK_QUEUE_SCAN_ROWS,
+				maximumBytesRead: MAX_DISCOVERY_INDEX_BYTES,
+			});
+		const rows = indexedPage.page;
+		const pageRows = rows;
 		const matchOptions = normalizedSearch({ q: args.q });
-		const needle = matchOptions.q;
+
 		const localeIds = new Set(
 			rows.flatMap((row) => row.targets.map((target) => target.localeId)),
 		);
@@ -697,22 +721,21 @@ export const workspaceWorkPage = internalQuery({
 			targetValue: string;
 		}> = [];
 
+		let hydratedBytes = 0;
+		let hydrated = 0;
 		for (let rowIndex = 0; rowIndex < pageRows.length; rowIndex += 1) {
 			const row = pageRows[rowIndex];
 			if (!row) continue;
 			const targetStart =
 				row.catalogIndex === cursor.catalogIndex ? cursor.targetIndex : 0;
 			if (
-				targetStart >= row.targets.length &&
+				targetStart > row.targets.length &&
 				row.catalogIndex === cursor.catalogIndex
 			) {
 				throw new ConvexError({
 					code: "VALIDATION",
 					message: "Translation work pagination cursor is invalid.",
 				});
-			}
-			if (needle && !row.searchCorpus.some((value) => value.includes(needle))) {
-				continue;
 			}
 			for (
 				let targetIndex = targetStart;
@@ -731,12 +754,27 @@ export const workspaceWorkPage = internalQuery({
 					reasonSet.has(reason),
 				);
 				if (reasons.length === 0) continue;
+				if (
+					hydratedBytes >= MAX_DISCOVERY_READ_BYTES ||
+					hydrated >= MAX_SEARCH_SCAN_KEYS
+				)
+					return {
+						projectionId: projection._id,
+						items,
+						nextCursor: encodeTranslationWorkCursor({
+							projectionId: projection._id,
+							catalogIndex: row.catalogIndex,
+							targetIndex,
+						}),
+					};
+				hydrated++;
 				const current = await currentWorkspaceTarget(
 					ctx,
 					token.projectId,
 					row.messageId,
 					target.localeId,
 				);
+				hydratedBytes += byteLength(current);
 				// An empty Source value is source-data evidence, not untranslated
 				// target work and not an Intentional Blank. Keep it out of every
 				// translation-repair reason instead of asking agents to invent text.
@@ -784,22 +822,24 @@ export const workspaceWorkPage = internalQuery({
 							rowIndex,
 							targetIndex,
 							projection._id,
+							!indexedPage.isDone,
 						),
 					};
 				}
 			}
 		}
-		const overflow = rows[MAX_WORK_QUEUE_SCAN_ROWS];
+		const last = rows[rows.length - 1];
 		return {
 			projectionId: projection._id,
 			items,
-			nextCursor: overflow
-				? encodeTranslationWorkCursor({
-						projectionId: projection._id,
-						catalogIndex: overflow.catalogIndex,
-						targetIndex: 0,
-					})
-				: null,
+			nextCursor:
+				!indexedPage.isDone && last
+					? encodeTranslationWorkCursor({
+							projectionId: projection._id,
+							catalogIndex: last.catalogIndex + 1,
+							targetIndex: 0,
+						})
+					: null,
 		};
 	},
 });

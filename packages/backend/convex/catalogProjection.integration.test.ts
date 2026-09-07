@@ -16,6 +16,7 @@ import {
 	type Backend,
 	createBackend,
 	createProject,
+	readAllCatalogPages,
 } from "../test/support";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -38,14 +39,38 @@ async function readActiveCatalog(
 	user: AuthenticatedBackend,
 	projectId: Id<"projects">,
 ) {
-	return await user.query(api.catalogProjection.getActive, { projectId });
+	return await readAllCatalogPages(user, projectId);
 }
 
 async function readGitChanges(
 	user: AuthenticatedBackend,
 	projectId: Id<"projects">,
 ) {
-	return await user.query(api.catalogProjection.getGitChanges, { projectId });
+	const first = await user.query(api.catalogProjection.getGitChanges, {
+		projectId,
+	});
+	if (!first) return null;
+	const keys = new Map(first.keys.map((key) => [key.id, key]));
+	let page = first;
+	while (!page.isDone) {
+		const next = await user.query(api.catalogProjection.getGitChanges, {
+			projectId,
+			projectionId: first.projectionId,
+			cursor: page.continueCursor,
+		});
+		if (!next) throw new Error("Missing pinned Git changes");
+		page = next;
+		for (const key of page.keys) {
+			const previous = keys.get(key.id);
+			keys.set(
+				key.id,
+				previous
+					? { ...key, values: [...previous.values, ...key.values] }
+					: key,
+			);
+		}
+	}
+	return { ...first, keys: [...keys.values()] };
 }
 
 async function bindTwoLocales(
@@ -85,6 +110,138 @@ describe("catalog projection", () => {
 
 	afterEach(() => {
 		vi.useRealTimers();
+	});
+
+	test("pages Git changes against their published generation", async () => {
+		const user = await authenticatedBackend(t, "paged-git-changes");
+		const projectId = await createProject(user);
+		await bindTwoLocales(user, projectId);
+		const files = (version: number) =>
+			["en", "de"].map((code) => ({
+				catalogPath: `${code}.arb`,
+				content: JSON.stringify({
+					"@@locale": code,
+					...Object.fromEntries(
+						Array.from({ length: 40 }, (_, i) => [
+							`key_${i}`,
+							`${code} ${i} v${version}`,
+						]),
+					),
+				}),
+			}));
+		for (const version of [1, 2, 3]) {
+			await user.action(api.snapshots.ingest, {
+				projectId,
+				repository: "repo",
+				commit: `version-${version}`,
+				files: files(version),
+				...(version === 1
+					? {}
+					: {
+							lineage: {
+								baselineCommit: `version-${version - 1}`,
+								relationship: "descendant" as const,
+								mergeBase: `version-${version - 1}`,
+							},
+						}),
+			});
+			if (version !== 2) continue;
+			const first = await user.query(api.catalogProjection.getGitChanges, {
+				projectId,
+			});
+			if (!first) throw new Error("Missing Git changes");
+			expect(first.isDone).toBe(false);
+			const complete = await readGitChanges(user, projectId);
+			expect(complete?.keys.map((key) => key.id)).toEqual(
+				Array.from({ length: 40 }, (_, i) => `key_${i}`),
+			);
+			expect(complete?.keys.every((key) => key.values.length === 2)).toBe(true);
+			await expect(
+				user.query(api.catalogProjection.getGitChanges, {
+					projectId,
+					cursor: first.continueCursor,
+				}),
+			).rejects.toThrow("projectionId");
+			await user.action(api.snapshots.ingest, {
+				projectId,
+				repository: "repo",
+				commit: "later",
+				files: files(3),
+				lineage: {
+					baselineCommit: "version-2",
+					relationship: "descendant",
+					mergeBase: "version-2",
+				},
+			});
+			const continued = await user.query(api.catalogProjection.getGitChanges, {
+				projectId,
+				projectionId: first.projectionId,
+				cursor: first.continueCursor,
+			});
+			expect(continued?.projectionId).toBe(first.projectionId);
+			expect(
+				continued?.keys.every((key) =>
+					key.values.every((value) => value.current.value.endsWith("v2")),
+				),
+			).toBe(true);
+			break;
+		}
+	});
+
+	test("pins catalog continuations while another Baseline is published", async () => {
+		const user = await authenticatedBackend(t, "paged-catalog");
+		const projectId = await createProject(user);
+		await bindTwoLocales(user, projectId);
+		const files = ["en", "de"].map((code) => ({
+			catalogPath: `${code}.arb`,
+			content: JSON.stringify({
+				"@@locale": code,
+				...Object.fromEntries(
+					Array.from({ length: 40 }, (_, i) => [`key_${i}`, `${code} ${i}`]),
+				),
+			}),
+		}));
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "example/repo",
+			commit: "page-one",
+			files,
+		});
+		const first = await user.query(api.catalogProjection.getActive, {
+			projectId,
+		});
+		expect(first?.isDone).toBe(false);
+		if (!first) throw new Error("Expected catalog");
+		await expect(
+			user.query(api.catalogProjection.getActive, {
+				projectId,
+				cursor: first.continueCursor,
+			}),
+		).rejects.toThrow("projectionId");
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "example/repo",
+			commit: "page-two",
+			lineage: {
+				baselineCommit: "page-one",
+				relationship: "descendant",
+				mergeBase: "page-one",
+			},
+			files: files.map((file) => ({
+				...file,
+				content: file.content.replace("en 0", "Changed"),
+			})),
+		});
+		const next = await user.query(api.catalogProjection.getActive, {
+			projectId,
+			projectionId: first.projectionId,
+			cursor: first.continueCursor,
+		});
+		expect(next?.projectionId).toBe(first.projectionId);
+		expect(next?.snapshotId).toBe(first.snapshotId);
+		expect(
+			(await readAllCatalogPages(user, projectId))?.keys.map((key) => key.id),
+		).toEqual(Array.from({ length: 40 }, (_, i) => `key_${i}`));
 	});
 
 	test("has no active Baseline Catalog before a Baseline Snapshot is accepted", async () => {
