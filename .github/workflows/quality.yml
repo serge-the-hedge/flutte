@@ -33,8 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.3
       - working-directory: cli
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
       - working-directory: cli
         run: dart format --output=none --set-exit-if-changed .
       - working-directory: cli
