@@ -34,15 +34,18 @@ import {
 	X,
 } from "lucide-react";
 import {
+	createContext,
 	type KeyboardEventHandler,
 	memo,
 	useCallback,
+	useContext,
 	useDeferredValue,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 
 import { IcuMessageSegmentEditor } from "@/components/localization/icu-message-segment-editor";
@@ -50,7 +53,6 @@ import { readMessageSegments } from "@/lib/icu-message-segments";
 import type {
 	CatalogWorkspaceCommit,
 	CatalogWorkspaceCommitReceipt,
-	CatalogWorkspaceDraft,
 	CatalogWorkspaceDraftSource,
 	CatalogWorkspaceValue,
 	StringsCatalogKey,
@@ -60,6 +62,10 @@ import {
 	editCatalogWorkspaceDraft,
 	refreshCatalogWorkspaceDraft,
 } from "@/lib/strings-catalog";
+import {
+	CatalogEditorDrafts,
+	sameDraftSource,
+} from "@/lib/strings-catalog-drafts";
 import {
 	type CatalogValueScope,
 	type CatalogWorkspaceFocusIntent,
@@ -87,6 +93,7 @@ import {
 	sameStringsWindowMessageIds,
 	WINDOW_KEY_CAP,
 } from "@/lib/strings-window";
+import { CatalogDraftRecovery } from "./catalog-draft-recovery";
 
 /**
  * The reading measure. Wide enough that a 300-character paragraph is
@@ -171,25 +178,7 @@ type CatalogWorkspaceEditorInput = {
 	onCommitValue: CommitCatalogValue | undefined;
 };
 
-type OptimisticDraftSource = {
-	/** Server snapshots that can legitimately arrive while the latest receipt
-	 * is still ahead of the reactive Catalog Workspace subscription. */
-	known: readonly CatalogWorkspaceDraftSource[];
-	committed: CatalogWorkspaceDraftSource;
-};
-
-function sameDraftSource(
-	left: CatalogWorkspaceDraftSource,
-	right: CatalogWorkspaceDraftSource,
-): boolean {
-	return (
-		left.value === right.value &&
-		left.expectedSourceFingerprint === right.expectedSourceFingerprint &&
-		left.expectedGitValueFingerprint === right.expectedGitValueFingerprint &&
-		left.expectedGitValueRevision === right.expectedGitValueRevision &&
-		left.expectedWorkspaceRevision === right.expectedWorkspaceRevision
-	);
-}
+const CatalogDraftsContext = createContext<CatalogEditorDrafts | null>(null);
 
 function isEditableCatalogWorkspaceValue(
 	input: CatalogWorkspaceEditorInput,
@@ -341,16 +330,27 @@ function EditableCatalogValue({
 			value.workspaceRevision,
 		],
 	);
-	const [draft, setDraft] = useState<CatalogWorkspaceDraft>(() =>
-		createCatalogWorkspaceDraft(currentDraftSource),
+	const drafts = useContext(CatalogDraftsContext);
+	if (!drafts) throw new Error("Catalog editors require a draft owner.");
+	const session = drafts.get(
+		messageId,
+		value.localeId,
+		value.localeCode,
+		currentDraftSource,
 	);
-	const [optimisticSource, setOptimisticSource] =
-		useState<OptimisticDraftSource | null>(null);
-	const [isSaving, setIsSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const {
+		draft,
+		optimisticSource,
+		isSaving,
+		error,
+		isRecordingBlank,
+		blankReason,
+	} = useSyncExternalStore(
+		session.subscribe,
+		session.getSnapshot,
+		session.getSnapshot,
+	);
 	const [isFocused, setIsFocused] = useState(false);
-	const [isRecordingBlank, setIsRecordingBlank] = useState(false);
-	const [blankReason, setBlankReason] = useState("");
 	const renderedValueRef = useRef(currentDraftSource.value);
 	const draftSource = optimisticSource?.committed ?? currentDraftSource;
 	const isDirty = draft.isDirty;
@@ -363,32 +363,40 @@ function EditableCatalogValue({
 				sameDraftSource(currentDraftSource, source),
 			)
 		) {
-			setOptimisticSource(null);
+			session.set("optimisticSource", null);
 		}
-	}, [currentDraftSource, optimisticSource]);
+	}, [currentDraftSource, optimisticSource, session]);
 	useEffect(() => {
-		setDraft((currentDraft) =>
-			refreshCatalogWorkspaceDraft(currentDraft, draftSource),
+		session.set("draft", (currentDraft) =>
+			currentDraft.isDirty ||
+			isRecordingBlank ||
+			sameDraftSource(currentDraft, draftSource)
+				? currentDraft
+				: refreshCatalogWorkspaceDraft(currentDraft, draftSource),
 		);
-		if (renderedValueRef.current !== currentDraftSource.value) {
+		if (
+			renderedValueRef.current !== currentDraftSource.value &&
+			!session.getSnapshot().isRecordingBlank &&
+			!session.getSnapshot().draft.isDirty
+		) {
 			renderedValueRef.current = currentDraftSource.value;
-			setError(null);
-			setIsRecordingBlank(false);
-			setBlankReason("");
+			session.set("error", null);
+			session.set("isRecordingBlank", false);
+			session.set("blankReason", "");
 		}
-	}, [currentDraftSource, draftSource]);
+	}, [currentDraftSource, draftSource, isRecordingBlank, session]);
 
 	const revert = useCallback(() => {
-		setDraft(createCatalogWorkspaceDraft(draftSource));
-		setOptimisticSource(null);
-		setError(null);
-		setIsRecordingBlank(false);
-		setBlankReason("");
-	}, [draftSource]);
+		session.set("draft", createCatalogWorkspaceDraft(draftSource));
+		session.set("error", null);
+		session.set("isRecordingBlank", false);
+		session.set("blankReason", "");
+		session.set("blankSource", null);
+	}, [draftSource, session]);
 
 	const updateDraft = useCallback(
 		(nextValue: string) => {
-			setDraft((currentDraft) =>
+			session.set("draft", (currentDraft) =>
 				editCatalogWorkspaceDraft({
 					draft: currentDraft,
 					source: draftSource,
@@ -396,19 +404,23 @@ function EditableCatalogValue({
 				}),
 			);
 		},
-		[draftSource],
+		[draftSource, session],
 	);
 
 	const commit = useCallback(
 		async (intent: CatalogWorkspaceCommit["intent"]) => {
-			if (isSaving) return false;
-			const commitDraft = refreshCatalogWorkspaceDraft(draft, draftSource);
+			if (session.getSnapshot().isSaving) return false;
+			const blankSource = session.getSnapshot().blankSource;
+			const commitDraft =
+				intent.kind === "intentionalBlank" && blankSource
+					? blankSource
+					: refreshCatalogWorkspaceDraft(draft, draftSource);
 			// Moving focus disables this field before the server snapshot returns;
 			// clear the local focus chrome now so the refresh cannot cause a second,
 			// surprising collapse later.
 			setIsFocused(false);
-			setIsSaving(true);
-			setError(null);
+			session.set("isSaving", true);
+			session.set("error", null);
 			try {
 				const request = onCommitValue({
 					messageId,
@@ -434,7 +446,7 @@ function EditableCatalogValue({
 					expectedSourceFingerprint: receipt.sourceFingerprint,
 					expectedWorkspaceRevision: receipt.workspaceRevision,
 				};
-				setOptimisticSource((current) => {
+				session.set("optimisticSource", (current) => {
 					const known = current?.known ?? [];
 					return {
 						known: known.some((source) => sameDraftSource(source, draftSource))
@@ -443,19 +455,20 @@ function EditableCatalogValue({
 						committed: nextSource,
 					};
 				});
-				setDraft({ ...nextSource, isDirty: false });
+				session.set("draft", { ...nextSource, isDirty: false });
 				return true;
 			} catch (cause) {
-				setDraft(commitDraft);
-				setOptimisticSource((current) =>
+				session.set("draft", commitDraft);
+				session.set("optimisticSource", (current) =>
 					current ? { ...current, committed: draftSource } : null,
 				);
-				setError(
+				session.set(
+					"error",
 					cause instanceof Error ? cause.message : "Could not save value.",
 				);
 				return false;
 			} finally {
-				setIsSaving(false);
+				session.set("isSaving", false);
 			}
 		},
 		[
@@ -464,7 +477,7 @@ function EditableCatalogValue({
 			onMoveFocus,
 			draftSource,
 			draft,
-			isSaving,
+			session,
 			value.localeId,
 		],
 	);
@@ -474,13 +487,14 @@ function EditableCatalogValue({
 			return;
 		}
 		if (!value.isSource && isEmptyDraft) {
-			setError(
+			session.set(
+				"error",
 				"Choose “deliberately empty” and give a reason to record an Intentional Blank.",
 			);
 			return;
 		}
 		await commit({ kind: "save", value: draft.value });
-	}, [commit, draft.value, isDirty, isEmptyDraft, value.isSource]);
+	}, [commit, draft.value, isDirty, isEmptyDraft, value.isSource, session]);
 
 	const confirm = useCallback(async () => {
 		await commit({ kind: "confirm" });
@@ -492,10 +506,11 @@ function EditableCatalogValue({
 			reason: blankReason,
 		});
 		if (committed) {
-			setIsRecordingBlank(false);
-			setBlankReason("");
+			session.set("isRecordingBlank", false);
+			session.set("blankReason", "");
+			session.set("blankSource", null);
 		}
-	}, [blankReason, commit]);
+	}, [blankReason, commit, session]);
 
 	const onEditorKeyDown = useCallback<
 		KeyboardEventHandler<HTMLInputElement | HTMLTextAreaElement>
@@ -619,12 +634,13 @@ function EditableCatalogValue({
 						id={blankReasonId}
 						className="h-7 text-[13px]"
 						value={blankReason}
-						onChange={(event) => setBlankReason(event.target.value)}
+						onChange={(event) => session.set("blankReason", event.target.value)}
 						onKeyDown={(event) => {
 							if (event.key === "Escape") {
 								event.preventDefault();
-								setIsRecordingBlank(false);
-								setBlankReason("");
+								session.set("isRecordingBlank", false);
+								session.set("blankReason", "");
+								session.set("blankSource", null);
 								return;
 							}
 							if (event.key === "Enter" && blankReason.trim().length > 0) {
@@ -673,7 +689,11 @@ function EditableCatalogValue({
 							// mousedown, not click: blur must not beat the press.
 							onMouseDown={(event) => {
 								event.preventDefault();
-								setIsRecordingBlank(true);
+								session.set(
+									"blankSource",
+									refreshCatalogWorkspaceDraft(draft, draftSource),
+								);
+								session.set("isRecordingBlank", true);
 							}}
 						>
 							deliberately empty
@@ -1874,7 +1894,7 @@ function StringsCatalogNavigator({
  * The Source Contract stays immutable in its projection; an editor may
  * instead commit a value-only Source Proposal through the same Workspace
  * seam as target work. */
-export function StringsCatalogView({
+function StringsCatalogContent({
 	navigation,
 	navigationState,
 	onNavigationChange,
@@ -1930,5 +1950,25 @@ export function StringsCatalogView({
 			workHandoff={workHandoff}
 			onCreateTranslationTask={onCreateTranslationTask}
 		/>
+	);
+}
+
+/** The route keys this owner by project. A new projection or a filtered-out
+ * row must not replace the editing session that holds its concurrency basis. */
+export function StringsCatalogView(
+	props: React.ComponentProps<typeof StringsCatalogContent> & {
+		onUnsavedWorkChange?: (hasUnsavedWork: boolean) => void;
+	},
+) {
+	const [drafts] = useState(() => new CatalogEditorDrafts());
+	return (
+		<CatalogDraftsContext value={drafts}>
+			<CatalogDraftRecovery
+				drafts={drafts}
+				navigation={props.navigation}
+				onUnsavedWorkChange={props.onUnsavedWorkChange}
+			/>
+			<StringsCatalogContent {...props} />
+		</CatalogDraftsContext>
 	);
 }

@@ -15,10 +15,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import {
-	StringsCatalogLoadingRows,
-	StringsCatalogView,
-} from "@/components/localization/strings-catalog-view";
+import { StringsCatalogView } from "@/components/localization/strings-catalog-view";
 import { api, convexId } from "@/lib/convex-api";
 import {
 	type CatalogWorkspaceCommit,
@@ -36,6 +33,8 @@ import {
 	sameStringsWindowMessageIds,
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
+
+import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 
 type StringsSearch = {
 	q?: string;
@@ -65,11 +64,9 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 	component: StringsRoute,
 });
 
-function StringsSkeleton() {
-	return <StringsCatalogLoadingRows />;
-}
-
 function StringsRoute() {
+	const [hasUnsavedWork, setHasUnsavedWork] = useState(false);
+	useCatalogNavigationGuard(hasUnsavedWork);
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
 	const search = useSearch({ from: "/projects/$projectId/strings" });
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
@@ -305,21 +302,6 @@ function StringsRoute() {
 		[createTranslationTask, convexProjectId, navigate, projectId],
 	);
 
-	if (
-		navigation === undefined ||
-		(search.release && releaseHandoff === undefined)
-	) {
-		return (
-			<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-				<PageHeader
-					title="Strings"
-					description="The accepted catalog from the Baseline Snapshot."
-				/>
-				<StringsSkeleton />
-			</ProjectShell>
-		);
-	}
-
 	const keyCount =
 		navigation?.kind === "ready" ? (navigation.keys?.length ?? 0) : 0;
 	return (
@@ -351,7 +333,13 @@ function StringsRoute() {
 				}
 			/>
 			<StringsCatalogView
-				navigation={navigation}
+				key={projectId}
+				onUnsavedWorkChange={setHasUnsavedWork}
+				navigation={
+					search.release && releaseHandoff === undefined
+						? undefined
+						: navigation
+				}
 				hydratedCards={hydratedCards}
 				onWindowMessageIdsChange={onWindowMessageIdsChange}
 				navigationState={navigationState}

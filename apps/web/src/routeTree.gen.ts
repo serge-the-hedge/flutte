@@ -16,7 +16,6 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
-import { Route as ProposalsPrototypeRouteImport } from './routes/proposals.prototype'
 import { Route as ProjectsProjectIdExportRouteImport } from './routes/projects.$projectId.export'
 import { Route as ProjectsProjectIdImportRouteImport } from './routes/projects.$projectId.import'
 import { Route as ProjectsProjectIdLocalesRouteImport } from './routes/projects.$projectId.locales'
@@ -31,7 +30,6 @@ import { Route as ProjectsProjectIdTagsRouteImport } from './routes/projects.$pr
 import { Route as ProjectsProjectIdLocaleProposalsPtRouteImport } from './routes/projects.$projectId.locale-proposals.pt'
 import { Route as ProjectsProjectIdProposalsIndexRouteImport } from './routes/projects.$projectId.proposals.index'
 import { Route as ProjectsProjectIdProposalsProposalIdRouteImport } from './routes/projects.$projectId.proposals.$proposalId'
-import { Route as ProjectsProjectIdProposalsPrototypeRouteImport } from './routes/projects.$projectId.proposals.prototype'
 import { Route as ProjectsProjectIdReviewsIndexRouteImport } from './routes/projects.$projectId.reviews.index'
 import { Route as ProjectsProjectIdReviewsChangeSetIdRouteImport } from './routes/projects.$projectId.reviews.$changeSetId'
 import { Route as ProjectsProjectIdSettingsApiTokensRouteImport } from './routes/projects.$projectId.settings.api-tokens'
@@ -71,11 +69,6 @@ const ProjectsNewRoute = ProjectsNewRouteImport.update({
   id: '/new',
   path: '/new',
   getParentRoute: () => ProjectsRoute,
-} as any)
-const ProposalsPrototypeRoute = ProposalsPrototypeRouteImport.update({
-  id: '/proposals/prototype',
-  path: '/proposals/prototype',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectIdExportRoute = ProjectsProjectIdExportRouteImport.update({
   id: '/export',
@@ -157,12 +150,6 @@ const ProjectsProjectIdProposalsProposalIdRoute =
     path: '/$proposalId',
     getParentRoute: () => ProjectsProjectIdProposalsRoute,
   } as any)
-const ProjectsProjectIdProposalsPrototypeRoute =
-  ProjectsProjectIdProposalsPrototypeRouteImport.update({
-    id: '/prototype',
-    path: '/prototype',
-    getParentRoute: () => ProjectsProjectIdProposalsRoute,
-  } as any)
 const ProjectsProjectIdReviewsIndexRoute =
   ProjectsProjectIdReviewsIndexRouteImport.update({
     id: '/',
@@ -196,7 +183,6 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
-  '/proposals/prototype': typeof ProposalsPrototypeRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
@@ -210,7 +196,6 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId/tags': typeof ProjectsProjectIdTagsRoute
   '/projects/$projectId/locale-proposals/pt': typeof ProjectsProjectIdLocaleProposalsPtRoute
   '/projects/$projectId/proposals/$proposalId': typeof ProjectsProjectIdProposalsProposalIdRoute
-  '/projects/$projectId/proposals/prototype': typeof ProjectsProjectIdProposalsPrototypeRoute
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
@@ -225,7 +210,6 @@ export interface FileRoutesByTo {
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
-  '/proposals/prototype': typeof ProposalsPrototypeRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
@@ -237,7 +221,6 @@ export interface FileRoutesByTo {
   '/projects/$projectId/tags': typeof ProjectsProjectIdTagsRoute
   '/projects/$projectId/locale-proposals/pt': typeof ProjectsProjectIdLocaleProposalsPtRoute
   '/projects/$projectId/proposals/$proposalId': typeof ProjectsProjectIdProposalsProposalIdRoute
-  '/projects/$projectId/proposals/prototype': typeof ProjectsProjectIdProposalsPrototypeRoute
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
@@ -253,7 +236,6 @@ export interface FileRoutesById {
   '/sign-in': typeof SignInRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
-  '/proposals/prototype': typeof ProposalsPrototypeRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
   '/projects/$projectId/import': typeof ProjectsProjectIdImportRoute
   '/projects/$projectId/locales': typeof ProjectsProjectIdLocalesRoute
@@ -267,7 +249,6 @@ export interface FileRoutesById {
   '/projects/$projectId/tags': typeof ProjectsProjectIdTagsRoute
   '/projects/$projectId/locale-proposals/pt': typeof ProjectsProjectIdLocaleProposalsPtRoute
   '/projects/$projectId/proposals/$proposalId': typeof ProjectsProjectIdProposalsProposalIdRoute
-  '/projects/$projectId/proposals/prototype': typeof ProjectsProjectIdProposalsPrototypeRoute
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
@@ -284,7 +265,6 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
-    | '/proposals/prototype'
     | '/projects/$projectId/export'
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
@@ -298,7 +278,6 @@ export interface FileRouteTypes {
     | '/projects/$projectId/tags'
     | '/projects/$projectId/locale-proposals/pt'
     | '/projects/$projectId/proposals/$proposalId'
-    | '/projects/$projectId/proposals/prototype'
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
@@ -313,7 +292,6 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
-    | '/proposals/prototype'
     | '/projects/$projectId/export'
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
@@ -325,7 +303,6 @@ export interface FileRouteTypes {
     | '/projects/$projectId/tags'
     | '/projects/$projectId/locale-proposals/pt'
     | '/projects/$projectId/proposals/$proposalId'
-    | '/projects/$projectId/proposals/prototype'
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
@@ -340,7 +317,6 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/projects/$projectId'
     | '/projects/new'
-    | '/proposals/prototype'
     | '/projects/$projectId/export'
     | '/projects/$projectId/import'
     | '/projects/$projectId/locales'
@@ -354,7 +330,6 @@ export interface FileRouteTypes {
     | '/projects/$projectId/tags'
     | '/projects/$projectId/locale-proposals/pt'
     | '/projects/$projectId/proposals/$proposalId'
-    | '/projects/$projectId/proposals/prototype'
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/members'
@@ -368,7 +343,6 @@ export interface RootRouteChildren {
   ProjectsRoute: typeof ProjectsRouteWithChildren
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignInRoute: typeof SignInRoute
-  ProposalsPrototypeRoute: typeof ProposalsPrototypeRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -421,13 +395,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/new'
       preLoaderRoute: typeof ProjectsNewRouteImport
       parentRoute: typeof ProjectsRoute
-    }
-    '/proposals/prototype': {
-      id: '/proposals/prototype'
-      path: '/proposals/prototype'
-      fullPath: '/proposals/prototype'
-      preLoaderRoute: typeof ProposalsPrototypeRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/projects/$projectId/export': {
       id: '/projects/$projectId/export'
@@ -527,13 +494,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdProposalsProposalIdRouteImport
       parentRoute: typeof ProjectsProjectIdProposalsRoute
     }
-    '/projects/$projectId/proposals/prototype': {
-      id: '/projects/$projectId/proposals/prototype'
-      path: '/prototype'
-      fullPath: '/projects/$projectId/proposals/prototype'
-      preLoaderRoute: typeof ProjectsProjectIdProposalsPrototypeRouteImport
-      parentRoute: typeof ProjectsProjectIdProposalsRoute
-    }
     '/projects/$projectId/reviews/': {
       id: '/projects/$projectId/reviews/'
       path: '/'
@@ -567,7 +527,6 @@ declare module '@tanstack/react-router' {
 
 interface ProjectsProjectIdProposalsRouteChildren {
   ProjectsProjectIdProposalsProposalIdRoute: typeof ProjectsProjectIdProposalsProposalIdRoute
-  ProjectsProjectIdProposalsPrototypeRoute: typeof ProjectsProjectIdProposalsPrototypeRoute
   ProjectsProjectIdProposalsIndexRoute: typeof ProjectsProjectIdProposalsIndexRoute
 }
 
@@ -575,8 +534,6 @@ const ProjectsProjectIdProposalsRouteChildren: ProjectsProjectIdProposalsRouteCh
   {
     ProjectsProjectIdProposalsProposalIdRoute:
       ProjectsProjectIdProposalsProposalIdRoute,
-    ProjectsProjectIdProposalsPrototypeRoute:
-      ProjectsProjectIdProposalsPrototypeRoute,
     ProjectsProjectIdProposalsIndexRoute: ProjectsProjectIdProposalsIndexRoute,
   }
 
@@ -674,7 +631,6 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsRoute: ProjectsRouteWithChildren,
   ResetPasswordRoute: ResetPasswordRoute,
   SignInRoute: SignInRoute,
-  ProposalsPrototypeRoute: ProposalsPrototypeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
