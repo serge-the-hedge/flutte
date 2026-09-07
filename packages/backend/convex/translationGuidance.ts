@@ -9,7 +9,7 @@ import {
 } from "./_generated/server";
 import { encodedSize } from "./catalogWorkspaceView";
 import { normalizeLocaleCode } from "./lib";
-import { PORTUGUESE_LOCALE_CODE } from "./localeProposals";
+import { introductionTargetFor } from "./localeIntroductionTargets";
 import { messageLiteralParts } from "./messageFacts";
 import {
 	assertProjectExists,
@@ -68,8 +68,7 @@ function validateRevision(revision: number) {
 	}
 }
 
-/** Guidance follows the existing Locale setup contract, including the supported
- * Portuguese New-Locale workflow before it has a Catalog Binding. */
+/** Guidance can prepare configured targets before they have a Catalog Binding. */
 async function validateLocales(
 	ctx: ReadCtx,
 	projectId: Id<"projects">,
@@ -102,14 +101,18 @@ async function validateLocales(
 				q.eq("projectId", projectId).eq("code", localeCode),
 			)
 			.unique();
+		const configured = await introductionTargetFor(ctx, projectId, localeCode);
 		if (
 			(locale &&
 				(locale.isSource ||
 					(!options.allowArchived &&
 						!options.preservedRenderingLocales?.has(localeCode) &&
 						locale.archivedAt !== undefined &&
-						localeCode !== PORTUGUESE_LOCALE_CODE))) ||
-			(!locale && localeCode !== PORTUGUESE_LOCALE_CODE)
+						!configured))) ||
+			(!locale &&
+				!configured &&
+				!options.allowArchived &&
+				!options.preservedRenderingLocales?.has(localeCode))
 		) {
 			throw new ConvexError({
 				code: "VALIDATION",

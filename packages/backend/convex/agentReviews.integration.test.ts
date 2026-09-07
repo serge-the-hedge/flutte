@@ -20,11 +20,11 @@ async function setup(introduced = false) {
 		projectId,
 		code: "de",
 	});
-	await owner.mutation(api.locales.bind, {
+	await owner.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await owner.mutation(api.locales.bind, { localeId, catalogPath: "de.arb" });
+	await owner.action(api.locales.bind, { localeId, catalogPath: "de.arb" });
 	if (introduced)
 		await owner.action(api.snapshots.ingest, {
 			projectId,
@@ -552,6 +552,13 @@ describe("independent agent review", () => {
 
 	test("new-Locale HTTP review protects unseen staged edits then applies exact reviewed bytes", async () => {
 		const f = await setup();
+		await f.owner.mutation(api.localeIntroductionTargets.save, {
+			projectId: f.projectId,
+			localeCode: "pt",
+			label: "Portuguese",
+			catalogPath: "intl_pt.arb",
+			runtimeLocale: "pt-BR",
+		});
 		const task = await f.owner.mutation(
 			api.agentTranslationProposals.createTask,
 			{

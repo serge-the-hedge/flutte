@@ -1,5 +1,4 @@
 import { ConvexError, v } from "convex/values";
-
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -10,14 +9,19 @@ import {
 	query,
 } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
+import { isHumanOrAuthorizedReview } from "./agentReviewModel";
 import { pendingIntroductionLocaleIds } from "./catalogIntroductionReviews";
 import {
 	activeProjectionFor,
 	MAX_PROJECTED_LOCALES,
 	MAX_WORKING_CATALOG_KEYS,
-	MAX_WORKING_CATALOG_ROWS,
 	readActiveCatalog,
 } from "./catalogProjection";
+import {
+	decisionForIdentity,
+	latestDecisionForValue,
+	visibleDecisionRecords,
+} from "./catalogWorkspaceDecisionQueries";
 import {
 	type CatalogWorkspaceDecisionRecord,
 	type CatalogWorkspaceValueState,
@@ -50,16 +54,16 @@ import {
  * windowed Catalog Workspace Browse seam. One bounded row per active key is
  * derived entirely from canonical evidence by the internal projector below;
  * callers never assemble or patch digest fields. The stored index is bounded
- * at four MiB so a Baseline-sized catalog stays inside the documented
- * uncached-open budget when the public Navigation read pages its return. */
+ * at eight MiB so a Baseline-sized catalog stays inside the documented
+ * uncached-open budget for the measured ten-Locale working catalog. */
 export const MAX_CATALOG_WORKSPACE_NAVIGATION_ROWS = MAX_WORKING_CATALOG_KEYS;
-export const MAX_CATALOG_WORKSPACE_NAVIGATION_BYTES = 4 * 1024 * 1024;
+export const MAX_CATALOG_WORKSPACE_NAVIGATION_BYTES = 8 * 1024 * 1024;
 /** The public Navigation response is intentionally kept below the measured
  * uncached-open budget. Search remains local because the compact corpus is
  * carried with every digest; larger catalogs must use a smaller projection or
  * a future paged Navigation contract rather than silently returning a giant
  * response. */
-export const MAX_CATALOG_WORKSPACE_NAVIGATION_RETURN_BYTES = 4 * 1024 * 1024;
+export const MAX_CATALOG_WORKSPACE_NAVIGATION_RETURN_BYTES = 8 * 1024 * 1024;
 const MAX_NAVIGATION_RESET_ROWS_PER_MUTATION = 256;
 // Repair derivation reads every Locale row and current decision for each key.
 // Keep its transactions comfortably below Convex's system-operation ceiling.
@@ -499,86 +503,117 @@ function navigationRowFor(
 		.unique();
 }
 
-/** The projection's keys in Catalog Order, walking one bounded catalogIndex
- * range. Only complete keys are returned: a key whose rows continue past the
- * read cap is excluded from the batch and left for the next step. */
+/** Old Locale heads can await reconciliation after an archive or replacement.
+ * Only heads addressed by this projection's target rows belong in its view. */
+async function workspaceHeadsForRows(
+	ctx: MutationCtx | QueryCtx,
+	projectId: Id<"projects">,
+	rows: readonly Doc<"catalogProjectionMessages">[],
+): Promise<Doc<"catalogWorkspaceValueHeads">[]> {
+	const first = rows[0];
+	if (!first) return [];
+	const existing = await ctx.db
+		.query("catalogWorkspaceValueHeads")
+		.withIndex("by_project_and_messageId_and_localeId", (q) =>
+			q.eq("projectId", projectId).eq("messageId", first.messageId),
+		)
+		.first();
+	if (!existing) return [];
+	const heads = await Promise.all(
+		rows
+			.filter((row) => !row.isSource)
+			.map((row) =>
+				ctx.db
+					.query("catalogWorkspaceValueHeads")
+					.withIndex("by_project_and_messageId_and_localeId", (q) =>
+						q
+							.eq("projectId", projectId)
+							.eq("messageId", row.messageId)
+							.eq("localeId", row.localeId),
+					)
+					.unique(),
+			),
+	);
+	return heads.filter(
+		(head): head is Doc<"catalogWorkspaceValueHeads"> => head !== null,
+	);
+}
+
+/** Bound staging by complete keys and actual catalog/head bytes. The paged
+ * read is byte-limited; a single large key is completed by an indexed lookup. */
 async function navigationKeyBatchForProjection(
 	ctx: MutationCtx,
 	input: {
+		projectId: Id<"projects">;
 		projectionId: Id<"catalogProjections">;
 		afterCatalogIndex: number;
 		maxKeys: number;
 	},
-): Promise<{
-	rows: Doc<"catalogProjectionMessages">[];
-	messageIds: string[];
-	lastCatalogIndex: number;
-	moreRemaining: boolean;
-}> {
-	const take = input.maxKeys * 8 + 8;
-	const rows = await ctx.db
+) {
+	const page = await ctx.db
 		.query("catalogProjectionMessages")
 		.withIndex("by_projection_and_catalogIndex", (q) =>
 			q
 				.eq("projectionId", input.projectionId)
 				.gt("catalogIndex", input.afterCatalogIndex),
 		)
-		.take(take);
-	const messageIds: string[] = [];
-	let lastCatalogIndex = input.afterCatalogIndex;
-	let sliceEnd = 0;
-	for (const row of rows) {
-		if (row.messageId !== messageIds[messageIds.length - 1]) {
-			if (messageIds.length === input.maxKeys) {
-				// A row follows the batch boundary, so every collected key is
-				// complete.
-				break;
-			}
-			messageIds.push(row.messageId);
-		}
-		lastCatalogIndex = row.catalogIndex;
-		sliceEnd += 1;
-	}
-	if (sliceEnd === rows.length && rows.length === take) {
-		// The read hit its cap: the final key's rows may continue beyond it,
-		// so the batch drops that key and the next step resumes at it.
-		const finalMessageId = messageIds[messageIds.length - 1];
-		if (finalMessageId === undefined) {
+		.paginate({
+			cursor: null,
+			numItems: (input.maxKeys + 1) * MAX_PROJECTED_LOCALES,
+			maximumBytesRead: 2 * 1024 * 1024,
+		});
+	const last = page.page[page.page.length - 1];
+	let completeRows = page.isDone
+		? page.page
+		: page.page.filter((row) => row.messageId !== last?.messageId);
+	if (!page.isDone && completeRows.length === 0) {
+		const first = page.page[0];
+		if (!first)
 			throw new ConvexError({
 				code: "INTEGRITY",
-				message:
-					"Catalog Navigation staging read past its supported row budget.",
+				message: "A Navigation page made no progress.",
 			});
-		}
-		while (sliceEnd > 0 && rows[sliceEnd - 1]?.messageId === finalMessageId) {
-			sliceEnd -= 1;
-		}
-		messageIds.pop();
-		lastCatalogIndex =
-			sliceEnd > 0
-				? (rows[sliceEnd - 1]?.catalogIndex ?? lastCatalogIndex)
-				: input.afterCatalogIndex;
+		completeRows = await ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId", (q) =>
+				q
+					.eq("projectionId", input.projectionId)
+					.eq("messageId", first.messageId),
+			)
+			.take(MAX_PROJECTED_LOCALES + 1);
 	}
-	if (messageIds.length === 0) {
-		if (rows.length === 0) {
-			return {
-				rows: [],
-				messageIds: [],
-				lastCatalogIndex: input.afterCatalogIndex,
-				moreRemaining: false,
-			};
-		}
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"One Catalog key exceeds the rows a Navigation staging step can read.",
-		});
+	const grouped = new Map<string, Doc<"catalogProjectionMessages">[]>();
+	for (const row of completeRows) {
+		const group = grouped.get(row.messageId) ?? [];
+		group.push(row);
+		if (group.length > MAX_PROJECTED_LOCALES)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "A Navigation key has too many Locale rows.",
+			});
+		grouped.set(row.messageId, group);
+	}
+	const rows: Doc<"catalogProjectionMessages">[] = [];
+	const heads: Doc<"catalogWorkspaceValueHeads">[] = [];
+	const messageIds: string[] = [];
+	let lastCatalogIndex = input.afterCatalogIndex;
+	let byteLength = 0;
+	for (const [messageId, keyRows] of grouped) {
+		const keyHeads = await workspaceHeadsForRows(ctx, input.projectId, keyRows);
+		rows.push(...keyRows);
+		heads.push(...keyHeads);
+		byteLength += encodedSize(keyRows) + encodedSize(keyHeads);
+		messageIds.push(messageId);
+		lastCatalogIndex = keyRows[0]?.catalogIndex ?? lastCatalogIndex;
+		if (messageIds.length >= input.maxKeys || byteLength >= 2 * 1024 * 1024)
+			break;
 	}
 	return {
-		rows: rows.slice(0, sliceEnd),
+		rows,
+		heads,
 		messageIds,
 		lastCatalogIndex,
-		moreRemaining: sliceEnd < rows.length || rows.length === take,
+		moreRemaining: !page.isDone || rows.length < page.page.length,
 	};
 }
 
@@ -913,38 +948,140 @@ async function removeNavigationRow(
 	});
 }
 
-/** Read the bounded decision history for the supplied message identifiers.
- * One indexed read per key is cheaper than probing three identities for every
- * Locale target, while the project-wide decision envelope keeps the worst
- * case bounded. The pure digest projector still decides which records matter
- * for each target. */
+/** Read only the identities needed by current cards and First Review. Review
+ * history can grow without making every navigation rebuild scan that history. */
 async function decisionRecordsForNavigationRows(
 	ctx: MutationCtx | QueryCtx,
 	input: {
 		projectId: Id<"projects">;
 		rows: readonly Doc<"catalogProjectionMessages">[];
+		visibleRows: readonly Doc<"catalogProjectionMessages">[];
 	},
 ) {
-	const messageIds = [...new Set(input.rows.map((row) => row.messageId))];
-	const recordsByMessageId = await Promise.all(
-		messageIds.map(async (messageId) => {
-			const records = await ctx.db
-				.query("catalogWorkspaceDecisionRecords")
-				.withIndex("by_value_identity", (q) =>
-					q.eq("projectId", input.projectId).eq("messageId", messageId),
-				)
-				.take(MAX_WORKING_CATALOG_ROWS + 1);
-			if (records.length > MAX_WORKING_CATALOG_ROWS) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message:
-						"Catalog Workspace decision records exceed the project envelope for one key.",
-				});
-			}
-			return records;
-		}),
+	// Most keys can remain unreviewed while a few accumulate history. Probe
+	// each requested key once before issuing Source/value identity lookups.
+	const messageIds = [
+		...new Set(
+			input.rows.filter((row) => !row.isSource).map((row) => row.messageId),
+		),
+	];
+	const historyMessages = new Set(
+		(
+			await Promise.all(
+				messageIds.map(async (messageId) => {
+					const first = await ctx.db
+						.query("catalogWorkspaceDecisionRecords")
+						.withIndex("by_value_identity", (q) =>
+							q.eq("projectId", input.projectId).eq("messageId", messageId),
+						)
+						.first();
+					return first ? messageId : null;
+				}),
+			)
+		).filter((messageId): messageId is string => messageId !== null),
 	);
-	return recordsByMessageId.flat();
+	if (historyMessages.size === 0) return [];
+	const sourceByMessage = new Map(
+		input.rows.filter((row) => row.isSource).map((row) => [row.messageId, row]),
+	);
+	const visibleByIdentity = new Map(
+		input.visibleRows.map((row) => [valueIdentity(row), row]),
+	);
+	const effectiveSource = new Map(
+		input.visibleRows
+			.filter((row) => row.isSource)
+			.map((row) => [row.messageId, row]),
+	);
+	const records: Doc<"catalogWorkspaceDecisionRecords">[] = [];
+	for (const target of input.rows) {
+		if (target.isSource || !historyMessages.has(target.messageId)) continue;
+		const source = sourceByMessage.get(target.messageId);
+		const currentSource = effectiveSource.get(target.messageId);
+		const current = visibleByIdentity.get(valueIdentity(target));
+		if (!source || !currentSource || !current)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Navigation decision lookup lost its Source or target.",
+			});
+		const identity = {
+			projectId: input.projectId,
+			messageId: target.messageId,
+			localeId: target.localeId,
+		};
+		const fingerprints = new Set([
+			target.valueFingerprint ?? (await sha256Hex(target.value)),
+			current.valueFingerprint ?? (await sha256Hex(current.value)),
+		]);
+		const sources = new Set([
+			source.sourceFingerprint,
+			currentSource.sourceFingerprint,
+		]);
+		for (const valueFingerprint of fingerprints) {
+			for (const sourceFingerprint of sources) {
+				const record = await decisionForIdentity(
+					ctx,
+					{ ...identity, valueFingerprint, sourceFingerprint },
+					target.projectionId,
+				);
+				if (record) records.push(record);
+			}
+			const latest = await latestDecisionForValue(ctx, {
+				...identity,
+				valueFingerprint,
+			});
+			if (latest) records.push(latest);
+		}
+		const introducedAt = source.introducedAt;
+		if (
+			introducedAt !== undefined &&
+			source.introductionLocaleIds?.includes(target.localeId)
+		) {
+			for (const actor of ["user", "agent"] as const) {
+				const history = ctx.db
+					.query("catalogWorkspaceDecisionRecords")
+					.withIndex(
+						"by_project_and_messageId_and_localeId_and_actor_and_recordedAt",
+						(q) =>
+							q
+								.eq("projectId", input.projectId)
+								.eq("messageId", target.messageId)
+								.eq("localeId", target.localeId)
+								.eq("recordedBy.kind", actor)
+								.gte("recordedAt", introducedAt),
+					)
+					.order("desc");
+				let scanned = 0;
+				for await (const record of history) {
+					if (++scanned > 64)
+						throw new ConvexError({
+							code: "LIMIT_EXCEEDED",
+							message:
+								"Private First Review attempts exceed their lookup envelope.",
+						});
+					const [visible] = await visibleDecisionRecords(
+						ctx,
+						[record],
+						target.projectionId,
+					);
+					if (
+						visible &&
+						isHumanOrAuthorizedReview(
+							visible.recordedBy,
+							visible.reviewAuthorization,
+						)
+					) {
+						records.push(visible);
+						break;
+					}
+				}
+			}
+		}
+	}
+	return await visibleDecisionRecords(
+		ctx,
+		records,
+		input.rows[0]?.projectionId,
+	);
 }
 
 async function repeatedValueIdentitiesForRows(
@@ -992,6 +1129,7 @@ async function deriveDigestForMessage(
 		projectionId: Id<"catalogProjections">;
 		messageId: string;
 		rows?: Doc<"catalogProjectionMessages">[];
+		heads?: Doc<"catalogWorkspaceValueHeads">[];
 	},
 ): Promise<CatalogWorkspaceNavigationDigest | null> {
 	const rows =
@@ -1012,12 +1150,7 @@ async function deriveDigestForMessage(
 	}
 	if (rows.length === 0) return null;
 	const [heads, proposalHead] = await Promise.all([
-		ctx.db
-			.query("catalogWorkspaceValueHeads")
-			.withIndex("by_project_and_messageId_and_localeId", (q) =>
-				q.eq("projectId", input.projectId).eq("messageId", input.messageId),
-			)
-			.take(MAX_PROJECTED_LOCALES + 1),
+		input.heads ?? workspaceHeadsForRows(ctx, input.projectId, rows),
 		ctx.db
 			.query("catalogWorkspaceSourceProposalHeads")
 			.withIndex("by_project_and_messageId", (q) =>
@@ -1042,6 +1175,18 @@ async function deriveDigestForMessage(
 		decisionRecordsForNavigationRows(ctx, {
 			projectId: input.projectId,
 			rows,
+			visibleRows: currentWorkspaceRows(
+				currentSourceProposalRows(
+					rows,
+					proposalHead
+						? new Map([[proposalHead.messageId, proposalHead]])
+						: new Map(),
+					proposalHead && sourceProposalResolution
+						? new Map([[proposalHead.proposalId, sourceProposalResolution]])
+						: new Map(),
+				),
+				new Map(heads.map((head) => [valueIdentity(head), head])),
+			),
 		}),
 		repeatedValueIdentitiesForRows(ctx, input.projectionId, rows),
 	]);
@@ -1247,6 +1392,7 @@ export const stageNavigationIndexStep = internalMutation({
 		}
 		const envelope: NavigationEnvelope = { kind: "staging", staging };
 		const batch = await navigationKeyBatchForProjection(ctx, {
+			projectId: args.projectId,
 			projectionId: args.projectionId,
 			afterCatalogIndex: staging.lastCatalogIndex,
 			maxKeys: MAX_NAVIGATION_KEYS_PER_STAGE_STEP,
@@ -1258,6 +1404,7 @@ export const stageNavigationIndexStep = internalMutation({
 				projectionId: args.projectionId,
 				messageId,
 				rows,
+				heads: batch.heads.filter((head) => head.messageId === messageId),
 			});
 			if (!digest) {
 				throw new ConvexError({
@@ -1648,6 +1795,7 @@ export const backfillNavigationIndexStep = internalMutation({
 			if (state.status !== "ready" && state.status !== "verifying") {
 				const envelope: NavigationEnvelope = { kind: "active", state };
 				const batch = await navigationKeyBatchForProjection(ctx, {
+					projectId: args.projectId,
 					projectionId: projection._id,
 					afterCatalogIndex: state.backfillLastCatalogIndex ?? -1,
 					maxKeys: MAX_NAVIGATION_KEYS_PER_STAGE_STEP,
@@ -1659,6 +1807,7 @@ export const backfillNavigationIndexStep = internalMutation({
 						projectionId: projection._id,
 						messageId,
 						rows,
+						heads: batch.heads.filter((head) => head.messageId === messageId),
 					});
 					if (!digest) {
 						throw new ConvexError({
@@ -2304,6 +2453,19 @@ export const window = query({
 			});
 		}
 		// Point-read every requested key's rows; nothing scans the project.
+		// Whole storage envelopes are larger than one interactive read. Stop while
+		// enough transaction headroom remains for the last complete key and decisions.
+		const readLimit = 6 * 1024 * 1024;
+		let readBytes = 0;
+		const accountRead = (value: unknown) => {
+			readBytes += encodedSize(value);
+			if (readBytes > readLimit)
+				throw new ConvexError({
+					code: "WINDOW_TOO_LARGE",
+					message:
+						"This Catalog window contains large values. Request fewer keys.",
+				});
+		};
 		const requestedRows: Doc<"catalogProjectionMessages">[] = [];
 		for (const messageId of args.messageIds) {
 			const rows = await ctx.db
@@ -2324,6 +2486,7 @@ export const window = query({
 					message: `The window key ${messageId} is not an active Catalog key.`,
 				});
 			}
+			accountRead(rows);
 			requestedRows.push(...rows);
 		}
 		const rowsByValue = new Map(
@@ -2344,6 +2507,7 @@ export const window = query({
 							.eq("localeId", row.localeId),
 					)
 					.unique();
+				accountRead(head);
 				if (head) headsByValue.set(valueIdentity(row), head);
 			}
 			const proposalHead = await ctx.db
@@ -2352,6 +2516,7 @@ export const window = query({
 					q.eq("projectId", args.projectId).eq("messageId", messageId),
 				)
 				.unique();
+			accountRead(proposalHead);
 			if (proposalHead) proposalHeads.push(proposalHead);
 			const changes = await ctx.db
 				.query("catalogProjectionGitChanges")
@@ -2368,6 +2533,7 @@ export const window = query({
 					message: "A Catalog key has duplicate source Git changes.",
 				});
 			}
+			accountRead(changes);
 			gitChanges.push(...changes);
 		}
 		const headsForSourceProposals = await sourceProposalStatusesFor(
@@ -2403,6 +2569,7 @@ export const window = query({
 		const decisions = await decisionRecordsForNavigationRows(ctx, {
 			projectId: args.projectId,
 			rows: requestedRows,
+			visibleRows,
 		});
 		const visibleValueFingerprintsByValue = new Map(
 			await Promise.all(

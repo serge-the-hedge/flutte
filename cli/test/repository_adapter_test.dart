@@ -9,6 +9,51 @@ import 'package:test/test.dart';
 void main() {
   for (final deliverRelease in [false, true]) {
     test(
+      'refuses a complete new Locale over a changed source catalog in ${deliverRelease ? 'combined' : 'standalone'} delivery',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        if (deliverRelease) await fixture.addGermanCatalog();
+        final release = await existingLocaleRelease(fixture);
+        final artifact = deliverRelease
+            ? await combinedPortugueseArtifact(fixture, release)
+            : await portugueseArtifact(fixture);
+        await fixture
+            .file('packages/brickit_generated/lib/l10n/intl_en.arb')
+            .writeAsString('{"@@locale":"en","welcome":"A new meaning"}');
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'change source after proposal']);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        await expectLater(
+          deliverRelease
+              ? ReleaseRepositoryAdapter().deliver(
+                  ReleaseDeliveryRequest(
+                    checkout: fixture.root,
+                    recordId: release.releaseRecord.id,
+                    flutter: testFlutter(fixture.flutterExecutable),
+                    gateway: StaticReleaseGateway(release),
+                    write: (_) {},
+                    localeProposal: LocaleProposalDeliveryInput(
+                      proposalId: artifact.proposalId,
+                      gateway: StaticLocaleProposalGateway(artifact),
+                    ),
+                  ),
+                )
+              : RepositoryAdapter().deliver(requestFor(fixture, artifact)),
+          throwsA(
+            isA<RepositoryAdapterException>().having(
+              (error) => error.message,
+              'message',
+              contains('Source Catalog changed'),
+            ),
+          ),
+        );
+        expect(await fixture.git(['rev-parse', 'HEAD']), head);
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+      },
+    );
+
+    test(
       'refuses concurrent committed work during ${deliverRelease ? 'release' : 'Portuguese'} delivery',
       () async {
         final fixture = await BrickitFixture.create();
@@ -595,7 +640,7 @@ void main() {
         allOf(
           contains('Release Record: `release_123`'),
           contains('Locale Proposal: `proposal_pt_123`'),
-          contains('Portuguese catalog values added: 1'),
+          contains('pt catalog values added: 1'),
           contains('Source Snapshot: `snapshot_123`'),
         ),
       );
@@ -603,7 +648,7 @@ void main() {
         output.toString(),
         allOf(
           contains(
-            'Applied 1 reviewed key; added Portuguese with 1 catalog value; skipped 1.',
+            'Applied 1 reviewed key; added pt with 1 catalog value; skipped 1.',
           ),
           contains('git push'),
           contains('gh pr create'),
@@ -1351,7 +1396,7 @@ EOF
 
 class BrickitLocaleConstants {
   static const Locale enLocale = Locale('en', 'US');
-  static const List<Locale> supportedLocales = [enLocale];
+  static const List<Locale> supportedLocales = [makeLocale()];
   static List<String> supportedLanguageCodes = [enLocale.languageCode];
 }
 ''');

@@ -28,8 +28,9 @@ failure.
 
 Translation, discovery, and candidate-review requests do not require CLI version
 headers. The project CLI protocol floor applies to Repository Adapter endpoints
-and the legacy CLI reads `GET /locale-proposals/pt` and
-`GET /locale-proposals/pt/artifact`. Those clients send
+and delivery artifact reads `GET /locale-proposals/artifact`. The legacy reads
+`GET /locale-proposals/pt` and `GET /locale-proposals/pt/artifact` retain the same
+floor. Those clients send
 `X-Blabla-CLI-Protocol`; an incompatible or missing protocol returns `426` with
 `CLI_UPGRADE_REQUIRED`. Successful CLI responses advertise any configured minimum
 version and protocol in `X-Blabla-Minimum-CLI-Version` and
@@ -106,8 +107,8 @@ Repository Adapter delivers it through the dedicated release endpoints.
 
 ### New-Locale Translation Task
 
-An agent can prepare, but cannot activate or deliver, the first configured new
-Locale: Portuguese. The public agent workflow is the same Translation Task
+An agent can prepare any editor-configured new Locale. The public agent
+workflow is the same Translation Task
 interface used for existing Locales. Its private Locale Proposal adapter keeps
 the complete Source template and review evidence without copying the catalog
 into task documents. This workflow needs only `read` and `propose` scopes. It
@@ -124,13 +125,13 @@ changes the working catalog.
 	 pinned Source evidence; callers do not copy fingerprints or Convex ids.
 4. Review values from the task in
    `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
-   workbench as the lower-level Portuguese route. Agent values remain awaiting
+   workbench for every configured target. Agent values remain awaiting
    review; corrections append immutable candidate revisions while the newest
    revision becomes current. Only human-applied or explicitly authorized
    agent-reviewed values can finalize.
 
-The `/locale-proposals/pt` endpoints remain available as a lower-level
-compatibility interface for clients that need explicit fingerprints,
+The `/locale-proposals` endpoints provide a lower-level interface for clients
+that need explicit fingerprints,
 diagnostics, finalization, or artifact access.
 
 The proposal is pinned to the accepted Baseline Snapshot. If Git advances,
@@ -144,14 +145,16 @@ view, and its artifact stays immutable. A ready current-source artifact is
 review-ready evidence for the later local Repository Adapter, not proof that
 Brickit has accepted it.
 
-Discover Locale codes through `/projects/current` and message identifiers through
-`/workspace/search` or `/workspace/work`. Use a new-Locale Translation Task for
-the configured Portuguese introduction. Arbitrary new-Locale preparation is not
-implemented. Setup can bind catalogs already in Git, within the six-Locale
-working-catalog cap (including Source). The Portuguese proposal-to-Baseline
-transition also has known capacity and review-evidence gaps; see the
-[new-Locale readiness review](../reports/locale-adding-review-2026-09-07.md) before
-planning a rollout.
+Discover configured targets through `/projects/current` and message identifiers
+through `/workspace/search` or `/workspace/work`. Editors configure the code,
+label, catalog path, and Runtime Locale Mapping in **Settings → Languages**.
+Prepare and deliver one reviewed catalog at a time; see [Adding languages](adding-languages.md). A later accepted descendant
+Snapshot observes the exact delivered artifact; an editor then binds the observed
+file to realize the Locale in the Workspace with its original review evidence
+and Intentional Blank reasons. Observation alone never activates a Locale.
+The original message First Review scope stays frozen when a later Locale joins.
+Respect the advertised `maxBoundLocales` capacity, which includes Source; the
+configured-target list is a queue and does not reserve working-catalog capacity.
 
 ## Independent Reviewer Agent workflow
 
@@ -238,8 +241,24 @@ integration needs.
 ### `GET /projects/current`
 
 Returns project identity, source and active Locale codes, the current token's
-scopes, and supported retrieval capabilities and bounds. `newLocaleTargets`
-lists the configured Portuguese introduction when Portuguese is not active.
+scopes, and supported retrieval capabilities and bounds. `capabilities.newLocaleTargets`
+lists configured introduction codes that are not active. `localeIntroductionTargets`
+provides each target's `localeCode`, `label`, `catalogPath`, and explicit
+`runtimeLocale`, so agents can see regional and script intent before translating.
+`capabilities.maxBoundLocales` includes the Source Locale.
+
+An editor configures targets in **Settings → Languages**. Configuration is
+project setup; translation tokens cannot create or change it. The current Flutter
+adapter accepts language-only catalog codes such as `pt`, with an explicit
+Runtime Locale Mapping such as `pt-BR` or `sr-Latn-RS`. Script or regional catalog
+variants require a separate ARB identity migration and are rejected during setup.
+The configured runtime language must match the catalog language. Paths must
+name an ARB file beside the bound Source catalog, with letters, numbers,
+underscores or hyphens in its filename, and must not conflict with another
+configured target or Locale Binding. The shipped Repository Adapter targets the
+Brickit Flutter repository layout; it is not a generic Flutter source rewriter. Prepared proposals pin their
+configuration; later edits or removal affect future preparation and discovery,
+not an existing artifact's identity or review evidence.
 `context.codeContext` is `unavailable` until source-code context is implemented.
 `dictionary.canWrite` reports whether this credential has the explicit
 `dictionary-write` scope; `dictionary.batchWrites` advertises the batch interface.
@@ -352,8 +371,8 @@ General-guide examples retain the `source` and `target` field names, meaning
 into a particular Locale. Locale add-on examples remain bilingual.
 
 Limits: 50 Source texts, 20 canonical target Locale codes, and 512 KiB for Source
-texts or returned guidance. Portuguese guidance is available before its Locale
-Proposal is created. Guidance starts empty; missing entries are not instructions
+texts or returned guidance. Guidance for any configured introduction target is
+available before its Locale Proposal is created. Guidance starts empty; missing entries are not instructions
 to infer a project policy from popular wording.
 
 Editors maintain the general guide and optional Locale add-ons at
@@ -551,8 +570,9 @@ A new-Locale task covers every message in the pinned Source Snapshot:
 }
 ```
 
-The configured new Locale is Portuguese today. Requesting an unconfigured code
-fails before a Locale Proposal is created.
+Choose `localeCode` from `capabilities.newLocaleTargets`. Requesting an
+unconfigured code fails before a Locale Proposal is created. Italian, Japanese,
+and other configured targets use this same complete-catalog task workflow.
 
 The same task shape is created from the Strings UI when an editor selects keys
 and chooses **Start task**. A project-scoped propose token can fill a
@@ -676,8 +696,8 @@ Values are checked against the active Source Contract and exact basis. A stale
 submission returns `STALE_BASIS` without writing evidence. Corrections append a
 new immutable revision and name the current `expectedCandidateRevision`.
 
-For a new Locale, first create or resume the configured Locale Proposal (for
-the first slice, `POST /locale-proposals/pt`). Then create the same generic
+For a new Locale, first create or resume its configured Locale Proposal with
+`POST /locale-proposals` and `{ "localeCode": "pt" }`. Then create the same generic
 proposal with a Locale target:
 
 ```json
@@ -694,8 +714,8 @@ Its candidate basis carries the pinned `localeProposalId`, `snapshotId`, and
 source fingerprint instead of a mutable target Locale id. The candidate is
 reviewed in the same Proposals workbench; accepting it updates the staged
 Locale Proposal with the actual reviewer and authorization, while rejecting it leaves no active
-catalog change. The configured locale adapter is Portuguese today, but this
-candidate/review contract is intentionally independent of that code.
+catalog change. This candidate/review contract is shared by every configured
+introduction target.
 
 ### `GET /translation-proposals/:id`
 
@@ -721,28 +741,35 @@ and import/export job evidence remain stored; their old Convex writers have
 been removed. For pending historic work, read its values and submit a new task
 against the current Workspace basis for authorized review.
 
-### Portuguese Locale Proposal endpoints
+### Locale Proposal endpoints
 
-All Portuguese proposal endpoints require both `read` and `propose`.
+All proposal endpoints require both `read` and `propose`. Prefer Translation
+Tasks for normal agent work: they resolve the Source basis and preserve candidate
+review feedback. These lower-level endpoints expose the same prepared catalog.
 
-#### `POST /locale-proposals/pt`
+The historical `/locale-proposals/pt` routes remain compatibility aliases.
+Explicitly creating through that old route can establish the former default
+Portuguese configuration (`pt`, `pt-BR`, sibling `intl_pt.arb`) if none exists.
+Generic creation always requires an editor-configured target.
 
-Creates or resumes the proposal pinned to the current accepted Baseline
-Snapshot. It returns its id, progress, delivery status, and any current
-validation diagnostics. It does not create `pt` as an active project Locale.
+#### `POST /locale-proposals`
 
-#### `GET /locale-proposals/pt?proposalId=...`
+Body: `{ "localeCode": "it" }`. Creates or resumes that Locale's proposal pinned
+to the current accepted Baseline Snapshot. It returns its id, progress, delivery status, and any current
+validation diagnostics. It does not create an active Locale or bind a file.
+
+#### `GET /locale-proposals?proposalId=...`
 
 Returns the durable proposal review summary, including bounded diagnostics from
 the last failed finalization attempt.
 
-#### `GET /locale-proposals/pt/template?proposalId=...&cursor=0&limit=16`
+#### `GET /locale-proposals/template?proposalId=...&cursor=0&limit=16`
 
 Returns up to 16 ordered source messages from immutable snapshot evidence. Each
 message includes its id, source value, source fingerprint, opaque metadata JSON
 when present, and whether a value has already been staged.
 
-#### `POST /locale-proposals/pt/values`
+#### `POST /locale-proposals/values`
 
 Body:
 
@@ -764,13 +791,13 @@ outdated source fingerprints, invalid ICU, and incompatible placeholders are
 rejected. For an Intentional Blank, send `"value": ""` plus a concise
 `intentionalBlankReason`.
 
-#### `GET /locale-proposals/pt/values?proposalId=...&cursor=0&limit=16`
+#### `GET /locale-proposals/values?proposalId=...&cursor=0&limit=16`
 
 Returns the submitted values for one bounded source-template page, including
 their source fingerprints and any Intentional Blank reasons. Use it to resume
 or review a draft without rebuilding an ARB document client-side.
 
-#### `POST /locale-proposals/pt/finalize`
+#### `POST /locale-proposals/finalize`
 
 Body:
 
@@ -778,18 +805,21 @@ Body:
 { "proposalId": "k..." }
 ```
 
-Derives `intl_pt.arb` from the pinned Source Snapshot and all staged values. A
+Derives the configured catalog from the pinned Source Snapshot and all staged values. A
 complete successful result becomes `ready` only after every agent-authored
 value has been reviewed by a human or authorized independent reviewer. A failed result exposes an actionable
 diagnostic sample and persists it on the proposal.
 
-#### `GET /locale-proposals/pt/artifact?proposalId=...`
+#### `GET /locale-proposals/artifact?proposalId=...`
 
-Returns the immutable, hash-checked Portuguese delivery artifact. The artifact
-contains the complete derived `intl_pt.arb`, source repository/commit/manifest
-provenance, the project's integration branch, and the fixed `pt-BR` Runtime
-Locale Mapping. The local Repository Adapter requires the checkout to be on
-that branch and uses it as the pull-request base.
+Returns the immutable, hash-checked delivery artifact. Version 1 contains the
+complete derived catalog, source repository/commit/manifest provenance, the
+project's integration branch, and the pinned `locale.code`, `locale.label`, and
+`locale.runtimeLocale`. `catalog.catalogPath` is the exact repository-relative
+delivery path; `catalog.fileName` remains its basename. Historical Portuguese
+artifacts without `catalogPath` retain their original sibling-file convention.
+The local Repository Adapter requires the checkout to be on that branch and
+uses it as the pull-request base.
 
 ## Existing-locale delivery
 

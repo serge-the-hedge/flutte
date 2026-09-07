@@ -193,7 +193,7 @@ async function ingestAcceptedSourceSnapshot(
 		sourceLocale !== undefined,
 		"The proof project has no source Locale.",
 	);
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: sourceLocale._id,
 		catalogPath: sourceCatalogPath,
 	});

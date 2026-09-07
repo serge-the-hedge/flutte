@@ -30,7 +30,7 @@ describe("locale binding", () => {
 
 	test("binds a Locale to a catalog file and reads it back", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 
 		const locales = await user.query(api.locales.list, { projectId });
 		expect(locales.find((locale) => locale.code === "de")?.catalogPath).toBe(
@@ -40,8 +40,8 @@ describe("locale binding", () => {
 
 	test("a binding can be changed later", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, {
 			localeId,
 			catalogPath: "lib/l10n/intl_de.arb",
 		});
@@ -68,10 +68,10 @@ describe("locale binding", () => {
 			code: "fr",
 			label: "French",
 		});
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 
 		await expect(
-			user.mutation(api.locales.bind, {
+			user.action(api.locales.bind, {
 				localeId: other,
 				catalogPath: CATALOG,
 			}),
@@ -80,15 +80,15 @@ describe("locale binding", () => {
 
 	test("rebinding a Locale to the path it already has is not a conflict", async () => {
 		const { user, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 		await expect(
-			user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG }),
+			user.action(api.locales.bind, { localeId, catalogPath: CATALOG }),
 		).resolves.not.toThrow();
 	});
 
 	test("corrects a setup Locale code without losing its binding", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 
 		const correctedId = await user.mutation(api.locales.correctSetupBinding, {
 			localeId,
@@ -108,7 +108,7 @@ describe("locale binding", () => {
 
 	test("removes an empty duplicate while preserving the bound Locale history", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 		await t.run(async (ctx) => {
 			const timestamp = Date.now();
 			const keyId = await ctx.db.insert("translationKeys", {
@@ -170,7 +170,7 @@ describe("locale binding", () => {
 
 	test("refuses to correct a Locale code after snapshot evidence exists", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 		await t.run(async (ctx) => {
 			await ctx.db.insert("sourceSnapshots", {
 				projectId,
@@ -195,7 +195,7 @@ describe("locale binding", () => {
 
 	test("the same path is free in a different project", async () => {
 		const { user, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 
 		const second = await createProject(user, {
 			name: "Second",
@@ -207,7 +207,7 @@ describe("locale binding", () => {
 			label: "German",
 		});
 		await expect(
-			user.mutation(api.locales.bind, {
+			user.action(api.locales.bind, {
 				localeId: secondLocale,
 				catalogPath: CATALOG,
 			}),
@@ -219,13 +219,13 @@ describe("locale binding", () => {
 		// establishes that the mutation applies them.
 		const { user, localeId } = await projectWithLocale();
 		await expect(
-			user.mutation(api.locales.bind, { localeId, catalogPath: "/etc/passwd" }),
+			user.action(api.locales.bind, { localeId, catalogPath: "/etc/passwd" }),
 		).rejects.toThrow("Catalog path");
 	});
 
 	test("stores the tidied path, not the one that was typed", async () => {
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId,
 			catalogPath: "./lib/./l10n/intl_de.arb",
 		});
@@ -244,7 +244,7 @@ describe("locale binding", () => {
 		// one file. Because the claim survives archiving, that cannot arise,
 		// which is why it needs no separate test.
 		const { user, projectId, localeId } = await projectWithLocale();
-		await user.mutation(api.locales.bind, { localeId, catalogPath: CATALOG });
+		await user.action(api.locales.bind, { localeId, catalogPath: CATALOG });
 		await user.mutation(api.locales.archive, { localeId });
 
 		const french = await user.mutation(api.locales.create, {
@@ -253,7 +253,7 @@ describe("locale binding", () => {
 			label: "French",
 		});
 		await expect(
-			user.mutation(api.locales.bind, {
+			user.action(api.locales.bind, {
 				localeId: french,
 				catalogPath: CATALOG,
 			}),
@@ -264,7 +264,7 @@ describe("locale binding", () => {
 		const { localeId } = await projectWithLocale();
 		const outsider = await authenticatedBackend(t, "outsider");
 		await expect(
-			outsider.mutation(api.locales.bind, { localeId, catalogPath: CATALOG }),
+			outsider.action(api.locales.bind, { localeId, catalogPath: CATALOG }),
 		).rejects.toThrow();
 	});
 });

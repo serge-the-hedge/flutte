@@ -13,6 +13,7 @@ import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { AlertTriangle, GitCommitHorizontal, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { LocaleSelector } from "@/components/localization/locale-selector";
 import {
 	PageHeader,
 	ProjectShell,
@@ -46,10 +47,17 @@ function ReleaseRoute() {
 		api.releaseBundles.forRecord,
 		record?.status === "ready" ? { recordId: record.recordId } : "skip",
 	);
-	const readyLocaleProposal = useQuery(
+	const introductions = useQuery(api.localeIntroductionTargets.list, {
+		projectId: convexId<"projects">(projectId),
+	});
+	const [deliveryLocale, setDeliveryLocale] = useState<string | null>(null);
+	const queriedLocaleProposal = useQuery(
 		api.releaseBundles.readyLocaleProposalForRecord,
-		record?.status === "ready" ? { recordId: record.recordId } : "skip",
+		record?.status === "ready" && deliveryLocale
+			? { recordId: record.recordId, localeCode: deliveryLocale }
+			: "skip",
 	);
+	const readyLocaleProposal = deliveryLocale ? queriedLocaleProposal : null;
 	const history = useQuery(
 		api.releaseRecords.history,
 		release?.kind === "available" && record
@@ -100,6 +108,30 @@ function ReleaseRoute() {
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Release" />
+			{record?.status === "ready" &&
+			introductions &&
+			introductions.length > 0 ? (
+				<div className="flex flex-col gap-2">
+					<p className="text-muted-foreground text-sm">
+						Optionally include one reviewed new language in this delivery.
+					</p>
+					<LocaleSelector
+						locales={introductions.map((target) => ({
+							code: target.localeCode,
+							label: target.label,
+						}))}
+						value={deliveryLocale}
+						onChange={setDeliveryLocale}
+						placeholder="Choose a new language to deliver"
+					/>
+					{deliveryLocale && readyLocaleProposal === null ? (
+						<p className="text-muted-foreground text-sm">
+							This language has no ready proposal on the release’s Baseline.
+							Finish its translation task first.
+						</p>
+					) : null}
+				</div>
+			) : null}
 			{release === undefined ? (
 				<div className="flex max-w-3xl flex-col gap-3">
 					<Skeleton className="h-20 w-full" />

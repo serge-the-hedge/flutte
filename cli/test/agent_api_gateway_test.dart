@@ -9,11 +9,11 @@ import 'package:test/test.dart';
 
 void main() {
   test(
-    'reads the current Portuguese proposal and its artifact with a bearer token',
+    'reads the current configured Locale proposal and its artifact with a bearer token',
     () async {
-      const proposalId = 'proposal_pt_123';
+      const proposalId = 'proposal_it_123';
       const token = 'agent-token';
-      const catalog = '{"@@locale":"pt","welcome":"Olá"}';
+      const catalog = '{"@@locale":"it","welcome":"Olá"}';
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(server.close);
       final seenPaths = <String>[];
@@ -33,7 +33,7 @@ void main() {
         request.response.headers.contentType = ContentType.json;
         request.response.headers.set('X-Blabla-Minimum-CLI-Version', '0.2.0');
         switch (request.uri.path) {
-          case '/api/agent/v1/locale-proposals/pt':
+          case '/api/agent/v1/locale-proposals':
             request.response.write(
               jsonEncode({
                 'proposalId': proposalId,
@@ -42,7 +42,7 @@ void main() {
                 'deliveryStatus': 'ready',
               }),
             );
-          case '/api/agent/v1/locale-proposals/pt/artifact':
+          case '/api/agent/v1/locale-proposals/artifact':
             request.response.write(
               jsonEncode({
                 'version': 1,
@@ -57,12 +57,14 @@ void main() {
                       'packages/brickit_generated/lib/l10n/intl_en.arb',
                 },
                 'locale': {
-                  'code': 'pt',
-                  'label': 'Portuguese',
-                  'runtimeLocale': 'pt-BR',
+                  'code': 'it',
+                  'label': 'Italian',
+                  'runtimeLocale': 'it-IT',
                 },
                 'catalog': {
-                  'fileName': 'intl_pt.arb',
+                  'fileName': 'intl_it.arb',
+                  'catalogPath':
+                      'packages/brickit_generated/lib/l10n/intl_it.arb',
                   'content': catalog,
                   'contentHash': sha256
                       .convert(utf8.encode(catalog))
@@ -86,12 +88,16 @@ void main() {
       expect(summary.status, 'ready');
       expect(summary.deliveryStatus, 'ready');
       expect(artifact.catalog.content, catalog);
+      expect(
+        artifact.catalog.catalogPath,
+        'packages/brickit_generated/lib/l10n/intl_it.arb',
+      );
       expect(artifact.sourceSnapshot.integrationBranch, 'develop');
       expect(
         seenPaths,
         equals([
-          '/api/agent/v1/locale-proposals/pt',
-          '/api/agent/v1/locale-proposals/pt/artifact',
+          '/api/agent/v1/locale-proposals',
+          '/api/agent/v1/locale-proposals/artifact',
         ]),
       );
       expect(warnings, hasLength(1));
@@ -100,7 +106,7 @@ void main() {
   );
 
   test('refuses a server-required incompatible protocol', () async {
-    const proposalId = 'proposal_pt_123';
+    const proposalId = 'proposal_it_123';
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(server.close);
     server.listen((request) async {
@@ -155,7 +161,7 @@ void main() {
     );
 
     await expectLater(
-      gateway.readProposal('proposal_pt_123'),
+      gateway.readProposal('proposal_it_123'),
       throwsA(
         isA<RepositoryAdapterException>().having(
           (error) => error.message,

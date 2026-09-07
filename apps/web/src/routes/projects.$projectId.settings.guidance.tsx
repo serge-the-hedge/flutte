@@ -19,6 +19,9 @@ function GuidanceRoute() {
 	const id = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: id });
 	const locales = useQuery(api.locales.list, { projectId: id });
+	const introductions = useQuery(api.localeIntroductionTargets.list, {
+		projectId: id,
+	});
 	const guidance = useQuery(api.translationGuidance.list, { projectId: id });
 	const saveTerm = useMutation(api.translationGuidance.saveTerm);
 	const removeTerm = useMutation(api.translationGuidance.removeTerm);
@@ -26,22 +29,21 @@ function GuidanceRoute() {
 	const saveProjectVoiceGuide = useMutation(
 		api.translationGuidance.saveProjectVoiceGuide,
 	);
-	const sourceLocaleCode = locales?.find(
-		(locale) => locale._id === project?.sourceLocaleId,
-	)?.code;
 	const targets = (locales ?? [])
 		.filter((locale) => locale._id !== project?.sourceLocaleId)
 		.map((locale) => ({
 			code: locale.code,
 			label: locale.label,
-			active: locale.archivedAt === undefined || locale.code === "pt",
+			active: locale.archivedAt === undefined,
 		}));
-	if (
-		sourceLocaleCode !== undefined &&
-		sourceLocaleCode !== "pt" &&
-		!targets.some((locale) => locale.code === "pt")
-	) {
-		targets.push({ code: "pt", label: "Portuguese", active: true });
+	for (const target of introductions ?? []) {
+		if (!targets.some((locale) => locale.code === target.localeCode)) {
+			targets.push({
+				code: target.localeCode,
+				label: target.label,
+				active: true,
+			});
+		}
 	}
 	for (const code of [
 		...(guidance?.guides.map((guide) => guide.localeCode) ?? []),
@@ -60,7 +62,7 @@ function GuidanceRoute() {
 				title="Translation guidance"
 				description="The project’s terminology and voice, shared by translators and independent reviewers."
 			/>
-			{project && guidance && locales ? (
+			{project && guidance && locales && introductions ? (
 				<TranslationGuidanceEditor
 					key={projectId}
 					guidance={guidance}

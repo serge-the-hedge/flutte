@@ -9,29 +9,20 @@ import {
 } from "./agentReviewModel";
 import {
 	activeProjectionFor,
-	activeWorkingCatalog,
 	MAX_WORKING_CATALOG_ROWS,
 } from "./catalogProjection";
+import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { recomputeNavigationRows } from "./catalogWorkspaceNavigation";
 import {
 	decisionIdentity,
-	decisionRecordMap,
 	encodedSize,
 	isCurrentHeadForRow,
-	valueIdentity,
 } from "./catalogWorkspaceView";
 import {
 	assertSourceProposalValueContract,
 	assertTargetValueContract,
 } from "./contractTransforms";
 import { type Actor, now, sha256Hex } from "./lib";
-import {
-	MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION,
-	ORDINARY_IMPORT_CONFIRMATION_POLICY,
-	type OrdinaryImportConfirmationCandidate,
-	ordinaryImportConfirmationCandidateIdentity,
-	ordinaryImportConfirmationPlan,
-} from "./ordinaryImportConfirmations";
 import { requireEditor } from "./permissions";
 import {
 	isCurrentSourceProposalHeadForSource,
@@ -39,21 +30,15 @@ import {
 	publishedResolutionFor,
 	saveSourceProposal,
 	sourceProposalHeadFor,
-	sourceProposalHeadsFor,
-	sourceProposalStatusesFor,
 } from "./sourceProposals";
 
-/** The Baseline Catalog already reserves 8 MiB of the one-query envelope.
- * Translator-authored heads are capped separately so composing them still has
- * comfortable Convex read and return headroom. */
+/** Storage envelopes are independent of transaction reads: all current-value
+ * and decision lookups use bounded indexes, including ordinary import runs. */
 export const MAX_CATALOG_WORKSPACE_VALUE_HEADS = MAX_WORKING_CATALOG_ROWS;
-export const MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES = 2 * 1024 * 1024;
+export const MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES = 12 * 1024 * 1024;
 export const MAX_CATALOG_WORKSPACE_VALUE_BYTES = 256 * 1024;
-export const MAX_CATALOG_WORKSPACE_DECISION_RECORDS = MAX_WORKING_CATALOG_ROWS;
-// Brickit's conservative first-baseline confirmation set is about 2.1 MiB of
-// immutable evidence. Four MiB keeps that complete while the 8 MiB projection
-// and all Workspace overlays remain below Convex's transaction envelope.
-export const MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES = 4 * 1024 * 1024;
+export const MAX_CATALOG_WORKSPACE_DECISION_RECORDS = 100_000;
+export const MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES = 32 * 1024 * 1024;
 export const MAX_INTENTIONAL_BLANK_REASON_BYTES = 4 * 1024;
 const MAX_RECONCILED_VALUE_HEADS_PER_MUTATION = 8;
 
@@ -63,7 +48,6 @@ const commitIntentValidator = v.union(
 	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 );
 
-type CatalogWorkspaceDecisionRecord = Doc<"catalogWorkspaceDecisionRecords">;
 type CatalogWorkspaceValueHeadInput = {
 	messageId: string;
 	localeId: Id<"locales">;
@@ -79,6 +63,8 @@ type CatalogWorkspaceValueHeadInput = {
 	updatedAt: number;
 };
 type CatalogWorkspaceDecisionBasis = {
+	deliveryProjectionId?: Id<"catalogProjections">;
+	localeProposalId?: Id<"localeProposals">;
 	messageId: string;
 	localeId: Id<"locales">;
 	sourceFingerprint: string;
@@ -115,11 +101,17 @@ function valueHeadByteLength(head: CatalogWorkspaceValueHeadInput): number {
 	});
 }
 
-function decisionRecordByteLength(
+export function decisionRecordByteLength(
 	head: CatalogWorkspaceDecisionRecordInput,
 ): number {
 	return encodedSize({
 		kind: head.kind,
+		...(head.deliveryProjectionId
+			? { deliveryProjectionId: head.deliveryProjectionId }
+			: {}),
+		...(head.localeProposalId
+			? { localeProposalId: head.localeProposalId }
+			: {}),
 		messageId: head.messageId,
 		localeId: head.localeId,
 		sourceFingerprint: head.sourceFingerprint,
@@ -143,23 +135,6 @@ async function workspaceStateFor(
 		.unique();
 }
 
-async function workspaceHeadsFor(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-): Promise<Doc<"catalogWorkspaceValueHeads">[]> {
-	const heads = await ctx.db
-		.query("catalogWorkspaceValueHeads")
-		.withIndex("by_project", (q) => q.eq("projectId", projectId))
-		.take(MAX_CATALOG_WORKSPACE_VALUE_HEADS + 1);
-	if (heads.length > MAX_CATALOG_WORKSPACE_VALUE_HEADS) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Catalog Workspace exceeds its supported value-head envelope.",
-		});
-	}
-	return heads;
-}
-
 export async function decisionStateFor(
 	ctx: QueryCtx | MutationCtx,
 	projectId: Id<"projects">,
@@ -168,82 +143,6 @@ export async function decisionStateFor(
 		.query("catalogWorkspaceDecisionStates")
 		.withIndex("by_project", (q) => q.eq("projectId", projectId))
 		.unique();
-}
-
-async function decisionRecordsFor(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-): Promise<CatalogWorkspaceDecisionRecord[]> {
-	const records = await ctx.db
-		.query("catalogWorkspaceDecisionRecords")
-		.withIndex("by_project", (q) => q.eq("projectId", projectId))
-		.take(MAX_CATALOG_WORKSPACE_DECISION_RECORDS + 1);
-	if (records.length > MAX_CATALOG_WORKSPACE_DECISION_RECORDS) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"Catalog Workspace exceeds its supported decision-record envelope.",
-		});
-	}
-	return records;
-}
-
-function assertWorkspaceEnvelope(
-	state: Doc<"catalogWorkspaceStates"> | null,
-	heads: readonly Doc<"catalogWorkspaceValueHeads">[],
-): void {
-	const byteLength = heads.reduce(
-		(total, head) => total + valueHeadByteLength(head),
-		0,
-	);
-	if (
-		byteLength > MAX_CATALOG_WORKSPACE_VALUE_HEAD_BYTES ||
-		heads.length > MAX_CATALOG_WORKSPACE_VALUE_HEADS ||
-		(state === null && heads.length > 0) ||
-		(state !== null &&
-			(!Number.isInteger(state.valueHeadCount) ||
-				!Number.isInteger(state.valueHeadByteLength) ||
-				!Number.isSafeInteger(state.reconciliationGeneration) ||
-				state.valueHeadCount < 0 ||
-				state.valueHeadByteLength < 0 ||
-				state.reconciliationGeneration < 0 ||
-				state.valueHeadCount !== heads.length ||
-				state.valueHeadByteLength !== byteLength))
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"Catalog Workspace does not match its declared value-head envelope.",
-		});
-	}
-}
-
-function assertDecisionEnvelope(
-	state: Doc<"catalogWorkspaceDecisionStates"> | null,
-	records: readonly CatalogWorkspaceDecisionRecord[],
-): void {
-	const byteLength = records.reduce(
-		(total, record) => total + decisionRecordByteLength(record),
-		0,
-	);
-	if (
-		byteLength > MAX_CATALOG_WORKSPACE_DECISION_RECORD_BYTES ||
-		records.length > MAX_CATALOG_WORKSPACE_DECISION_RECORDS ||
-		(state === null && records.length > 0) ||
-		(state !== null &&
-			(!Number.isInteger(state.decisionRecordCount) ||
-				!Number.isInteger(state.decisionRecordByteLength) ||
-				state.decisionRecordCount < 0 ||
-				state.decisionRecordByteLength < 0 ||
-				state.decisionRecordCount !== records.length ||
-				state.decisionRecordByteLength !== byteLength))
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"Catalog Workspace does not match its declared decision-record envelope.",
-		});
-	}
 }
 
 function assertIntentionalBlankReason(reason: string): string {
@@ -290,19 +189,12 @@ export async function recordDecisions(
 		identities.add(identity);
 	}
 	const previous = await Promise.all(
-		input.next.map(
-			async (next) =>
-				await ctx.db
-					.query("catalogWorkspaceDecisionRecords")
-					.withIndex("by_value_identity", (q) =>
-						q
-							.eq("projectId", input.projectId)
-							.eq("messageId", next.messageId)
-							.eq("localeId", next.localeId)
-							.eq("sourceFingerprint", next.sourceFingerprint)
-							.eq("valueFingerprint", next.valueFingerprint),
-					)
-					.unique(),
+		input.next.map((next) =>
+			decisionForIdentity(
+				ctx,
+				{ projectId: input.projectId, ...next },
+				next.deliveryProjectionId,
+			),
 		),
 	);
 	if (!input.state && previous.some((record) => record !== null)) {
@@ -547,230 +439,6 @@ export const reconcileValueHeads = internalMutation({
 			);
 		}
 		return null;
-	},
-});
-
-async function readOrdinaryImportConfirmationPlan(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-) {
-	const active = await activeWorkingCatalog(ctx, projectId);
-	if (!active) return null;
-	const snapshotId = active.projection.snapshotId;
-	if (!snapshotId) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"Ordinary import confirmation requires a published Baseline Snapshot.",
-		});
-	}
-	const [state, heads, decisionState, decisions, sourceProposalHeads] =
-		await Promise.all([
-			workspaceStateFor(ctx, projectId),
-			workspaceHeadsFor(ctx, projectId),
-			decisionStateFor(ctx, projectId),
-			decisionRecordsFor(ctx, projectId),
-			sourceProposalHeadsFor(ctx, projectId),
-		]);
-	assertWorkspaceEnvelope(state, heads);
-	assertDecisionEnvelope(decisionState, decisions);
-	const sourceProposalResolutions = await sourceProposalStatusesFor(
-		ctx,
-		sourceProposalHeads,
-	);
-	const sourceByMessageId = new Map(
-		active.rows
-			.filter((row) => row.isSource)
-			.map((row) => [row.messageId, row] as const),
-	);
-	const pendingSourceMessageIds = new Set(
-		sourceProposalHeads.flatMap((head) => {
-			const source = sourceByMessageId.get(head.messageId);
-			return source &&
-				isCurrentSourceProposalHeadForSource(source, head) &&
-				!sourceProposalResolutions.has(head.proposalId)
-				? [head.messageId]
-				: [];
-		}),
-	);
-	const rows = await Promise.all(
-		active.rows.map(async (row) => ({
-			...row,
-			valueFingerprint: row.valueFingerprint ?? (await sha256Hex(row.value)),
-		})),
-	);
-	return {
-		projection: active.projection,
-		snapshotId,
-		rows,
-		state,
-		decisionState,
-		decisions,
-		plan: ordinaryImportConfirmationPlan({
-			rows,
-			heads,
-			decisions,
-			pendingSourceMessageIds,
-		}),
-	};
-}
-
-async function applyOrdinaryImportConfirmationBatch(
-	ctx: MutationCtx,
-	input: {
-		projectId: Id<"projects">;
-		expectedProjectionId: Id<"catalogProjections">;
-		candidates?: readonly OrdinaryImportConfirmationCandidate[];
-		nextLimit?: number;
-		actor: Actor;
-	},
-): Promise<{ confirmed: number; alreadyConfirmed: number; remaining: number }> {
-	if ((input.candidates === undefined) === (input.nextLimit === undefined)) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "An ordinary confirmation batch needs one selection mode.",
-		});
-	}
-	const requestedCount = input.candidates?.length ?? input.nextLimit ?? 0;
-	if (
-		!Number.isSafeInteger(requestedCount) ||
-		requestedCount < 0 ||
-		requestedCount > MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION
-	) {
-		throw new ConvexError({
-			code: "LIMIT_EXCEEDED",
-			message: `Confirm at most ${MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION} ordinary imports per batch.`,
-		});
-	}
-	const result = await readOrdinaryImportConfirmationPlan(ctx, input.projectId);
-	if (!result || result.projection._id !== input.expectedProjectionId) {
-		throw new ConvexError({
-			code: "CONFLICT",
-			message:
-				"The Baseline Catalog changed after this confirmation preview was prepared.",
-		});
-	}
-	const candidates =
-		input.candidates ?? result.plan.candidates.slice(0, input.nextLimit);
-	const eligibleByIdentity = new Map(
-		result.plan.candidates.map((candidate) => [
-			ordinaryImportConfirmationCandidateIdentity(candidate),
-			candidate,
-		]),
-	);
-	const decisionsByIdentity = decisionRecordMap(result.decisions);
-	const requestedIdentities = new Set<string>();
-	const additions: OrdinaryImportConfirmationCandidate[] = [];
-	let alreadyConfirmed = 0;
-	for (const candidate of candidates) {
-		const identity = ordinaryImportConfirmationCandidateIdentity(candidate);
-		if (requestedIdentities.has(identity)) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "A confirmation batch contains a duplicate Locale value.",
-			});
-		}
-		requestedIdentities.add(identity);
-		if (eligibleByIdentity.has(identity)) {
-			additions.push(candidate);
-			continue;
-		}
-		if (decisionsByIdentity.get(identity)?.kind === "translatorConfirmation") {
-			alreadyConfirmed++;
-			continue;
-		}
-		throw new ConvexError({
-			code: "CONFLICT",
-			message:
-				"An ordinary import no longer matches the reviewed confirmation policy.",
-		});
-	}
-
-	const rowByValue = new Map(
-		result.rows.map((row) => [valueIdentity(row), row] as const),
-	);
-	const sourceByMessageId = new Map(
-		result.rows
-			.filter((row) => row.isSource)
-			.map((row) => [row.messageId, row] as const),
-	);
-	for (const candidate of additions) {
-		const target = rowByValue.get(valueIdentity(candidate));
-		const source = sourceByMessageId.get(candidate.messageId);
-		if (!target || target.isSource || !source?.isSource) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message:
-					"An ordinary import candidate is missing from the active Baseline Catalog.",
-			});
-		}
-		assertTargetValueContract({
-			messageId: candidate.messageId,
-			localeCode: target.localeCode,
-			value: target.value,
-			source,
-		});
-	}
-
-	if (additions.length > 0) {
-		await ensureWorkspaceState(ctx, input.projectId, result.state);
-		const recordedAt = now();
-		await recordDecisions(ctx, {
-			projectId: input.projectId,
-			state: result.decisionState,
-			next: additions.map((candidate) => ({
-				...candidate,
-				kind: "translatorConfirmation" as const,
-				recordedBy: input.actor,
-				recordedAt,
-			})),
-		});
-		// The confirmed keys leave the ordinary-import summary at once.
-		await recomputeNavigationRows(ctx, {
-			projectId: input.projectId,
-			messageIds: [
-				...new Set(additions.map((candidate) => candidate.messageId)),
-			],
-		});
-	}
-	return {
-		confirmed: additions.length,
-		alreadyConfirmed,
-		remaining: result.plan.counts.eligible - additions.length,
-	};
-}
-
-/** Admin automation for an explicitly approved Baseline bootstrap. It records
- * a truthful system actor and never expands beyond the same ordinary-v1 policy
- * available to human editors. */
-export const confirmNextOrdinaryImports = internalMutation({
-	args: {
-		projectId: v.id("projects"),
-		expectedProjectionId: v.id("catalogProjections"),
-		limit: v.number(),
-	},
-	returns: v.object({
-		confirmed: v.number(),
-		alreadyConfirmed: v.number(),
-		remaining: v.number(),
-	}),
-	handler: async (ctx, args) => {
-		if (
-			!Number.isSafeInteger(args.limit) ||
-			args.limit < 1 ||
-			args.limit > MAX_ORDINARY_CONFIRMATIONS_PER_MUTATION
-		) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "The ordinary import confirmation batch size is invalid.",
-			});
-		}
-		return await applyOrdinaryImportConfirmationBatch(ctx, {
-			projectId: args.projectId,
-			expectedProjectionId: args.expectedProjectionId,
-			nextLimit: args.limit,
-			actor: { kind: "system", id: ORDINARY_IMPORT_CONFIRMATION_POLICY },
-		});
 	},
 });
 

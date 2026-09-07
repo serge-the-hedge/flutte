@@ -166,6 +166,20 @@ The repository-observation loop closes when a later ordinary ingest accepts the
 merged commit as a Baseline descendant. A complete organizational release gate
 would additionally require application CI to consume Blabla readiness evidence.
 
+## New Locale delivery
+
+A finalized Locale Proposal becomes delivery evidence. An accepted descendant
+Snapshot records an exact artifact-path/content observation only when the pinned
+Source Contract still matches. Reviewed authorship, review authorization, and
+Intentional Blank reasons transfer with publication; failed private staging
+never supplies visible confirmations.
+
+An editor can bind a matching Unbound Locale File from the current Baseline.
+Binding Realization stages and atomically publishes the refreshed projection
+and binding, without changing Snapshot Identity. A binding made before delivery
+is handled during ordinary ingestion. Existing messages retain their original
+First Review scope. See [Adding a language](adding-languages.md).
+
 ## Compatibility note
 
 Introduction provenance is recorded exactly beginning with the first Baseline

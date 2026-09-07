@@ -1,6 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
-
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -19,6 +18,7 @@ import {
 import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
 import { currentHeadForRow, valueIdentity } from "./catalogWorkspaceView";
 import { DEFAULT_INTEGRATION_BRANCH, now, sha256Hex } from "./lib";
+import { snapshotCatalogFiles } from "./localeDelivery";
 import {
 	repositoryAdapterActorValidator,
 	requireEditor,
@@ -59,8 +59,8 @@ const buildSummaryValidator = v.object({
 const readyLocaleProposalValidator = v.union(
 	v.object({
 		proposalId: v.id("localeProposals"),
-		localeCode: v.literal("pt"),
-		runtimeLocale: v.literal("pt-BR"),
+		localeCode: v.string(),
+		runtimeLocale: v.string(),
 		valueCount: v.number(),
 	}),
 	v.null(),
@@ -167,7 +167,10 @@ export const forRecord = query({
  * Release Record by the Repository Adapter. Compatibility is snapshot-bound;
  * the web adapter should never infer it from whichever proposal is newest. */
 export const readyLocaleProposalForRecord = query({
-	args: { recordId: v.id("releaseRecords") },
+	args: {
+		recordId: v.id("releaseRecords"),
+		localeCode: v.optional(v.string()),
+	},
 	returns: readyLocaleProposalValidator,
 	handler: async (ctx, args) => {
 		const record = await ctx.db.get(args.recordId);
@@ -180,7 +183,7 @@ export const readyLocaleProposalForRecord = query({
 				q
 					.eq("projectId", record.projectId)
 					.eq("sourceSnapshotId", record.snapshotId)
-					.eq("localeCode", "pt"),
+					.eq("localeCode", args.localeCode ?? "pt"),
 			)
 			.unique();
 		if (proposal?.status !== "ready") return null;
@@ -218,10 +221,7 @@ export const bundleContext = internalQuery({
 			});
 		}
 		await assertCurrentReadyRecord(ctx, record);
-		const files = await ctx.db
-			.query("sourceSnapshotFiles")
-			.withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshot._id))
-			.take(MAX_RELEASE_BUNDLE_FILES + 1);
+		const files = await snapshotCatalogFiles(ctx, snapshot._id);
 		if (
 			files.length === 0 ||
 			files.length > MAX_RELEASE_BUNDLE_FILES ||

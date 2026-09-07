@@ -55,7 +55,7 @@ describe("Catalog Workspace Window read", () => {
 		const locales = await user.query(api.locales.list, { projectId });
 		const source = locales.find((locale) => locale.code === "en");
 		if (!source) throw new Error("Expected the source Locale.");
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: source._id,
 			catalogPath: "en.arb",
 		});
@@ -63,7 +63,7 @@ describe("Catalog Workspace Window read", () => {
 			projectId,
 			code: "de",
 		});
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: de,
 			catalogPath: "de.arb",
 		});
@@ -187,7 +187,7 @@ describe("Catalog Workspace Window read", () => {
 		const locales = await owner.query(api.locales.list, { projectId });
 		const source = locales.find((locale) => locale.code === "en");
 		if (!source) throw new Error("Expected the source Locale.");
-		await owner.mutation(api.locales.bind, {
+		await owner.action(api.locales.bind, {
 			localeId: source._id,
 			catalogPath: "intl_en.arb",
 		});
@@ -196,7 +196,7 @@ describe("Catalog Workspace Window read", () => {
 				projectId,
 				code,
 			});
-			await owner.mutation(api.locales.bind, {
+			await owner.action(api.locales.bind, {
 				localeId: id,
 				catalogPath: `intl_${code}.arb`,
 			});

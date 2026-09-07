@@ -12,7 +12,6 @@ import { sha256Hex, type TokenScope } from "./lib";
 import {
 	createOrResumeProposal,
 	finalizeProposal,
-	PORTUGUESE_LOCALE_CODE,
 	type ProposalActor,
 	readProposal,
 	readProposalArtifact,
@@ -294,7 +293,7 @@ function snapshotLineage(body: Record<string, unknown>) {
 }
 
 function localeProposalId(value: string | null): Id<"localeProposals"> {
-	if (!value) throw new Error("Missing Portuguese Locale Proposal id.");
+	if (!value) throw new Error("Missing Locale Proposal id.");
 	// The internal query and mutation boundaries validate this branded ID.
 	return value as Id<"localeProposals">;
 }
@@ -1372,13 +1371,11 @@ http.route({
 								},
 							);
 						}
-						if (target.localeCode !== PORTUGUESE_LOCALE_CODE) {
-							throw new ConvexError({
-								code: "NOT_FOUND",
-								message: `New Locale ${target.localeCode} is not configured for this project.`,
-							});
-						}
-						const proposal = await createOrResumeProposal(ctx, actor);
+						const proposal = await createOrResumeProposal(
+							ctx,
+							actor,
+							target.localeCode,
+						);
 						const task = await ctx.runMutation(
 							internalApi.agentTranslationProposals.create,
 							{
@@ -1845,181 +1842,191 @@ http.route({
 	}),
 });
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) => await createOrResumeProposal(ctx, actor),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+// Both routes share the same bounded workflow; /pt remains a compatibility entry point.
+for (const prefix of [
+	"/api/agent/v1/locale-proposals",
+	"/api/agent/v1/locale-proposals/pt",
+]) {
+	http.route({
+		path: prefix,
+		method: "POST",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const localeCode = prefix.endsWith("/pt")
+					? undefined
+					: requiredJsonString(await jsonObject(request), "localeCode");
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await createOrResumeProposal(ctx, actor, localeCode),
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt",
-	method: "GET",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const proposalId = localeProposalId(
-				new URL(request.url).searchParams.get("proposalId"),
-			);
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) => await readProposal(ctx, actor, proposalId),
-					{ requireCliProtocol: true },
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+	http.route({
+		path: prefix,
+		method: "GET",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const proposalId = localeProposalId(
+					new URL(request.url).searchParams.get("proposalId"),
+				);
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) => await readProposal(ctx, actor, proposalId),
+						{ requireCliProtocol: prefix.endsWith("/pt") },
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt/template",
-	method: "GET",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const url = new URL(request.url);
-			const proposalId = localeProposalId(url.searchParams.get("proposalId"));
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) =>
-						await templateProposal(ctx, actor, {
-							proposalId,
-							cursor: Number(url.searchParams.get("cursor") ?? 0),
-							limit: Number(url.searchParams.get("limit") ?? 16),
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+	http.route({
+		path: `${prefix}/template`,
+		method: "GET",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const url = new URL(request.url);
+				const proposalId = localeProposalId(url.searchParams.get("proposalId"));
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await templateProposal(ctx, actor, {
+								proposalId,
+								cursor: Number(url.searchParams.get("cursor") ?? 0),
+								limit: Number(url.searchParams.get("limit") ?? 16),
+							}),
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt/values",
-	method: "GET",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const url = new URL(request.url);
-			const proposalId = localeProposalId(url.searchParams.get("proposalId"));
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) =>
-						await reviewProposalValues(ctx, actor, {
-							proposalId,
-							cursor: Number(url.searchParams.get("cursor") ?? 0),
-							limit: Number(url.searchParams.get("limit") ?? 16),
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+	http.route({
+		path: `${prefix}/values`,
+		method: "GET",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const url = new URL(request.url);
+				const proposalId = localeProposalId(url.searchParams.get("proposalId"));
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await reviewProposalValues(ctx, actor, {
+								proposalId,
+								cursor: Number(url.searchParams.get("cursor") ?? 0),
+								limit: Number(url.searchParams.get("limit") ?? 16),
+							}),
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt/values",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await jsonObject(request);
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) =>
-						await stageProposal(ctx, actor, {
-							proposalId: localeProposalId(
-								requiredJsonString(body, "proposalId"),
+	http.route({
+		path: `${prefix}/values`,
+		method: "POST",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const body = await jsonObject(request);
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await stageProposal(ctx, actor, {
+								proposalId: localeProposalId(
+									requiredJsonString(body, "proposalId"),
+								),
+								items: localeProposalValues(body),
+							}),
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
+
+	http.route({
+		path: `${prefix}/finalize`,
+		method: "POST",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const body = await jsonObject(request);
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await finalizeProposal(
+								ctx,
+								actor,
+								localeProposalId(requiredJsonString(body, "proposalId")),
 							),
-							items: localeProposalValues(body),
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
 
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt/finalize",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await jsonObject(request);
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) =>
-						await finalizeProposal(
-							ctx,
-							actor,
-							localeProposalId(requiredJsonString(body, "proposalId")),
-						),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
-
-http.route({
-	path: "/api/agent/v1/locale-proposals/pt/artifact",
-	method: "GET",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const proposalId = localeProposalId(
-				new URL(request.url).searchParams.get("proposalId"),
-			);
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					["read", "propose"],
-					"agentLocaleProposal",
-					async (_token, actor) =>
-						await readProposalArtifact(ctx, actor, proposalId),
-					{ requireCliProtocol: true },
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
+	http.route({
+		path: `${prefix}/artifact`,
+		method: "GET",
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const proposalId = localeProposalId(
+					new URL(request.url).searchParams.get("proposalId"),
+				);
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentLocaleProposal",
+						async (_token, actor) =>
+							await readProposalArtifact(ctx, actor, proposalId),
+						{ requireCliProtocol: true },
+					),
+				);
+			} catch (error) {
+				return routeError(error);
+			}
+		}),
+	});
+}
 
 http.route({
 	pathPrefix: "/api/agent/v1/change-sets/",

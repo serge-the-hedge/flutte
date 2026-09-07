@@ -8,6 +8,7 @@
 		"dev": "convex dev",
 		"dev:setup": "convex dev --configure --until-success",
 		"test": "vitest run",
+		"test:locale-capacity": "BLABLA_LOCALE_CAPACITY_PROOF=1 vitest run convex/localeCapacity.integration.test.ts",
 		"test:repository-proof": "vitest run --config vitest.repository.config.ts",
 		"check-types": "tsc -p convex/tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
 		"check-types:test": "tsc -p tsconfig.test.json --noEmit"

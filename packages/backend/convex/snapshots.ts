@@ -41,6 +41,7 @@ import {
 	gitChangeEnvelope,
 	MAX_PROJECTED_LOCALES,
 	MAX_RECONCILIATION_READ_PAGE_ROWS,
+	MAX_WORKING_CATALOG_BYTES,
 	MAX_WORKING_CATALOG_KEYS,
 	MAX_WORKING_CATALOG_ROWS,
 	materializeRepeatedGitContent,
@@ -64,6 +65,11 @@ import {
 } from "./contractTransforms";
 import { DEFAULT_INTEGRATION_BRANCH, now, sha256Hex } from "./lib";
 import {
+	assertDeliveryStaged,
+	snapshotCatalogFiles,
+	stageLocaleDeliveries,
+} from "./localeDelivery";
+import {
 	declaredPlaceholderNames,
 	messageFacts,
 	storedFactNames,
@@ -72,6 +78,7 @@ import {
 	authorizeProjectIngestion,
 	type RepositoryAdapterActor,
 	repositoryAdapterActorValidator,
+	requireEditor,
 	requireViewer,
 } from "./permissions";
 import {
@@ -282,6 +289,24 @@ function inspectUnboundLocaleFile(file: SubmittedFile): UnboundSnapshotFile {
 	}
 }
 
+/** Both ingestion and explicit binding realization enforce this same Locale
+ * Contract before any derived rows can be published. */
+function parseBoundCatalog(
+	file: SubmittedFile,
+	localeCode: string,
+): CatalogDocument {
+	const document = parse(file.content);
+	const declared = document.globals.find(
+		(global) => global.name === "@@locale",
+	)?.value;
+	if (declared !== localeCode)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: `${file.catalogPath} is bound to the "${localeCode}" Locale but declares @@locale ${declared === undefined ? "nothing" : `"${String(declared)}"`}.`,
+		});
+	return document;
+}
+
 /**
  * Match the submitted files against the project's Locale Bindings and check
  * each one can be represented faithfully.
@@ -349,28 +374,14 @@ function inspect(
 			continue;
 		}
 
-		let declared: unknown;
 		let document: CatalogDocument;
 		try {
-			document = parse(file.content);
-			declared = document.globals.find(
-				(global) => global.name === "@@locale",
-			)?.value;
+			document = parseBoundCatalog(file, binding.localeCode);
 		} catch (error) {
 			const data = (error as { data?: { message?: string } }).data;
 			diagnostics.push({
 				catalogPath: file.catalogPath,
 				message: data?.message ?? String(error),
-			});
-			continue;
-		}
-
-		// The Locale Contract: a path may vary, but the file must declare the
-		// Locale it claims to be, or a snapshot cannot say what it ingested.
-		if (declared !== binding.localeCode) {
-			diagnostics.push({
-				catalogPath: file.catalogPath,
-				message: `${file.catalogPath} is bound to the "${binding.localeCode}" Locale but declares @@locale ${declared === undefined ? "nothing" : `"${String(declared)}"`}.`,
 			});
 			continue;
 		}
@@ -386,7 +397,7 @@ export const bindingsFor = internalQuery({
 		projectId: v.id("projects"),
 		actor: v.optional(repositoryAdapterActorValidator),
 	},
-	handler: async (ctx, args): Promise<Binding[]> => {
+	handler: async (ctx, args) => {
 		await authorizeIngestion(ctx, args.projectId, args.actor);
 		const locales = await ctx.db
 			.query("locales")
@@ -398,7 +409,7 @@ export const bindingsFor = internalQuery({
 				message: `A project may bind at most ${MAX_PROJECT_LOCALES} Locales.`,
 			});
 		}
-		return locales
+		const bindings = locales
 			.filter(
 				(locale) =>
 					locale.archivedAt === undefined && locale.catalogPath !== undefined,
@@ -410,6 +421,17 @@ export const bindingsFor = internalQuery({
 				// biome-ignore lint/style/noNonNullAssertion: filtered above
 				catalogPath: locale.catalogPath!,
 			}));
+		const project = await ctx.db.get(args.projectId);
+		if (!project)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Project not found.",
+			});
+		return {
+			bindings,
+			projectionId: project.activeCatalogProjectionId ?? null,
+			localeBindingRevision: project.localeBindingRevision ?? 0,
+		};
 	},
 });
 
@@ -475,6 +497,20 @@ export const repositoryAdapterContext = internalQuery({
 		if (!bindings.some((binding) => !binding.isSource)) {
 			setupIssues.push("Bind at least one target Locale before syncing.");
 		}
+		if (bindings.length > MAX_PROJECTED_LOCALES)
+			setupIssues.push(
+				`At most ${MAX_PROJECTED_LOCALES} bound Locales fit the working catalog.`,
+			);
+		const projection = project.activeCatalogProjectionId
+			? await ctx.db.get(project.activeCatalogProjectionId)
+			: null;
+		if (
+			projection &&
+			projection.expectedKeyCount * bindings.length > MAX_WORKING_CATALOG_ROWS
+		)
+			setupIssues.push(
+				`These bindings exceed the ${MAX_WORKING_CATALOG_ROWS}-value working catalog limit.`,
+			);
 		return {
 			version: 1,
 			integrationBranch:
@@ -496,7 +532,13 @@ export const repositoryAdapterContext = internalQuery({
 						kind: baseline.kind,
 					}
 				: null,
-			limits: { maxFiles: MAX_SNAPSHOT_FILES, maxBytes: MAX_SNAPSHOT_BYTES },
+			limits: {
+				maxFiles: MAX_SNAPSHOT_FILES,
+				maxBytes: MAX_SNAPSHOT_BYTES,
+				maxBoundLocales: MAX_PROJECTED_LOCALES,
+				maxWorkingCatalogRows: MAX_WORKING_CATALOG_ROWS,
+				maxWorkingCatalogBytes: MAX_WORKING_CATALOG_BYTES,
+			},
 		};
 	},
 });
@@ -506,7 +548,12 @@ type ProjectionFile = Pick<
 	"localeId" | "localeCode" | "catalogPath" | "isSource"
 > & { document: CatalogDocument };
 
-type ProjectionEvidence = {
+type BindingBasis = {
+	projectionId: Id<"catalogProjections"> | null;
+	localeBindingRevision: number;
+};
+
+type ProjectionEvidence = BindingBasis & {
 	projectId: Id<"projects">;
 	files: {
 		localeId: Id<"locales">;
@@ -516,7 +563,7 @@ type ProjectionEvidence = {
 		storageId: Id<"_storage">;
 	}[];
 	absentTargetLocales: AbsentTargetLocale[];
-	unboundLocaleFiles: UnboundLocaleFile[];
+	unboundLocaleFiles: (UnboundLocaleFile & { storageId: Id<"_storage"> })[];
 };
 
 type Identity = {
@@ -663,6 +710,7 @@ async function assertStagingProjection(
 				"A Baseline Snapshot requires its own staging catalog projection.",
 		});
 	}
+	await assertDeliveryStaged(ctx, projection._id);
 	await assertStagedReconciliationReport(ctx, projection);
 	return projection;
 }
@@ -720,6 +768,9 @@ async function publishProjection(
 		});
 	}
 	if (
+		(projection.localeBindingRevision !== undefined &&
+			projection.localeBindingRevision !==
+				(args.project.localeBindingRevision ?? 0)) ||
 		projection.previousBaselineSnapshotId !== args.project.baselineSnapshotId ||
 		projection.previousCatalogProjectionId !==
 			args.project.activeCatalogProjectionId ||
@@ -963,10 +1014,7 @@ export const projectionEvidenceFor = internalQuery({
 				message: "Source Snapshot belongs to a missing project.",
 			});
 		}
-		const files = await ctx.db
-			.query("sourceSnapshotFiles")
-			.withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshot._id))
-			.take(MAX_SNAPSHOT_FILES + 1);
+		const files = await snapshotCatalogFiles(ctx, snapshot._id);
 		if (files.length > MAX_SNAPSHOT_FILES) {
 			throw new ConvexError({
 				code: "INTEGRITY",
@@ -977,7 +1025,14 @@ export const projectionEvidenceFor = internalQuery({
 			.query("sourceSnapshotUnboundFiles")
 			.withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshot._id))
 			.take(MAX_SNAPSHOT_FILES + 1);
-		if (files.length + unboundLocaleFiles.length > MAX_SNAPSHOT_FILES) {
+		if (
+			files.length +
+				unboundLocaleFiles.filter(
+					(unbound) =>
+						!files.some((file) => file.catalogPath === unbound.catalogPath),
+				).length >
+			MAX_SNAPSHOT_FILES
+		) {
 			throw new ConvexError({
 				code: "INTEGRITY",
 				message: "Source Snapshot exceeds the supported file envelope.",
@@ -996,6 +1051,8 @@ export const projectionEvidenceFor = internalQuery({
 		}
 		return {
 			projectId: snapshot.projectId,
+			projectionId: project.activeCatalogProjectionId ?? null,
+			localeBindingRevision: project.localeBindingRevision ?? 0,
 			files: files.map((file) => ({
 				localeId: file.localeId,
 				localeCode: file.localeCode,
@@ -1003,20 +1060,30 @@ export const projectionEvidenceFor = internalQuery({
 				isSource: file.isSource ?? file.localeId === project.sourceLocaleId,
 				storageId: file.storageId,
 			})),
-			absentTargetLocales: absentTargetLocales.map((locale) => ({
-				localeId: locale.localeId,
-				localeCode: locale.localeCode,
-				catalogPath: locale.catalogPath,
-			})),
-			unboundLocaleFiles: unboundLocaleFiles.map((file) => ({
-				catalogPath: file.catalogPath,
-				...(file.declaredLocaleCode === undefined
-					? {}
-					: { declaredLocaleCode: file.declaredLocaleCode }),
-				...(file.messageCount === undefined
-					? {}
-					: { messageCount: file.messageCount }),
-			})),
+			absentTargetLocales: absentTargetLocales
+				.filter(
+					(locale) => !files.some((file) => file.localeId === locale.localeId),
+				)
+				.map((locale) => ({
+					localeId: locale.localeId,
+					localeCode: locale.localeCode,
+					catalogPath: locale.catalogPath,
+				})),
+			unboundLocaleFiles: unboundLocaleFiles
+				.filter(
+					(unbound) =>
+						!files.some((file) => file.catalogPath === unbound.catalogPath),
+				)
+				.map((file) => ({
+					storageId: file.storageId,
+					catalogPath: file.catalogPath,
+					...(file.declaredLocaleCode === undefined
+						? {}
+						: { declaredLocaleCode: file.declaredLocaleCode }),
+					...(file.messageCount === undefined
+						? {}
+						: { messageCount: file.messageCount }),
+				})),
 		};
 	},
 });
@@ -1311,6 +1378,17 @@ async function discardStagingProjection(
 	actor?: RepositoryAdapterActor,
 ): Promise<void> {
 	try {
+		for (
+			let page = 0;
+			page <= Math.ceil(MAX_WORKING_CATALOG_ROWS / 32);
+			page++
+		) {
+			const done: boolean = await ctx.runMutation(
+				internal.localeDelivery.discardDecisions,
+				{ projectId, projectionId, actor },
+			);
+			if (done) break;
+		}
 		await ctx.runMutation(internal.catalogProjection.discard, {
 			projectId,
 			projectionId,
@@ -1766,6 +1844,8 @@ async function stageProjection(
 	files: readonly ProjectionFile[],
 	absentTargetLocales: readonly AbsentTargetLocale[],
 	unboundLocaleFiles: readonly UnboundLocaleFile[],
+	deliveryFiles: readonly SubmittedFile[] = [],
+	expectedBindingBasis?: BindingBasis,
 ): Promise<StagedProjection> {
 	if (files.length + absentTargetLocales.length > MAX_PROJECTED_LOCALES) {
 		throw new ConvexError({
@@ -1792,6 +1872,7 @@ async function stageProjection(
 		internal.catalogProjection.begin,
 		{
 			projectId: identity.projectId,
+			expectedBindingBasis,
 			repository: identity.repository,
 			commit: identity.commit,
 			manifestHash: identity.manifestHash,
@@ -2076,6 +2157,16 @@ async function stageProjection(
 			draft: reportWithArchives,
 			actor: identity.actor,
 		});
+		await stageLocaleDeliveries(ctx, {
+			projectId: identity.projectId,
+			projectionId,
+			repository: identity.repository,
+			commit: identity.commit,
+			source: currentSource.document,
+			files: deliveryFiles,
+			boundFiles: files,
+			actor: identity.actor,
+		});
 		// Stage the complete Navigation Index for the pending generation so the
 		// publish gate can rely on a full envelope for this projection.
 		let navigationReady = false;
@@ -2129,6 +2220,7 @@ async function stageStoredProjection(
 		});
 	}
 	const files: ProjectionFile[] = [];
+	const deliveryFiles: SubmittedFile[] = [];
 	for (const file of evidence.files) {
 		const blob = await ctx.storage.get(file.storageId);
 		if (!blob) {
@@ -2137,6 +2229,10 @@ async function stageStoredProjection(
 				message: "Stored catalog evidence is missing.",
 			});
 		}
+		deliveryFiles.push({
+			catalogPath: file.catalogPath,
+			content: await blob.text(),
+		});
 		files.push({
 			localeId: file.localeId,
 			localeCode: file.localeCode,
@@ -2145,12 +2241,29 @@ async function stageStoredProjection(
 			document: parse(await blob.text()),
 		});
 	}
+	for (const file of evidence.unboundLocaleFiles) {
+		const blob = await ctx.storage.get(file.storageId);
+		if (!blob)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Stored Unbound Locale File is missing.",
+			});
+		deliveryFiles.push({
+			catalogPath: file.catalogPath,
+			content: await blob.text(),
+		});
+	}
 	return await stageProjection(
 		ctx,
 		identity,
 		files,
 		evidence.absentTargetLocales,
 		evidence.unboundLocaleFiles,
+		deliveryFiles,
+		{
+			projectionId: evidence.projectionId,
+			localeBindingRevision: evidence.localeBindingRevision,
+		},
 	);
 }
 
@@ -2268,12 +2381,13 @@ async function ingestSnapshot(
 		return { runId: result.runId, snapshotId: result.snapshotId };
 	}
 
-	const bindings: Binding[] = await ctx.runQuery(
-		internal.snapshots.bindingsFor,
-		{ projectId: args.projectId, actor: args.actor },
-	);
+	const bindingBasis: BindingBasis & { bindings: Binding[] } =
+		await ctx.runQuery(internal.snapshots.bindingsFor, {
+			projectId: args.projectId,
+			actor: args.actor,
+		});
 	const { diagnostics, matched, absentTargetLocales, unboundLocaleFiles } =
-		inspect(args.files, bindings);
+		inspect(args.files, bindingBasis.bindings);
 	if (diagnostics.length > 0) {
 		const result: IngestionResult = await ctx.runMutation(
 			internal.snapshots.finalizeIngestion,
@@ -2323,11 +2437,15 @@ async function ingestSnapshot(
 				matched,
 				absentTargetLocales,
 				unboundLocaleFiles,
+				args.files,
+				{
+					projectionId: bindingBasis.projectionId,
+					localeBindingRevision: bindingBasis.localeBindingRevision,
+				},
 			);
 		}
 
-		// Stored one at a time on purpose: six files are not worth the
-		// concurrency, and each store is a write the runtime has to sequence.
+		// Store sequentially: each storage write must complete before publication.
 		for (const file of matched) {
 			const blob = new Blob([file.content]);
 			storedFiles.push({
@@ -2612,6 +2730,23 @@ export const syncSetup = query({
 		if (!bindings.some((binding) => !binding.isSource && binding.catalogPath)) {
 			setupIssues.push("Bind at least one target Locale before syncing.");
 		}
+		const boundCount = bindings.filter(
+			(binding) => binding.catalogPath !== null,
+		).length;
+		if (boundCount > MAX_PROJECTED_LOCALES)
+			setupIssues.push(
+				`At most ${MAX_PROJECTED_LOCALES} bound Locales fit the working catalog.`,
+			);
+		const projection = project.activeCatalogProjectionId
+			? await ctx.db.get(project.activeCatalogProjectionId)
+			: null;
+		if (
+			projection &&
+			projection.expectedKeyCount * boundCount > MAX_WORKING_CATALOG_ROWS
+		)
+			setupIssues.push(
+				`These bindings exceed the ${MAX_WORKING_CATALOG_ROWS}-value working catalog limit.`,
+			);
 		const snapshotId = latestRun?.snapshotId;
 		const evidenceCounts = snapshotId
 			? await Promise.all([
@@ -2637,6 +2772,13 @@ export const syncSetup = query({
 			bindings,
 			setupIssues,
 			canSync: setupIssues.length === 0,
+			limits: {
+				maxBoundLocales: MAX_PROJECTED_LOCALES,
+				maxWorkingCatalogRows: MAX_WORKING_CATALOG_ROWS,
+				maxWorkingCatalogBytes: MAX_WORKING_CATALOG_BYTES,
+				maxFiles: MAX_SNAPSHOT_FILES,
+				maxBytes: MAX_SNAPSHOT_BYTES,
+			},
 			baseline: baseline
 				? {
 						id: baseline._id,
@@ -2774,12 +2916,8 @@ export const storageIdFor = internalQuery({
 			});
 		}
 		await requireViewer(ctx, snapshot.projectId);
-		const file = await ctx.db
-			.query("sourceSnapshotFiles")
-			.withIndex("by_snapshot_and_localeCode", (q) =>
-				q.eq("snapshotId", args.snapshotId).eq("localeCode", args.localeCode),
-			)
-			.unique();
+		const files = await snapshotCatalogFiles(ctx, snapshot._id);
+		const file = files.find((file) => file.localeCode === args.localeCode);
 		if (!file) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
@@ -2814,3 +2952,186 @@ export const catalogText = action({
 		return await blob.text();
 	},
 });
+
+export const publishBindingRealization = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		localeId: v.id("locales"),
+		catalogPath: v.string(),
+		expectedCatalogPath: v.optional(v.string()),
+		snapshotId: v.id("sourceSnapshots"),
+		projectionId: v.id("catalogProjections"),
+		unboundFileId: v.id("sourceSnapshotUnboundFiles"),
+	},
+	handler: async (ctx, args) => {
+		await requireEditor(ctx, args.projectId);
+		const [project, locale, snapshot, file] = await Promise.all([
+			ctx.db.get(args.projectId),
+			ctx.db.get(args.localeId),
+			ctx.db.get(args.snapshotId),
+			ctx.db.get(args.unboundFileId),
+		]);
+		if (
+			!project ||
+			!locale ||
+			locale.projectId !== args.projectId ||
+			locale.isSource ||
+			locale.archivedAt !== undefined ||
+			locale.catalogPath !== args.expectedCatalogPath ||
+			!snapshot ||
+			snapshot.projectId !== args.projectId ||
+			project.baselineSnapshotId !== snapshot._id ||
+			!file ||
+			file.snapshotId !== snapshot._id ||
+			file.catalogPath !== args.catalogPath
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"Binding evidence or Baseline changed during realization. Retry the binding.",
+			});
+		const claimants = await ctx.db
+			.query("locales")
+			.withIndex("by_project_catalogPath", (q) =>
+				q.eq("projectId", args.projectId).eq("catalogPath", args.catalogPath),
+			)
+			.take(2);
+		if (claimants.some((candidate) => candidate._id !== locale._id))
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "The observed file was bound to another Locale.",
+			});
+		const existing = await ctx.db
+			.query("localeBindingRealizations")
+			.withIndex("by_snapshot_and_localeCode", (q) =>
+				q.eq("snapshotId", snapshot._id).eq("localeCode", locale.code),
+			)
+			.unique();
+		if (existing)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "This Locale binding has already been realized.",
+			});
+		await ctx.db.insert("localeBindingRealizations", {
+			projectId: args.projectId,
+			snapshotId: snapshot._id,
+			localeId: locale._id,
+			localeCode: locale.code,
+			isSource: false,
+			catalogPath: file.catalogPath,
+			storageId: file.storageId,
+			byteLength: file.byteLength,
+			projectionId: args.projectionId,
+			realizedAt: now(),
+		});
+		await ctx.db.patch(locale._id, { catalogPath: args.catalogPath });
+		await publishProjection(ctx, {
+			identity: {
+				projectId: args.projectId,
+				repository: snapshot.repository,
+				commit: snapshot.commit,
+				manifestHash: snapshot.manifestHash,
+			},
+			project,
+			snapshotId: snapshot._id,
+			projectionId: args.projectionId,
+			advancesBaseline: false,
+			timestamp: now(),
+		});
+		await ctx.db.patch(project._id, {
+			localeBindingRevision: (project.localeBindingRevision ?? 0) + 1,
+		});
+		return null;
+	},
+});
+
+/** Reuse the ordinary bounded projection pipeline over immutable Baseline
+ * bytes, adding exactly the file the editor chose. Publication rechecks the
+ * Baseline, binding claim, and staged generation in one transaction. */
+export async function realizeLocaleBinding(
+	ctx: ActionCtx,
+	input: {
+		projectId: Id<"projects">;
+		localeId: Id<"locales">;
+		catalogPath: string;
+		expectedCatalogPath?: string;
+		snapshotId: Id<"sourceSnapshots">;
+		unboundFileId: Id<"sourceSnapshotUnboundFiles">;
+	},
+): Promise<void> {
+	const plan = await ctx.runQuery(internal.locales.bindingPlan, {
+		localeId: input.localeId,
+		catalogPath: input.catalogPath,
+	});
+	if (
+		!plan.snapshot ||
+		plan.snapshot._id !== input.snapshotId ||
+		!plan.unboundFile ||
+		plan.unboundFile._id !== input.unboundFileId
+	)
+		throw new ConvexError({
+			code: "CONFLICT",
+			message: "The chosen Unbound Locale File is no longer current.",
+		});
+	const evidence: ProjectionEvidence = await ctx.runQuery(
+		internal.snapshots.projectionEvidenceFor,
+		{ snapshotId: input.snapshotId },
+	);
+	const files: ProjectionFile[] = [];
+	const deliveryFiles: SubmittedFile[] = [];
+	for (const file of [
+		...evidence.files.filter((file) => file.localeId !== input.localeId),
+		{
+			localeId: input.localeId,
+			localeCode: plan.locale.code,
+			isSource: false,
+			catalogPath: input.catalogPath,
+			storageId: plan.unboundFile.storageId,
+		},
+	]) {
+		const blob = await ctx.storage.get(file.storageId);
+		if (!blob)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Stored Baseline file is missing.",
+			});
+		const content = await blob.text();
+		const document = parseBoundCatalog(
+			{ catalogPath: file.catalogPath, content },
+			file.localeCode,
+		);
+		files.push({ ...file, document });
+		deliveryFiles.push({ catalogPath: file.catalogPath, content });
+	}
+	const identity: Identity = {
+		projectId: input.projectId,
+		repository: plan.snapshot.repository,
+		commit: plan.snapshot.commit,
+		manifestHash: plan.snapshot.manifestHash,
+	};
+	const staged = await stageProjection(
+		ctx,
+		identity,
+		files,
+		evidence.absentTargetLocales.filter(
+			(locale) => locale.localeId !== input.localeId,
+		),
+		evidence.unboundLocaleFiles.filter(
+			(file) => file.catalogPath !== input.catalogPath,
+		),
+		deliveryFiles,
+		{
+			projectionId: evidence.projectionId,
+			localeBindingRevision: evidence.localeBindingRevision,
+		},
+	);
+	try {
+		await ctx.runMutation(internal.snapshots.publishBindingRealization, {
+			...input,
+			projectionId: staged.projectionId,
+		});
+	} catch (error) {
+		await discardStagingProjection(ctx, input.projectId, staged.projectionId);
+		throw error;
+	}
+}

@@ -38,6 +38,8 @@ import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
 import type * as lib from "../lib.js";
+import type * as localeIntroductionTargets from "../localeIntroductionTargets.js";
+import type * as localeDelivery from "../localeDelivery.js";
 import type * as localeProposals from "../localeProposals.js";
 import type * as locales from "../locales.js";
 import type * as messageFacts from "../messageFacts.js";
@@ -94,6 +96,8 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   imports: typeof imports;
   lib: typeof lib;
+  localeIntroductionTargets: typeof localeIntroductionTargets;
+  localeDelivery: typeof localeDelivery;
   localeProposals: typeof localeProposals;
   locales: typeof locales;
   messageFacts: typeof messageFacts;

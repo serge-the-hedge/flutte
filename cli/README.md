@@ -51,7 +51,7 @@ Release Bundle, then deliver it from the current Brickit integration branch:
 blabla deliver --release <release-record-id>
 ```
 
-When a ready Portuguese task belongs to that same Baseline, deliver both jobs
+When a ready new-Locale task belongs to that same Baseline, deliver both jobs
 through the same transaction:
 
 ```sh
@@ -66,7 +66,7 @@ reported. The CLI runs Flutter generation in a disposable worktree and creates
 one local `blabla/release-...` review commit.
 For combined delivery it validates that both immutable artifacts share the
 same repository, Baseline/Source Snapshot, and integration branch; applies the
-reviewed Release Delta; and adds the complete `intl_pt.arb`. Flutter generation
+reviewed Release Delta; and adds the complete configured Catalog Document. Flutter generation
 runs first as a clean-tree drift check and again over the combined candidate.
 Blabla supplies the catalog bytes and provenance; the adapter owns only local
 Git and Flutter toolchain I/O.
@@ -115,9 +115,22 @@ For a combined job, run:
 blabla deliver --release <release-record-id> --locale-proposal <proposal-id> --checkout /path/to/brickit-flutter
 ```
 
-Omit `--locale-proposal` for existing-Locale work only. The old
-`deliver-portuguese --proposal ...` command remains as a deprecated
-compatibility path for an already-prepared Portuguese-only job.
+Omit `--locale-proposal` for existing-Locale work only. To deliver a new Locale
+on its own, run `blabla deliver-locale --proposal <proposal-id>`. The old
+`deliver-portuguese` name remains a deprecated alias. Each delivery accepts one
+new Locale; repeat the same flow for the next language after merging and syncing
+the preceding delivery.
+
+A project editor configures the catalog code, label, path, and explicit Runtime
+Locale Mapping before a task starts. This Brickit adapter supports language-only
+catalog codes in `packages/brickit_generated/lib/l10n/` and runtime mappings such
+as `it-IT`, `ja`, or `sr-Latn-RS`. Script mappings use Flutter's
+[`Locale.fromSubtags`](https://api.flutter.dev/flutter/dart-ui/Locale/Locale.fromSubtags.html).
+A content variant requiring a separate regional/script ARB is not supported by
+this adapter yet. Runtime registration recognizes literal Locale declarations
+and Brickit's named `supportedLocales` and `supportedLanguageCodes` lists; it
+does not depend on a particular existing language or its position. Unfamiliar
+registration expressions and duplicate runtime mappings stop delivery.
 
 For local CLI development, use Dart **3.13.3**, matching the pinned CI and
 release toolchain, and run the same command from `cli/`:
@@ -152,10 +165,13 @@ recheck local changes, branch, and HEAD before creating a local review branch.
 A checkout that advances during preparation must be retried.
 
 Existing-Locale delivery preserves unrelated staged work outside its commit.
-Combined delivery requires a clean checkout; the Portuguese-only compatibility
-command requires clean localization paths and an empty index. Portuguese output
+Combined delivery requires a clean checkout; standalone new-Locale delivery
+requires clean localization paths and an empty index. New-Locale output
 is limited to its ARB, runtime locale registration, and expected generated Dart
-files; Release Delta output is verified against its delivery manifest.
+files; Release Delta output is verified against its delivery manifest. A complete
+new-Locale artifact requires the checkout Source Catalog to match its pinned
+commit, including when combined with a Release Bundle. Sync and continue the
+proposal if Source has moved.
 
 The final output prints `git push` and `gh pr create` commands for the developer
 to choose to run. The Adapter never runs either command itself.
@@ -170,7 +186,8 @@ dart compile exe bin/blabla.dart -o dist/blabla
 ```
 
 `test/brickit_flutter_integration_test.dart` is the real-generator acceptance
-test. It clones the supplied checkout into a temporary directory, so it never
+test for Italian, Japanese, and a Serbian script/region runtime mapping. It
+clones the supplied checkout into a temporary directory, so it never
 writes the named checkout:
 
 ```sh

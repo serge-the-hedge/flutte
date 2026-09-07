@@ -22,11 +22,11 @@ async function setup() {
 		projectId,
 		code: "de",
 	});
-	await owner.mutation(api.locales.bind, {
+	await owner.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await owner.mutation(api.locales.bind, {
+	await owner.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});

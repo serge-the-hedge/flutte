@@ -10,54 +10,61 @@ const _sourceCatalogPath = 'packages/brickit_generated/lib/l10n/intl_en.arb';
 void main() {
   final brickitCheckout = Platform.environment['BRICKIT_CHECKOUT'];
   final brickitFlutterSdk = Platform.environment['BRICKIT_FLUTTER_SDK'];
-  test(
-    'real Flutter generation produces one language-code Portuguese catalog',
-    () async {
-      final fixture = await _RealBrickitFixture.cloneFrom(brickitCheckout!);
-      addTearDown(fixture.dispose);
-      final artifact = await fixture.portugueseArtifact();
-      final flutter = await FlutterToolchainResolver().resolve(
-        fixture.checkout,
-        explicitSdk: brickitFlutterSdk,
-      );
-
-      final result = await RepositoryAdapter().deliver(
-        DeliveryRequest(
-          checkout: fixture.checkout,
-          proposalId: artifact.proposalId,
-          flutter: flutter,
-          gateway: _ReadyGateway(artifact),
-          write: (_) {},
-        ),
-      );
-
-      expect(
-        result.changedPaths,
-        unorderedEquals([
-          'packages/brickit_generated/lib/l10n/intl_pt.arb',
-          'packages/brickit/lib/constants/locale_const.dart',
-          'packages/brickit_generated/lib/l10n/app_localizations.dart',
-          'packages/brickit_generated/lib/l10n/app_localizations_pt.dart',
-        ]),
-      );
-      expect(await fixture.git(['status', '--porcelain']), isEmpty);
-      expect(
-        await fixture
-            .file('packages/brickit_generated/lib/l10n/intl_pt_BR.arb')
-            .exists(),
-        isFalse,
-      );
-      final generated = await fixture
-          .file('packages/brickit_generated/lib/l10n/app_localizations.dart')
-          .readAsString();
-      expect(generated, contains("case 'pt':"));
-      expect(generated, contains('AppLocalizationsPt'));
-    },
-    skip: brickitCheckout == null
-        ? 'Set BRICKIT_CHECKOUT to a Brickit checkout to run the real Flutter acceptance test.'
-        : false,
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+  for (final locale in const [
+    ProposedLocale(code: 'it', label: 'Italian', runtimeLocale: 'it-IT'),
+    ProposedLocale(code: 'ja', label: 'Japanese', runtimeLocale: 'ja'),
+    ProposedLocale(code: 'sr', label: 'Serbian', runtimeLocale: 'sr-Latn-RS'),
+  ]) {
+    test(
+      'real Flutter generation delivers ${locale.code} with ${locale.runtimeLocale} runtime mapping',
+      () async {
+        final fixture = await _RealBrickitFixture.cloneFrom(brickitCheckout!);
+        addTearDown(fixture.dispose);
+        final artifact = await fixture.localeArtifact(locale);
+        final flutter = await FlutterToolchainResolver().resolve(
+          fixture.checkout,
+          explicitSdk: brickitFlutterSdk,
+        );
+        final result = await RepositoryAdapter().deliver(
+          DeliveryRequest(
+            checkout: fixture.checkout,
+            proposalId: artifact.proposalId,
+            flutter: flutter,
+            gateway: _ReadyGateway(artifact),
+            write: (_) {},
+          ),
+        );
+        expect(
+          result.changedPaths,
+          unorderedEquals([
+            'packages/brickit_generated/lib/l10n/intl_${locale.code}.arb',
+            'packages/brickit/lib/constants/locale_const.dart',
+            'packages/brickit_generated/lib/l10n/app_localizations.dart',
+            'packages/brickit_generated/lib/l10n/app_localizations_${locale.code}.dart',
+          ]),
+        );
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        expect(
+          await fixture
+              .file(
+                'packages/brickit_generated/lib/l10n/app_localizations.dart',
+              )
+              .readAsString(),
+          contains("case '${locale.code}':"),
+        );
+        expect(
+          await fixture
+              .file('packages/brickit/lib/constants/locale_const.dart')
+              .readAsString(),
+          contains('${locale.code}Locale'),
+        );
+      },
+      skip: brickitCheckout == null
+          ? 'Set BRICKIT_CHECKOUT to a Brickit checkout to run the real Flutter acceptance test.'
+          : false,
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+  }
 }
 
 class _ReadyGateway implements LocaleProposalGateway {
@@ -121,7 +128,7 @@ class _RealBrickitFixture {
     return fixture;
   }
 
-  Future<LocaleProposalArtifact> portugueseArtifact() async {
+  Future<LocaleProposalArtifact> localeArtifact(ProposedLocale locale) async {
     final source = file(_sourceCatalogPath);
     final decoded = jsonDecode(await source.readAsString());
     if (decoded is! Map)
@@ -132,11 +139,11 @@ class _RealBrickitFixture {
         throw StateError('Brickit catalog has a non-string key.');
       catalogDocument[entry.key as String] = entry.value;
     }
-    catalogDocument['@@locale'] = 'pt';
+    catalogDocument['@@locale'] = locale.code;
     final content = jsonEncode(catalogDocument);
     return LocaleProposalArtifact(
       version: 1,
-      proposalId: 'proposal_pt_real_fixture',
+      proposalId: 'proposal_${locale.code}_real_fixture',
       sourceSnapshot: SourceSnapshotIdentity(
         id: 'snapshot_real_fixture',
         repository: 'github.com/brickit-app/brickit-flutter',
@@ -144,13 +151,11 @@ class _RealBrickitFixture {
         manifestHash: List.filled(64, 'a').join(),
         catalogPath: _sourceCatalogPath,
       ),
-      locale: const ProposedLocale(
-        code: 'pt',
-        label: 'Portuguese',
-        runtimeLocale: 'pt-BR',
-      ),
+      locale: locale,
       catalog: ProposedCatalog(
-        fileName: 'intl_pt.arb',
+        fileName: 'intl_${locale.code}.arb',
+        catalogPath:
+            'packages/brickit_generated/lib/l10n/intl_${locale.code}.arb',
         content: content,
         contentHash: sha256.convert(utf8.encode(content)).toString(),
       ),

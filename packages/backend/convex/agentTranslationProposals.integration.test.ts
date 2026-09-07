@@ -34,11 +34,11 @@ async function setupProject(user: AuthenticatedBackend) {
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});
@@ -85,7 +85,7 @@ async function setupWorkQueueProject(user: AuthenticatedBackend) {
 		[de, "de.arb"],
 		[fr, "fr.arb"],
 	] as const) {
-		await user.mutation(api.locales.bind, { localeId, catalogPath });
+		await user.action(api.locales.bind, { localeId, catalogPath });
 	}
 	const ingested = await user.action(api.snapshots.ingest, {
 		projectId,
@@ -145,11 +145,11 @@ async function setupSparseWorkQueueProject(user: AuthenticatedBackend) {
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: de,
 		catalogPath: "de.arb",
 	});

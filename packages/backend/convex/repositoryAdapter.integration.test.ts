@@ -32,11 +32,11 @@ async function setup(user: AuthenticatedBackend) {
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "intl_en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "intl_de.arb",
 	});

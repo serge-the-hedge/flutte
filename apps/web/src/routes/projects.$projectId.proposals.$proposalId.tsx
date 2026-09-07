@@ -19,6 +19,7 @@ import {
 	CandidateReviewDelegation,
 	candidateReviewUrl,
 } from "@/components/localization/candidate-review-delegation";
+import { LocaleProposalWorkbench } from "@/components/localization/locale-proposal-workbench";
 import {
 	PageHeader,
 	ProjectShell,
@@ -32,7 +33,6 @@ import {
 	exactTaskBatchRevisionIds,
 	type TranslationTaskBasisState,
 } from "@/lib/translation-task-review";
-import { PortugueseLocaleProposalWorkbench } from "@/routes/projects.$projectId.locale-proposals.pt";
 
 export const Route = createFileRoute(
 	"/projects/$projectId/proposals/$proposalId",
@@ -244,7 +244,7 @@ function ProposalDetailRoute() {
 	}
 	if (detail.proposal.localeProposalTaskScope) {
 		return (
-			<PortugueseLocaleProposalWorkbench
+			<LocaleProposalWorkbench
 				projectId={projectId}
 				taskId={detail.proposal._id}
 				initialProposalId={

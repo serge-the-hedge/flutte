@@ -47,6 +47,8 @@ const ordinaryImportCounts = {
 	introduced: v.optional(v.number()),
 };
 const catalogWorkspaceDecisionRecordCommon = {
+	deliveryProjectionId: v.optional(v.id("catalogProjections")),
+	localeProposalId: v.optional(v.id("localeProposals")),
 	projectId: v.id("projects"),
 	messageId: v.string(),
 	localeId: v.id("locales"),
@@ -261,6 +263,7 @@ export default defineSchema({
 		// Older projects fall back to the team default in the adapter seams.
 		integrationBranch: v.optional(v.string()),
 		sourceLocaleId: v.optional(v.id("locales")),
+		localeBindingRevision: v.optional(v.number()),
 		baselineSnapshotId: v.optional(v.id("sourceSnapshots")),
 		activeCatalogProjectionId: v.optional(v.id("catalogProjections")),
 		// Repository Adapter protocol floors are project setup, never checkout
@@ -490,7 +493,9 @@ export default defineSchema({
 		byteLength: v.number(),
 		declaredLocaleCode: v.optional(v.string()),
 		messageCount: v.optional(v.number()),
-	}).index("by_snapshot", ["snapshotId"]),
+	})
+		.index("by_snapshot", ["snapshotId"])
+		.index("by_snapshot_and_catalogPath", ["snapshotId", "catalogPath"]),
 
 	// A target Locale can be deliberately absent from a complete Snapshot. Keep
 	// that ingest-time observation beside the immutable files rather than
@@ -534,6 +539,19 @@ export default defineSchema({
 	// A Locale Proposal is deliberately separate from a Locale Binding. It pins
 	// one target catalog to immutable source evidence, while its submitted
 	// values remain bounded child rows until a complete delivery artifact exists.
+	localeIntroductionTargets: defineTable({
+		projectId: v.id("projects"),
+		localeCode: v.string(),
+		label: v.string(),
+		catalogPath: v.string(),
+		runtimeLocale: v.string(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		updatedBy: v.string(),
+	})
+		.index("by_project_and_localeCode", ["projectId", "localeCode"])
+		.index("by_project_and_catalogPath", ["projectId", "catalogPath"]),
+
 	localeProposals: defineTable({
 		projectId: v.id("projects"),
 		sourceSnapshotId: v.id("sourceSnapshots"),
@@ -541,8 +559,11 @@ export default defineSchema({
 		sourceCatalogPath: v.string(),
 		sourceStorageId: v.id("_storage"),
 		sourceMessageCount: v.number(),
-		localeCode: v.literal("pt"),
-		runtimeLocale: v.literal("pt-BR"),
+		localeCode: v.string(),
+		runtimeLocale: v.string(),
+		localeLabel: v.optional(v.string()),
+		catalogPath: v.optional(v.string()),
+		catalogContentHash: v.optional(v.string()),
 		status: v.union(v.literal("draft"), v.literal("ready")),
 		stagedValueCount: v.number(),
 		stagedValueByteLength: v.number(),
@@ -557,12 +578,52 @@ export default defineSchema({
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
+		.index("by_project_and_status_and_catalogContentHash", [
+			"projectId",
+			"status",
+			"catalogContentHash",
+		])
 		.index("by_project", ["projectId"])
+		.index("by_project_and_catalogPath_and_catalogContentHash", [
+			"projectId",
+			"catalogPath",
+			"catalogContentHash",
+		])
 		.index("by_project_and_sourceSnapshotId_and_localeCode", [
 			"projectId",
 			"sourceSnapshotId",
 			"localeCode",
 		]),
+
+	localeBindingRealizations: defineTable({
+		projectId: v.id("projects"),
+		snapshotId: v.id("sourceSnapshots"),
+		localeId: v.id("locales"),
+		localeCode: v.string(),
+		isSource: v.literal(false),
+		catalogPath: v.string(),
+		storageId: v.id("_storage"),
+		byteLength: v.number(),
+		projectionId: v.id("catalogProjections"),
+		realizedAt: v.number(),
+	})
+		.index("by_snapshot", ["snapshotId"])
+		.index("by_snapshot_and_localeCode", ["snapshotId", "localeCode"]),
+
+	localeDeliveryObservations: defineTable({
+		localeId: v.optional(v.id("locales")),
+		decisionsStaged: v.boolean(),
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		proposalId: v.id("localeProposals"),
+		catalogPath: v.string(),
+		catalogContentHash: v.string(),
+		localeCode: v.string(),
+		observedAt: v.number(),
+	})
+		.index("by_projection", ["projectionId"])
+		.index("by_proposal", ["proposalId"])
+		.index("by_project_and_catalogPath", ["projectId", "catalogPath"]),
 
 	localeProposalValues: defineTable({
 		projectId: v.id("projects"),
@@ -618,6 +679,7 @@ export default defineSchema({
 	// Normalized workflow fields derived from Catalog Documents. A projection
 	// becomes visible only when its Source Snapshot becomes the baseline.
 	catalogProjections: defineTable({
+		localeBindingRevision: v.optional(v.number()),
 		projectId: v.id("projects"),
 		// A staging projection claims the Snapshot Identity it was derived from.
 		// That claim is checked before it can be published, preventing one
@@ -868,6 +930,14 @@ export default defineSchema({
 	}).index("by_project", ["projectId"]),
 
 	catalogWorkspaceDecisionRecords: defineTable(catalogWorkspaceDecisionRecord)
+		.index("by_project_and_messageId_and_localeId_and_actor_and_recordedAt", [
+			"projectId",
+			"messageId",
+			"localeId",
+			"recordedBy.kind",
+			"recordedAt",
+		])
+		.index("by_deliveryProjectionId", ["deliveryProjectionId"])
 		.index("by_project", ["projectId"])
 		.index("by_value_identity", [
 			"projectId",
@@ -878,11 +948,12 @@ export default defineSchema({
 		])
 		// A value can have many Source Contract decisions over time, but a
 		// current card only needs the latest decision for its value fingerprint.
-		.index("by_project_and_messageId_and_localeId_and_valueFingerprint", [
+		.index("by_value_and_recordedAt", [
 			"projectId",
 			"messageId",
 			"localeId",
 			"valueFingerprint",
+			"recordedAt",
 		]),
 
 	// One small, current Source Proposal head per source key. This is separate

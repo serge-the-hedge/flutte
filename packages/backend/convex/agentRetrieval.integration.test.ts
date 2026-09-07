@@ -23,7 +23,7 @@ async function setup(count = 3) {
 		[de, "de"],
 		[zh, "zh"],
 	] as const) {
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId,
 			catalogPath: `${code}.arb`,
 		});

@@ -3,6 +3,9 @@
 Reviewed 2026-09-07 against commit `e33bd6c1ad2e032a58f9d55c90034b23f97ac084`.
 Concurrent Dictionary and Voice Guide changes are outside this review.
 
+This is the historical pre-implementation review. The resulting workflow and
+current limits are documented in [Adding a language](../docs/adding-languages.md).
+
 **Not ready to introduce a handful of new languages.** Translation, review, and
 local Git delivery have a substantial Portuguese implementation. The workflow
 does not yet support arbitrary new Locales, and two independently reproduced

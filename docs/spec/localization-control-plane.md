@@ -10,7 +10,7 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented; new-Locale realization and capacity gaps remain ([readiness review](../../reports/locale-adding-review-2026-09-07.md)) |
+| Release assessment, bundles, configured language delivery and binding | Implemented; exact delivery observation preserves review evidence, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
@@ -118,7 +118,7 @@ warns below the floor — refusing only on a breaking protocol change.
 
 It does two things across a release cycle:
 
-- **Submit** — read the six bound ARB files at the current commit, parse
+- **Submit** — read the bound ARB files at the current commit, parse
   `packages/*/lib` into a Code Context Manifest, send both plus the commit and a
   content-hashed file manifest.
 - **Deliver** — upload the delivery tree's bound catalogs, receive edited
@@ -241,7 +241,7 @@ on screen. A cosmetic change never blocks in either direction.
 
 ### 5.1 Submission and baseline advancement
 
-The CLI submits a commit, the six bound catalog files, and the Git facts it
+The CLI submits a commit, the bound catalog files, and the Git facts it
 observed in the clone: the ancestry relationship between the submitted commit
 and the current Baseline Snapshot's commit, plus their merge-base.
 
@@ -442,7 +442,7 @@ way through the catalog](https://github.com/serge-the-hedge/flutte/issues/25)
 
 **Navigation loads the whole key set, but not the Locale values.** It returns
 one compact digest per key, including Catalog Order, the search corpus, and the
-state facts needed by local scopes. The uncached response is capped at 4 MiB,
+state facts needed by local scopes. The uncached response is capped at 8 MiB,
 against Convex's 16 MiB transaction and return limits. The browser virtualizes
 the DOM and asks for exact cards through a bounded Window read (at most 32
 keys), so search, filtering, and `⌘↵` traversal stay local while hydrated values
@@ -460,7 +460,7 @@ re-arms the bounded worker. This is a maintenance command, not an unattended
 repair. The ordinary-import run uses the same readiness gate, so neither its
 preview nor its confirmation mutation can start against an incomplete index.
 
-**Search is one box over all six Locales plus key, run client-side as a
+**Search is one box over active bound Locales plus key, run client-side as a
 substring scan.** No language selector. It filters in place, in Catalog Order,
 and never ranks — a substring scan produces no honest relevance signal. An index
 cannot preserve these semantics: the retired `searchText` index contains no
@@ -1109,7 +1109,7 @@ answered differently later.
   fully code-generated checkout. It travels with that price or not at all.
 - **Performance and retention targets beyond the measured Brickit catalog.**
   §8.1 states the measured choice and its trigger: compact Navigation is capped
-  at 4 MiB and cards are read through bounded Windows; a substantially larger
+  at 8 MiB and cards are read through bounded Windows; a substantially larger
   catalog needs a new Navigation paging decision.
 - **Generalizing the module beyond Flutter ARB.** The first interface should
   expose real variation before anyone judges whether other formats are adapters

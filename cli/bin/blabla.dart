@@ -29,7 +29,8 @@ Future<int> runCli(
     output(_usage);
     return arguments.isEmpty ? 1 : 0;
   }
-  if (arguments.first != 'deliver-portuguese' &&
+  if (arguments.first != 'deliver-locale' &&
+      arguments.first != 'deliver-portuguese' &&
       arguments.first != 'deliver' &&
       arguments.first != 'sync') {
     if (arguments.first == 'login') {
@@ -63,9 +64,11 @@ Future<int> runCli(
   }
 
   try {
-    output(
-      'Note: deliver-portuguese is a compatibility command. Prefer `blabla deliver --release <id> --locale-proposal <id>` when shipping existing and new Locale work together.',
-    );
+    if (arguments.first == 'deliver-portuguese') {
+      output(
+        'Note: deliver-portuguese is deprecated. Use `blabla deliver-locale --proposal <id>`.',
+      );
+    }
     final options = _options(arguments.skip(1).toList(), const {
       'checkout',
       'proposal',
@@ -84,7 +87,7 @@ Future<int> runCli(
         (await stored())?.token;
     if (token == null || token.isEmpty) {
       throw RepositoryAdapterException(
-        'Set BLABLA_TOKEN or pass --token to read the Portuguese proposal.',
+        'Set BLABLA_TOKEN or pass --token to read the Locale proposal.',
       );
     }
     final serverValue =
@@ -330,7 +333,7 @@ String _requiredOption(Map<String, String> options, String key) {
 const _usage = '''Usage:
   blabla sync [options]
   blabla deliver --release <release-record-id> [--locale-proposal <proposal-id>] [options]
-  blabla deliver-portuguese --proposal <proposal-id> [options]
+  blabla deliver-locale --proposal <proposal-id> [options]
   blabla login --server <url> --token <token>
 
 Options:

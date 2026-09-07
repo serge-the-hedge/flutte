@@ -21,6 +21,7 @@ const globals = {
 	HTMLTextAreaElement: dom.HTMLTextAreaElement,
 	Element: dom.Element,
 	Node: dom.Node,
+	NodeFilter: dom.NodeFilter,
 	getComputedStyle: dom.getComputedStyle.bind(dom),
 	ResizeObserver: dom.ResizeObserver,
 	MutationObserver: dom.MutationObserver,

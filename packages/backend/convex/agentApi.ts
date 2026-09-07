@@ -7,7 +7,9 @@ import {
 } from "./_generated/server";
 import { isReviewOnlyToken } from "./agentReviewModel";
 import { hashToken } from "./apiTokens";
+import { MAX_PROJECTED_LOCALES } from "./catalogProjection";
 import { type TokenScope, tokenScopeValidator } from "./lib";
+import { configuredIntroductionTargets } from "./localeIntroductionTargets";
 import { assertProjectExists } from "./permissions";
 
 export async function authenticateAgent(
@@ -79,6 +81,23 @@ export const currentProject = internalQuery({
 			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
 			.collect();
 
+		const introductionTargets = (
+			await configuredIntroductionTargets(ctx, token.projectId)
+		)
+			.filter(
+				(target) =>
+					!locales.some(
+						(locale) =>
+							locale.code === target.localeCode &&
+							locale.archivedAt === undefined,
+					),
+			)
+			.map(({ localeCode, label, catalogPath, runtimeLocale }) => ({
+				localeCode,
+				label,
+				catalogPath,
+				runtimeLocale,
+			}));
 		return {
 			projectId: token.projectId,
 			name: project.name,
@@ -87,6 +106,7 @@ export const currentProject = internalQuery({
 				.filter((locale) => locale.archivedAt === undefined)
 				.map((locale) => locale.code),
 			tokenScopes: token.scopes,
+			localeIntroductionTargets: introductionTargets,
 			capabilities: {
 				search: {
 					engine: "literal",
@@ -103,11 +123,10 @@ export const currentProject = internalQuery({
 					guidance: true,
 					codeContext: "unavailable",
 				},
-				newLocaleTargets: locales.some(
-					(locale) => locale.code === "pt" && locale.archivedAt === undefined,
-				)
-					? []
-					: ["pt"],
+				newLocaleTargets: introductionTargets.map(
+					(target) => target.localeCode,
+				),
+				maxBoundLocales: MAX_PROJECTED_LOCALES,
 				reviewedProposalExamples: true,
 				dictionary: {
 					batchWrites: true,

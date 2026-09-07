@@ -58,11 +58,11 @@ async function bindTwoLocales(
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});
@@ -100,7 +100,7 @@ describe("catalog projection", () => {
 		const locales = await user.query(api.locales.list, { projectId });
 		const enLocale = locales.find((locale) => locale.code === "en");
 		if (!enLocale) throw new Error("Expected the source Locale.");
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: enLocale._id,
 			catalogPath: pathFor("en"),
 		});
@@ -109,7 +109,7 @@ describe("catalog projection", () => {
 				projectId,
 				code,
 			});
-			await user.mutation(api.locales.bind, {
+			await user.action(api.locales.bind, {
 				localeId,
 				catalogPath: pathFor(code),
 			});
@@ -364,7 +364,7 @@ describe("catalog projection", () => {
 		expect((await readActiveCatalog(user, projectId))?.snapshotId).toBe(
 			baseline.snapshotId,
 		);
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: targetId,
 			catalogPath: "moved-de.arb",
 		});

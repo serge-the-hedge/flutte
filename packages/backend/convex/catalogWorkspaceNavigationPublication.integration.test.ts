@@ -46,7 +46,7 @@ async function bindLocales(
 	const locales = await user.query(api.locales.list, { projectId });
 	const source = locales.find((locale) => locale.code === bindings[0]?.code);
 	if (!source) throw new Error("Expected the source Locale.");
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: bindings[0].catalogPath,
 	});
@@ -58,7 +58,7 @@ async function bindLocales(
 			projectId,
 			code: binding.code,
 		});
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId,
 			catalogPath: binding.catalogPath,
 		});
@@ -361,11 +361,19 @@ describe("Catalog Navigation Index publication", () => {
 		const projection = await t.run(
 			async (ctx) => await readActiveProjection(ctx, projectId),
 		);
-		const receipt = await t.mutation(
-			internal.catalogWorkspace.confirmNextOrdinaryImports,
-			{ projectId, expectedProjectionId: projection._id, limit: 5 },
+		const run = await user.mutation(
+			api.ordinaryImportRuns.startOrdinaryImportRun,
+			{
+				projectId,
+				expectedProjectionId: projection._id,
+				policy: "ordinary-v1",
+			},
 		);
-		expect(receipt.confirmed).toBe(1);
+		const receipt = await t.mutation(
+			internal.ordinaryImportRuns.runOrdinaryImportStep,
+			{ runId: run.runId },
+		);
+		expect(receipt?.confirmed).toBe(1);
 		// The source-identical greeting is never eligible; the ordinary run
 		// confirms the plain untouched "farewell" import.
 		const row = await t.run(
