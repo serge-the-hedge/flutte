@@ -119,7 +119,8 @@ Omit `--locale-proposal` for existing-Locale work only. The old
 `deliver-portuguese --proposal ...` command remains as a deprecated
 compatibility path for an already-prepared Portuguese-only job.
 
-For local CLI development, run the same command through Dart from `cli/`:
+For local CLI development, use Dart **3.13.3**, matching the pinned CI and
+release toolchain, and run the same command from `cli/`:
 
 ```sh
 dart pub get
