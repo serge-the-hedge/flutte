@@ -487,7 +487,7 @@ export const processStep = internalMutation({
 				});
 				return releaseSummary(record, cleanup);
 			}
-			const rows = await ctx.db
+			const page = await ctx.db
 				.query("catalogWorkspaceNavigationRows")
 				.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
 					q
@@ -495,7 +495,17 @@ export const processStep = internalMutation({
 						.eq("projectionId", record.projectionId)
 						.gt("catalogIndex", preparation.cursor),
 				)
-				.take(MAX_RELEASE_ROWS_PER_STEP);
+				.paginate({
+					cursor: null,
+					numItems: MAX_RELEASE_ROWS_PER_STEP,
+					maximumBytesRead: 512 * 1024,
+				});
+			const rows = page.page;
+			if (!rows.length && !page.isDone)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Release scanning did not advance.",
+				});
 			if (rows.length === 0) {
 				const completedAt = now();
 				const posture = releasePostureFor(preparation);
@@ -533,7 +543,9 @@ export const processStep = internalMutation({
 			}
 			let handoffKeyCount = handoff.keyCount;
 			let handoffByteLength = handoff.byteLength;
+			let cursor = preparation.cursor;
 			for (const digest of rows) {
+				cursor = digest.catalogIndex;
 				const isDelta = isReleaseDelta(digest);
 				if (!isDelta) continue;
 				deltaKeyCount++;
@@ -663,8 +675,10 @@ export const processStep = internalMutation({
 					handoffKeyCount++;
 					handoffByteLength += byteLength;
 				}
+				// One delta key can span every language. Keep its hydration and classification
+				// in one bounded transaction; later keys remain behind the cursor.
+				break;
 			}
-			const cursor = rows[rows.length - 1]?.catalogIndex ?? preparation.cursor;
 			const updatedAt = now();
 			const assessment = releaseAssessmentFrom({
 				deltaKeyCount,

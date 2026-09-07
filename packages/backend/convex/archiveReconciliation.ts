@@ -22,6 +22,7 @@ import {
 	MAX_WORKING_CATALOG_ROWS,
 	type ProjectedMessage,
 	projectedMessageFields,
+	publishedReadProjection,
 } from "./catalogProjection";
 import {
 	authorizeProjectIngestion,
@@ -1155,7 +1156,7 @@ export const completeState = internalMutation({
 	},
 });
 
-function archivedValueFromRow(
+export function archivedValueFromRow(
 	row:
 		| Doc<"catalogProjectionArchiveValues">
 		| Doc<"catalogProjectionArchiveStateValues">,
@@ -1275,215 +1276,85 @@ export const statePage = internalQuery({
 	},
 });
 
+/** Value pages may split a message across pages. Published projection IDs pin
+ * the history generation; clients merge values by message and Locale identity. */
 async function archiveForProjection(
 	ctx: QueryCtx,
 	projection: Doc<"catalogProjections">,
+	cursor: string | null = null,
 ) {
-	const envelope = archiveReconciliationEnvelopeFor(projection);
-	const [keyRows, localeRows, valueRows] = await Promise.all([
-		ctx.db
-			.query("catalogProjectionArchiveKeys")
-			.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-			.take(MAX_WORKING_CATALOG_KEYS + 1),
-		ctx.db
-			.query("catalogProjectionArchiveLocales")
-			.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-			.take(MAX_PROJECTED_LOCALES + 1),
-		ctx.db
-			.query("catalogProjectionArchiveValues")
-			.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
-			.take(MAX_WORKING_CATALOG_ROWS + 1),
-	]);
-	if (
-		keyRows.length !== envelope.keyCount ||
-		localeRows.length !== envelope.localeCount ||
-		valueRows.length !== envelope.valueCount ||
-		keyRows.length > MAX_WORKING_CATALOG_KEYS ||
-		localeRows.length > MAX_PROJECTED_LOCALES ||
-		valueRows.length > MAX_WORKING_CATALOG_ROWS
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Archive Reconciliation does not match its declared envelope.",
-		});
-	}
-
-	const keys = keyRows.map((row) => ({
-		catalogIndex: row.catalogIndex,
-		messageId: row.messageId,
-		sourceFingerprint: row.sourceFingerprint,
-	}));
-	const locales = localeRows.map((row) => ({
-		localeId: row.localeId,
-		localeCode: row.localeCode,
-		catalogPath: row.catalogPath,
-	}));
-	const values = valueRows.map(archivedValueFromRow);
-	const measured = archiveEnvelope({ keys, locales, values });
-	if (measured.byteLength !== envelope.byteLength) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Archive Reconciliation does not match its byte envelope.",
-		});
-	}
-
-	const keyActionsById = new Map<string, (typeof keys)[number]>();
-	for (const key of keys) {
-		if (keyActionsById.has(key.messageId)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Archive Reconciliation contains a duplicate key action.",
-			});
-		}
-		keyActionsById.set(key.messageId, key);
-	}
-	const localeActionsById = new Map<Id<"locales">, (typeof locales)[number]>();
-	for (const locale of locales) {
-		if (localeActionsById.has(locale.localeId)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Archive Reconciliation contains a duplicate Locale action.",
-			});
-		}
-		localeActionsById.set(locale.localeId, locale);
-	}
-
-	const valuesByMessageId = new Map<string, ArchivedValue[]>();
-	const valueIdentities = new Set<string>();
-	for (const value of values) {
+	const page = await ctx.db
+		.query("catalogProjectionArchiveValues")
+		.withIndex("by_projection_and_catalogIndex", (q) =>
+			q.eq("projectionId", projection._id),
+		)
+		.paginate({ cursor, numItems: 100, maximumBytesRead: 512 * 1024 });
+	const locales = await ctx.db
+		.query("catalogProjectionArchiveLocales")
+		.withIndex("by_projection", (q) => q.eq("projectionId", projection._id))
+		.take(MAX_PROJECTED_LOCALES + 1);
+	const groups = new Map<string, ArchivedValue[]>();
+	for (const row of page.page) {
+		const value = archivedValueFromRow(row);
 		assertArchivedValue(value);
-		const identity = archiveValueIdentity(value);
-		if (valueIdentities.has(identity)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Archive Reconciliation contains a duplicate Locale value.",
-			});
-		}
-		valueIdentities.add(identity);
-		if (value.keyArchived && !keyActionsById.has(value.messageId)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "An archived value has no matching key action.",
-			});
-		}
-		if (value.localeArchived && !localeActionsById.has(value.localeId)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "An archived value has no matching Locale action.",
-			});
-		}
-		valuesByMessageId.set(value.messageId, [
-			...(valuesByMessageId.get(value.messageId) ?? []),
-			value,
-		]);
+		const group = groups.get(value.messageId) ?? [];
+		group.push(value);
+		groups.set(value.messageId, group);
 	}
-
-	const groupedKeys = [...valuesByMessageId.entries()]
-		.map(([messageId, groupedValues]) => {
-			const sources = groupedValues.filter((value) => value.isSource);
-			const [source] = sources;
-			if (!source) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Archive Reconciliation key group is missing its source.",
-				});
-			}
-			if (
-				sources.length !== 1 ||
-				groupedValues.length > MAX_PROJECTED_LOCALES ||
-				groupedValues.some(
-					(value) =>
-						value.catalogIndex !== source.catalogIndex ||
-						value.keyArchived !== source.keyArchived,
-				)
-			) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Archive Reconciliation does not form valid key groups.",
-				});
-			}
-			const keyAction = keyActionsById.get(messageId);
-			if (
-				(source.keyArchived &&
-					(!keyAction ||
-						keyAction.catalogIndex !== source.catalogIndex ||
-						keyAction.sourceFingerprint !== source.sourceFingerprint)) ||
-				(!source.keyArchived && keyAction)
-			) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Archive Reconciliation key actions do not match values.",
-				});
-			}
-			const orderedValues = [...groupedValues].sort(
-				(left, right) =>
-					Number(right.isSource) - Number(left.isSource) ||
-					left.localeCode.localeCompare(right.localeCode),
-			);
-			return {
-				id: messageId,
-				catalogIndex: source.catalogIndex,
-				keyArchived: source.keyArchived,
-				origin: "archive_reconciliation" as const,
-				values: orderedValues.map((value) => ({
-					localeId: value.localeId,
-					localeCode: value.localeCode,
-					catalogPath: value.catalogPath,
-					isSource: value.isSource,
-					value: value.value,
-					...(value.metadataCatalogPath === undefined
-						? {}
-						: { metadataCatalogPath: value.metadataCatalogPath }),
-					...(value.metadataSnapshotId === undefined
-						? {}
-						: { metadataSnapshotId: value.metadataSnapshotId }),
-					...(value.restoredFromSnapshotId === undefined
-						? {}
-						: { restoredFromSnapshotId: value.restoredFromSnapshotId }),
-					sourceFingerprint: value.sourceFingerprint,
-					icuType: value.icuType,
-					argumentNamesComplete: value.argumentNamesComplete,
-					argumentNameCount: value.argumentNameCount,
-					materialized: value.materialized,
-					keyArchived: value.keyArchived,
-					localeArchived: value.localeArchived,
-					evidenceSnapshotId: value.evidenceSnapshotId,
-					origin: "archive_reconciliation" as const,
-				})),
-			};
-		})
-		.sort((left, right) => left.catalogIndex - right.catalogIndex);
-	if (
-		groupedKeys.length > MAX_WORKING_CATALOG_KEYS ||
-		keys.some((key) => !valuesByMessageId.has(key.messageId))
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Archive Reconciliation contains an unreadable key action.",
-		});
-	}
-
 	return {
 		projectionId: projection._id,
 		snapshotId: projection.snapshotId ?? null,
 		previousSnapshotId: projection.previousBaselineSnapshotId ?? null,
-		locales: [...locales]
-			.sort((left, right) => left.localeCode.localeCompare(right.localeCode))
-			.map((locale) => ({
-				...locale,
+		continueCursor: page.continueCursor,
+		isDone: page.isDone,
+		locales: locales
+			.sort((a, b) => a.localeCode.localeCompare(b.localeCode))
+			.map(({ localeId, localeCode, catalogPath }) => ({
+				localeId,
+				localeCode,
+				catalogPath,
 				origin: "archive_reconciliation" as const,
 			})),
-		keys: groupedKeys,
+		keys: [...groups.entries()]
+			.map(([id, values]) => {
+				const first = values[0];
+				if (!first)
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "Archive page contains an empty key group.",
+					});
+				return {
+					id,
+					catalogIndex: first.catalogIndex,
+					keyArchived: first.keyArchived,
+					origin: "archive_reconciliation" as const,
+					values: values
+						.sort(
+							(a, b) =>
+								Number(b.isSource) - Number(a.isSource) ||
+								a.localeCode.localeCompare(b.localeCode),
+						)
+						.map((value) => ({
+							...value,
+							origin: "archive_reconciliation" as const,
+						})),
+				};
+			})
+			.sort((a, b) => a.catalogIndex - b.catalogIndex),
 	};
 }
 
 export const getActive = query({
-	args: { projectId: v.id("projects") },
+	args: {
+		projectId: v.id("projects"),
+		cursor: v.optional(v.union(v.string(), v.null())),
+		projectionId: v.optional(v.id("catalogProjections")),
+	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		const projection = await activeProjectionFor(ctx, args.projectId);
+		const projection = await publishedReadProjection(ctx, args);
 		if (!projection) return null;
-		return await archiveForProjection(ctx, projection);
+		return await archiveForProjection(ctx, projection, args.cursor ?? null);
 	},
 });
 
@@ -1494,6 +1365,7 @@ export const get = query({
 	args: {
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
+		cursor: v.optional(v.union(v.string(), v.null())),
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
@@ -1509,7 +1381,7 @@ export const get = query({
 				message: "An accepted Archive Reconciliation was not found.",
 			});
 		}
-		return await archiveForProjection(ctx, projection);
+		return await archiveForProjection(ctx, projection, args.cursor ?? null);
 	},
 });
 

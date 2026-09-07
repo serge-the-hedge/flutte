@@ -465,6 +465,45 @@ export default defineSchema({
 			"manifestHash",
 		]),
 
+	snapshotUploadSessions: defineTable({
+		projectId: v.id("projects"),
+		tokenId: v.id("apiTokens"),
+		releaseRecordId: v.optional(v.id("releaseRecords")),
+		deliveryCaptureId: v.optional(v.id("releaseDeliveryCaptures")),
+		repository: v.string(),
+		commit: v.string(),
+		lineage: v.optional(
+			v.object({
+				baselineCommit: v.string(),
+				relationship: v.union(
+					v.literal("ancestor"),
+					v.literal("descendant"),
+					v.literal("divergent"),
+				),
+				mergeBase: v.string(),
+			}),
+		),
+		expectedFiles: v.number(),
+		uploadedFiles: v.number(),
+		status: v.union(
+			v.literal("uploading"),
+			v.literal("processing"),
+			v.literal("completed"),
+		),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+		processingAt: v.optional(v.number()),
+		runId: v.optional(v.id("snapshotIngestionRuns")),
+	}),
+	snapshotUploadFiles: defineTable({
+		sessionId: v.id("snapshotUploadSessions"),
+		catalogPath: v.string(),
+		storageId: v.id("_storage"),
+		contentHash: v.string(),
+		outputStorageId: v.optional(v.id("_storage")),
+		byteLength: v.number(),
+	}).index("by_session_and_catalogPath", ["sessionId", "catalogPath"]),
+
 	sourceSnapshotFiles: defineTable({
 		projectId: v.id("projects"),
 		snapshotId: v.id("sourceSnapshots"),
@@ -481,7 +520,8 @@ export default defineSchema({
 		.index("by_snapshot", ["snapshotId"])
 		.index("by_snapshot_and_isSource", ["snapshotId", "isSource"])
 		.index("by_snapshot_and_localeId", ["snapshotId", "localeId"])
-		.index("by_snapshot_and_localeCode", ["snapshotId", "localeCode"]),
+		.index("by_snapshot_and_localeCode", ["snapshotId", "localeCode"])
+		.index("by_storageId", ["storageId"]),
 
 	// A file without a Locale Binding is still immutable Snapshot evidence. It
 	// never joins the working catalog until an editor deliberately binds it.
@@ -495,7 +535,8 @@ export default defineSchema({
 		messageCount: v.optional(v.number()),
 	})
 		.index("by_snapshot", ["snapshotId"])
-		.index("by_snapshot_and_catalogPath", ["snapshotId", "catalogPath"]),
+		.index("by_snapshot_and_catalogPath", ["snapshotId", "catalogPath"])
+		.index("by_storageId", ["storageId"]),
 
 	// A target Locale can be deliberately absent from a complete Snapshot. Keep
 	// that ingest-time observation beside the immutable files rather than
@@ -796,6 +837,15 @@ export default defineSchema({
 		status: v.union(v.literal("staging"), v.literal("published")),
 		snapshotId: v.optional(v.id("sourceSnapshots")),
 	}).index("by_projection", ["projectionId"]),
+
+	// Private raw inputs exist only while a projection is being reconciled.
+	catalogProcessingInputs: defineTable({
+		projectionId: v.id("catalogProjections"),
+		messageId: v.string(),
+		payload: v.string(),
+	})
+		.index("by_projection", ["projectionId"])
+		.index("by_projection_and_messageId", ["projectionId", "messageId"]),
 
 	catalogProjectionMessages: defineTable({
 		projectionId: v.id("catalogProjections"),
@@ -1180,6 +1230,7 @@ export default defineSchema({
 		restoredFromSnapshotId: v.id("sourceSnapshots"),
 	})
 		.index("by_projection", ["projectionId"])
+		.index("by_projection_and_catalogIndex", ["projectionId", "catalogIndex"])
 		.index("by_projection_and_messageId", ["projectionId", "messageId"]),
 
 	// Git-authored value changes are staged alongside a catalog projection, then
@@ -1478,6 +1529,19 @@ export default defineSchema({
 
 	// The exact catalog tree observed by a local delivery. It is evidence for
 	// the Release Record, never a candidate Baseline Snapshot.
+	releaseBuildChunks: defineTable({
+		runId: v.id("releaseBuildRuns"),
+		storageId: v.id("_storage"),
+	}).index("by_runId", ["runId"]),
+	releaseDeliveryCaptureFiles: defineTable({
+		captureId: v.id("releaseDeliveryCaptures"),
+		catalogPath: v.string(),
+		storageId: v.id("_storage"),
+		contentHash: v.string(),
+		byteLength: v.number(),
+	})
+		.index("by_captureId_and_catalogPath", ["captureId", "catalogPath"])
+		.index("by_storageId", ["storageId"]),
 	releaseDeliveryCaptures: defineTable({
 		projectId: v.id("projects"),
 		recordId: v.id("releaseRecords"),
@@ -1553,6 +1617,7 @@ export default defineSchema({
 		evidenceSnapshotId: v.id("sourceSnapshots"),
 	})
 		.index("by_projection", ["projectionId"])
+		.index("by_projection_and_catalogIndex", ["projectionId", "catalogIndex"])
 		.index("by_project_and_messageId", ["projectId", "messageId"])
 		.index("by_project_and_localeId", ["projectId", "localeId"]),
 
@@ -1595,6 +1660,7 @@ export default defineSchema({
 		evidenceSnapshotId: v.id("sourceSnapshots"),
 	})
 		.index("by_projection", ["projectionId"])
+		.index("by_projection_and_isSource", ["projectionId", "isSource"])
 		.index("by_projection_and_messageId", ["projectionId", "messageId"]),
 
 	// Source Proposals retain durable candidate evidence beside Git. Restore

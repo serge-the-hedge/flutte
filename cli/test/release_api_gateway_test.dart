@@ -55,26 +55,36 @@ void main() {
         );
       } else {
         final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
-        expect(body['files'], hasLength(2));
-        request.response.write(
-          jsonEncode({
-            'releaseRecord': record,
-            'files': [
-              {
-                'catalogPath': 'intl_en.arb',
-                'content': '{"@@locale":"en","welcome":"Hello"}',
-              },
-              {
-                'catalogPath': 'intl_de.arb',
-                'content': '{"@@locale":"de","welcome":"Guten Tag"}',
-              },
-            ],
-            'applied': ['welcome'],
-            'skipped': [
-              {'messageId': 'stale', 'reason': 'source_changed'},
-            ],
-          }),
-        );
+        expect(body.containsKey('files'), isFalse);
+        if (request.uri.path.endsWith('/snapshot-uploads')) {
+          expect(body['expectedFiles'], 2);
+          expect(body['kind'], 'release');
+          request.response.write(jsonEncode({'sessionId': 'upload_123'}));
+        } else if (request.uri.path.endsWith('/file')) {
+          expect(body['contentHash'], isA<String>());
+          request.response.write('{}');
+        } else if (request.uri.path.endsWith('/download')) {
+          final path = body['catalogPath'];
+          request.response.write(
+            jsonEncode({
+              'catalogPath': path,
+              'content': path == 'intl_en.arb'
+                  ? '{"@@locale":"en","welcome":"Hello"}'
+                  : '{"@@locale":"de","welcome":"Guten Tag"}',
+            }),
+          );
+        } else {
+          request.response.write(
+            jsonEncode({
+              'releaseRecord': record,
+              'catalogPaths': ['intl_en.arb', 'intl_de.arb'],
+              'applied': ['welcome'],
+              'skipped': [
+                {'messageId': 'stale', 'reason': 'source_changed'},
+              ],
+            }),
+          );
+        }
       }
       await request.response.close();
     });
@@ -101,7 +111,13 @@ void main() {
     expect(delivery.skipped.single.reason, 'source_changed');
     expect(methods, [
       'GET /api/repository-adapter/v1/releases/$recordId',
-      'POST /api/repository-adapter/v1/releases/$recordId/delivery-tree',
+      'GET /api/repository-adapter/v1/releases/$recordId',
+      'POST /api/repository-adapter/v1/snapshot-uploads',
+      'POST /api/repository-adapter/v1/snapshot-uploads/file',
+      'POST /api/repository-adapter/v1/snapshot-uploads/file',
+      'POST /api/repository-adapter/v1/snapshot-uploads/finalize',
+      'POST /api/repository-adapter/v1/snapshot-uploads/download',
+      'POST /api/repository-adapter/v1/snapshot-uploads/download',
     ]);
   });
 

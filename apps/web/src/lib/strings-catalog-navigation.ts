@@ -91,6 +91,7 @@ export type StringsNavigationDigest = {
 };
 
 export type StringsNavigationRead = {
+	serverFiltered?: boolean;
 	kind: "noBaseline" | "incomplete" | "ready";
 	projectionId?: string;
 	canEdit?: boolean;
@@ -175,8 +176,10 @@ export function navigateStringsDigests(
 	const matchingDigests = keys.filter(
 		(digest) =>
 			(handoff === undefined || handoff.has(digest.messageId)) &&
-			matchesDigestScope(digest, state.scope) &&
-			(query.length === 0 || matchesDigestQuery(digest, query)),
+			(navigation.serverFiltered || matchesDigestScope(digest, state.scope)) &&
+			(navigation.serverFiltered ||
+				query.length === 0 ||
+				matchesDigestQuery(digest, query)),
 	);
 	const targetKey = state.key;
 	const targetIndex = targetKey

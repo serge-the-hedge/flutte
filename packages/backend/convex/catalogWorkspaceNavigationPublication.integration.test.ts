@@ -180,6 +180,7 @@ async function navigationEvidence(
 		)
 		.unique();
 	const digest = await deriveNavigationDigest({
+		compactSearchCorpus: true,
 		projectId,
 		projectionId,
 		rows,
@@ -277,7 +278,7 @@ describe("Catalog Navigation Index publication", () => {
 		).toBe(true);
 		const changed = after.rows.find((row) => row.messageId === "greeting");
 		if (!changed) throw new Error("Expected the greeting digest.");
-		expect(changed.searchCorpus).toContain("hallo auch {name}");
+		expect(changed.searchCorpus).toEqual(["greeting"]);
 		expect(changed.targets[0]).toMatchObject({ localeId: ids.de });
 	}, 60_000);
 
@@ -321,7 +322,7 @@ describe("Catalog Navigation Index publication", () => {
 			async (ctx) => await readNavigationRow(ctx, projectId, "greeting"),
 		);
 		expect(pending?.pendingSourceProposal).toBe(true);
-		expect(pending?.searchCorpus).toContain("hi there {name}");
+		expect(pending?.searchCorpus).toEqual(["greeting"]);
 
 		await ingest(user, {
 			projectId,
@@ -340,7 +341,7 @@ describe("Catalog Navigation Index publication", () => {
 		if (!landed.row) throw new Error("Expected the greeting digest.");
 		expect(stripSystemFields(landed.row)).toEqual(landed.fresh);
 		expect(landed.row.pendingSourceProposal).toBe(false);
-		expect(landed.row.searchCorpus).toContain("hi there {name}");
+		expect(landed.row.searchCorpus).toEqual(["greeting"]);
 	}, 60_000);
 
 	test("retires ordinary candidates from the summary as they confirm", async () => {

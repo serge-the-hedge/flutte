@@ -17,8 +17,8 @@ path, and explicit Runtime Locale Mapping. For example:
 
 The current adapter targets Brickit’s Flutter repository layout. New ARB files
 must use the Source catalog’s directory. The Flutter adapter introduces
-language-level catalog codes of two or three letters. Runtime mappings can include a script and region. Separate
-regional or script **content variants** need additional catalog-format support;
+language-level catalog codes of two or three letters. Runtime mappings can
+include a script and region. Separate regional or script **content variants** need additional catalog-format support;
 do not encode one by changing the runtime mapping alone.
 
 In **Translation tasks**, select the configured language and choose **Prepare
@@ -80,15 +80,37 @@ them. A ready existing-Locale release can include one new language pinned to
 the release’s same Baseline Snapshot, using the Release screen’s optional
 language selector or `deliver --release <id> --locale-proposal <proposal-id>`.
 
-The current working envelope permits **10 bound Locales including Source**,
-8,192 keys, 20,000 projected Locale values, and 12 MiB of projected content.
-Every bound applies together; 10 Locales is not an unconditional size guarantee.
-Snapshot submissions remain capped at 8 MiB and Navigation at 8 MiB. Setup
-reports count and known row-capacity conflicts before submission; ingestion and
-binding validate actual content before atomic publication.
+The working catalog no longer has a 10- or 16-language ceiling. Ingestion
+processes bounded groups of keys, and Strings loads a page of keys for one
+working language alongside Source. Search checks the key, Source, and selected
+language with literal substring matching. Switch the working language to inspect
+another catalog; unsaved edits retain the normal navigation guard.
 
-The configuration list supports 128 planned introductions, independently of
-active catalog capacity. This lets a project maintain a compact language plan;
-it does not claim that dozens of full-size catalogs are already supported.
-Larger catalogs need further bounded read and storage work before raising the
-active envelope. Failed validation leaves the accepted Baseline intact.
+Resource guards still apply together: 8,192 active Source keys, 1,000,000 projected values,
+1,000 Locale identities, and 8 MiB per uploaded catalog file. These are structural
+guards, **not a tested capacity promise**. A processing group splits down to one
+key when necessary; the incoming, previous, and archived evidence for that key
+must fit its 6 MiB budget. Very large individual messages can therefore reach a
+resource limit sooner than ordinary catalogs. Failed validation leaves the
+accepted Baseline intact. The configuration list independently supports 128
+planned introductions.
+
+Use the current CLI for per-file uploads. The compatibility endpoint for older
+clients still accepts at most 8 MiB for an entire snapshot request. Public catalog,
+archive, restoration, and Git-change reads are paginated; continuations pin the
+published projection and may contain another part of the same key.
+
+More languages store more translations. During ingestion, this architecture also
+stores a temporary indexed copy of incoming messages and derives reconciliation
+twice: first to
+calculate expected totals, then to stage and verify the complete result before
+atomic publication. The temporary copy is removed before publication; failed attempts reclaim it
+through bounded cleanup, and abandoned staging work expires after 24 hours. This costs extra transient
+storage, reads, and compute in exchange for bounded processing and the existing
+all-or-nothing publication checks. Immutable snapshots and retained generations
+still contribute to ongoing storage usage.
+
+Validation uses the local Convex test backend, including small multi-language
+lifecycle fixtures and existing real-catalog examples. No 50- or 100-language
+full-catalog load test or hosted fixture seeding is required for this change.
+Measure those workloads separately before making latency or quota commitments.

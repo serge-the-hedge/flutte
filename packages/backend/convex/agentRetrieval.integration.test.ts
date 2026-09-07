@@ -8,7 +8,7 @@ import {
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
-async function setup(count = 3) {
+async function setup(count = 3, padding = 0) {
 	const t = createBackend();
 	const user = await authenticatedBackend(t, "retrieval-owner");
 	const projectId = await createProject(user);
@@ -29,8 +29,9 @@ async function setup(count = 3) {
 		});
 		const content: Record<string, string> = { "@@locale": code };
 		for (let index = 0; index < count; index++)
-			content[`item_${String(index).padStart(3, "0")}`] =
-				code === "en"
+			content[`item_${String(index).padStart(3, "0")}`] = padding
+				? `Entry ${index}: ${"x".repeat(padding)}`
+				: code === "en"
 					? `Build model ${index}`
 					: code === "de"
 						? `Modell bauen ${index}`
@@ -236,4 +237,47 @@ test("case-only Source edit invalidates exact search continuation", async () => 
 		`q=Welcome&searchIn=source&match=exact&limit=1&cursor=${encodeURIComponent(first.nextCursor)}`,
 	);
 	expect(response.status).toBe(409);
+});
+
+test("continues sparse searches and work queues after the hydration byte budget", async () => {
+	const f = await setup(12, 100_000);
+	let searchCursor: string | null = null;
+	const found: string[] = [];
+	let searchPages = 0;
+	do {
+		const response = await f.request(
+			`q=Entry%2011%3A&localeCode=de&view=compact${searchCursor ? `&cursor=${encodeURIComponent(searchCursor)}` : ""}`,
+		);
+		expect(response.status).toBe(200);
+		const page = (await response.json()) as {
+			results: Array<{ messageId: string }>;
+			nextCursor: string | null;
+		};
+		if (searchPages === 0) expect(page.results).toEqual([]);
+		found.push(...page.results.map((result) => result.messageId));
+		searchCursor = page.nextCursor;
+		expect(++searchPages).toBeLessThan(15);
+	} while (searchCursor);
+	expect(found).toEqual(["item_011"]);
+	expect(searchPages).toBeGreaterThan(1);
+	let workCursor: string | null = null;
+	let workPages = 0;
+	const work: string[] = [];
+	do {
+		const response = await f.t.fetch(
+			`/api/agent/v1/workspace/work?q=Entry%2011%3A&localeCode=de&reason=sourceIdentical${workCursor ? `&cursor=${encodeURIComponent(workCursor)}` : ""}`,
+			{ headers: { Authorization: `Bearer ${f.token}` } },
+		);
+		expect(response.status).toBe(200);
+		const page = (await response.json()) as {
+			items: Array<{ messageId: string }>;
+			nextCursor: string | null;
+		};
+		if (workPages === 0) expect(page.items).toEqual([]);
+		work.push(...page.items.map((item) => item.messageId));
+		workCursor = page.nextCursor;
+		expect(++workPages).toBeLessThan(15);
+	} while (workCursor);
+	expect(work).toEqual(["item_011"]);
+	expect(workPages).toBeGreaterThan(1);
 });

@@ -3,11 +3,14 @@ import { afterEach, expect, test, vi } from "vitest";
 import en from "../fixtures/arb/intl_en.arb?raw";
 import fr from "../fixtures/arb/intl_fr.arb?raw";
 import {
+	type AuthenticatedBackend,
 	authenticatedBackend,
 	createBackend,
 	createProject,
+	readAllCatalogPages,
 } from "../test/support";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import {
 	archiveReconciliation,
 	restoreByteIdenticalArchivedTargets,
@@ -109,11 +112,24 @@ async function exerciseCapacity(extended: boolean) {
 		return result;
 	}
 	async function navigation() {
-		const result = await owner.query(
-			api.catalogWorkspaceNavigation.navigation,
-			{ projectId },
-		);
-		if (result.kind !== "ready") throw new Error("Expected ready Navigation");
+		const overview = await owner.query(api.catalogBrowse.overview, {
+			projectId,
+		});
+		if (overview.kind !== "ready") throw new Error("Expected ready Navigation");
+		let page = await owner.query(api.catalogBrowse.page, {
+			projectId,
+			projectionId: overview.projectionId,
+		});
+		const keys = [...page.keys];
+		while (page.nextAfter !== null) {
+			page = await owner.query(api.catalogBrowse.page, {
+				projectId,
+				projectionId: overview.projectionId,
+				after: page.nextAfter,
+			});
+			keys.push(...page.keys);
+		}
+		const result = { ...overview, keys };
 		expect(bytes(result)).toBeLessThan(
 			MAX_CATALOG_WORKSPACE_NAVIGATION_RETURN_BYTES,
 		);
@@ -161,9 +177,7 @@ async function exerciseCapacity(extended: boolean) {
 	await ingest("capacity-baseline");
 	const baselineNav = await navigation();
 	expect(baselineNav.keys).toHaveLength(1434);
-	const catalog = await owner.query(api.catalogProjection.getActive, {
-		projectId,
-	});
+	const catalog = await readAllCatalogPages(owner, projectId);
 	expect(catalog?.keys[0]?.values).toHaveLength(10);
 	expect(bytes(catalog)).toBeLessThan(16 * MIB);
 	const projectionMeasurements = await t.run(async (ctx) => {
@@ -249,9 +263,7 @@ async function exerciseCapacity(extended: boolean) {
 
 	for (const { document } of documents) delete document[addedMessageId];
 	await ingest("capacity-archive");
-	const archive = await owner.query(api.archiveReconciliation.getActive, {
-		projectId,
-	});
+	const archive = await readArchives(owner, projectId);
 	expect(archive?.keys).toHaveLength(1);
 	expect(archive?.keys[0]?.values).toHaveLength(10);
 	expect(bytes(archive)).toBeLessThan(16 * MIB);
@@ -260,10 +272,7 @@ async function exerciseCapacity(extended: boolean) {
 	if (!sourceDocument) throw new Error("Missing Source document");
 	sourceDocument[addedMessageId] = "A new message";
 	await ingest("capacity-restoration");
-	const restorations = await owner.query(
-		api.catalogProjection.getRestorations,
-		{ projectId },
-	);
+	const restorations = await readRestorations(owner, projectId);
 	expect(restorations?.keys[0]?.values).toHaveLength(9);
 	expect(
 		(await addedCard()).values.find((value) => value.localeCode === "de"),
@@ -316,9 +325,7 @@ async function exerciseCapacity(extended: boolean) {
 		document["@@locale"] = code;
 	}
 	await ingest("capacity-full-archive");
-	const fullArchive = await owner.query(api.archiveReconciliation.getActive, {
-		projectId,
-	});
+	const fullArchive = await readArchives(owner, projectId);
 	expect(fullArchive?.keys).toHaveLength(1435);
 	expect(fullArchive?.keys.every((key) => key.values.length === 10)).toBe(true);
 	expect(bytes(fullArchive)).toBeLessThan(16 * MIB);
@@ -357,10 +364,7 @@ async function exerciseCapacity(extended: boolean) {
 	await ingest("capacity-full-restoration");
 	const restoredNavigation = await navigation();
 	expect(restoredNavigation.keys).toHaveLength(1435);
-	const fullRestorations = await owner.query(
-		api.catalogProjection.getRestorations,
-		{ projectId },
-	);
+	const fullRestorations = await readRestorations(owner, projectId);
 	expect(fullRestorations?.keys).toHaveLength(1435);
 	expect(fullRestorations?.keys.every((key) => key.values.length === 9)).toBe(
 		true,
@@ -386,4 +390,68 @@ async function exerciseCapacity(extended: boolean) {
 			restoredStoredBytes,
 		}),
 	);
+}
+
+async function readArchives(
+	owner: AuthenticatedBackend,
+	projectId: Id<"projects">,
+) {
+	const first = await owner.query(api.archiveReconciliation.getActive, {
+		projectId,
+	});
+	if (!first) return null;
+	const keys = new Map<string, (typeof first.keys)[number]>();
+	let page = first;
+	for (;;) {
+		expect(bytes(page)).toBeLessThan(2 * MIB);
+		for (const key of page.keys) {
+			const previous = keys.get(key.id);
+			const values = new Map(
+				previous?.values.map((value) => [value.localeId, value]),
+			);
+			for (const value of key.values) values.set(value.localeId, value);
+			keys.set(key.id, { ...key, values: [...values.values()] });
+		}
+		if (page.isDone) break;
+		const next = await owner.query(api.archiveReconciliation.getActive, {
+			projectId,
+			projectionId: first.projectionId,
+			cursor: page.continueCursor,
+		});
+		if (!next) throw new Error("Pinned catalog transition disappeared");
+		page = next;
+	}
+	return { ...first, keys: [...keys.values()] };
+}
+
+async function readRestorations(
+	owner: AuthenticatedBackend,
+	projectId: Id<"projects">,
+) {
+	const first = await owner.query(api.catalogProjection.getRestorations, {
+		projectId,
+	});
+	if (!first) return null;
+	const keys = new Map<string, (typeof first.keys)[number]>();
+	let page = first;
+	for (;;) {
+		expect(bytes(page)).toBeLessThan(2 * MIB);
+		for (const key of page.keys) {
+			const previous = keys.get(key.id);
+			const values = new Map(
+				previous?.values.map((value) => [value.localeId, value]),
+			);
+			for (const value of key.values) values.set(value.localeId, value);
+			keys.set(key.id, { ...key, values: [...values.values()] });
+		}
+		if (page.isDone) break;
+		const next = await owner.query(api.catalogProjection.getRestorations, {
+			projectId,
+			projectionId: first.projectionId,
+			cursor: page.continueCursor,
+		});
+		if (!next) throw new Error("Pinned catalog transition disappeared");
+		page = next;
+	}
+	return { ...first, keys: [...keys.values()] };
 }

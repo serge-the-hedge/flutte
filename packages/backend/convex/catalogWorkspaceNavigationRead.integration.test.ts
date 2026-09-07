@@ -186,7 +186,7 @@ describe("Catalog Workspace Navigation read", () => {
 			(key) => key.messageId === "greeting",
 		);
 		if (!greeting) throw new Error("Expected the greeting digest.");
-		expect(greeting.searchCorpus).toContain("hallo auch {name}");
+		expect(greeting.searchCorpus).toEqual(["greeting"]);
 		expect(JSON.stringify(greeting)).not.toContain("Hallo auch {name}");
 		expect(navigation.ordinaryImports.total).toBe(3);
 		expect(navigation.envelope.rowCount).toBe(navigation.keys.length);

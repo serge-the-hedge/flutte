@@ -286,7 +286,9 @@ export async function stageLocaleDeliveries(
 		repository: string;
 		commit: string;
 		source: CatalogDocument;
-		files: readonly { catalogPath: string; content: string }[];
+		files:
+			| readonly { catalogPath: string; content: string }[]
+			| AsyncIterable<{ catalogPath: string; content: string }>;
 		boundFiles: readonly {
 			catalogPath: string;
 			localeId: Id<"locales">;
@@ -301,7 +303,7 @@ export async function stageLocaleDeliveries(
 		input.source.messages.map((message) => [message.id, message]),
 	);
 	let observations = 0;
-	for (const file of input.files) {
+	for await (const file of input.files) {
 		const bound = input.boundFiles.find(
 			(bound) => bound.catalogPath === file.catalogPath,
 		);

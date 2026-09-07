@@ -141,6 +141,7 @@ async function navigationEvidence(
 		)
 		.unique();
 	const digest = await deriveNavigationDigest({
+		compactSearchCorpus: true,
 		projectId,
 		projectionId,
 		rows,
@@ -235,7 +236,7 @@ describe("Catalog Navigation Index", () => {
 			valueState: "settled",
 			touched: true,
 		});
-		expect(row.searchCorpus).toContain("hallo auch {name}");
+		expect(row.searchCorpus).toEqual([row.messageId]);
 		// Publication staged the whole generation: both fixture keys are
 		// indexed, not just the one the test touched.
 		expect(state).toMatchObject({ rowCount: 2, status: "ready" });
@@ -310,7 +311,7 @@ describe("Catalog Navigation Index", () => {
 		if (!row) throw new Error("Expected the Navigation digest.");
 		expect(stripSystemFields(row)).toEqual(fresh);
 		expect(row.targets[0]).toMatchObject({ valueState: "settled" });
-		expect(row.searchCorpus).toContain("");
+		expect(row.searchCorpus).toEqual([row.messageId]);
 	}, 30_000);
 
 	test("marks the key pending when a Source Proposal is proposed through commit", async () => {
@@ -344,7 +345,7 @@ describe("Catalog Navigation Index", () => {
 		if (!row) throw new Error("Expected the Navigation digest.");
 		expect(stripSystemFields(row)).toEqual(fresh);
 		expect(row.pendingSourceProposal).toBe(true);
-		expect(row.searchCorpus).toContain("hi there {name}");
+		expect(row.searchCorpus).toEqual([row.messageId]);
 	}, 30_000);
 
 	test("recomputing the same key leaves the digest byte-identical", async () => {

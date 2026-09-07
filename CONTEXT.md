@@ -469,9 +469,8 @@ in and never varies with workflow state.
 _Avoid_: sort order, key index
 
 **Navigation**:
-The compact, project-wide read of the active Catalog Projection used to find
-work in Strings. It carries one digest per key — Catalog Order, search text, and
-small state facts — but not Locale values or ARB metadata.
+The ordered view of the active Catalog Projection used to find work in Strings.
+It carries key identities and state facts for the current Catalog Scope.
 _Avoid_: full catalog read, hydrated list
 
 **Navigation Index**:
@@ -487,16 +486,15 @@ atomically when the Baseline changes.
 _Avoid_: catalog version, index snapshot
 
 **Window**:
-A bounded read of complete key cards selected from Navigation in Catalog Order.
-It hydrates only the requested keys and never changes the order or meaning of
-the Navigation Index.
+The requested key cards from Navigation in Catalog Order, showing Source and
+the chosen target Locales.
 _Avoid_: page, full catalog
 
 **Catalog Scope**:
 A composable narrowing of the catalog — search text, key prefix, Code Area, tag,
 Locale, a waiting state, an Unconfirmed Import, a Sibling Set, expansion, or a
-Work Hand-off — carried in the URL and shown as a dismissible chip. Scopes combine as AND and select whole keys rather than single
-values, since every Locale of a key is on screen regardless.
+Work Hand-off — carried in the URL and shown as a dismissible chip. Scopes
+combine as AND and select keys within the current working Locale view.
 _Avoid_: Release Scope, saved view
 
 **Work Hand-off**:

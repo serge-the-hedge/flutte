@@ -8,9 +8,9 @@ import {
 	useSearch,
 } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-
+import { LocaleSelector } from "@/components/localization/locale-selector";
 import {
 	PageHeader,
 	ProjectShell,
@@ -27,16 +27,23 @@ import type {
 	StringsCatalogNavigationState,
 } from "@/lib/strings-catalog-navigation";
 import {
+	previousStringsPages,
+	type StringsPageHistory,
+} from "@/lib/strings-page-history";
+import {
 	createStringsWindowCardCache,
 	STRINGS_WINDOW_CARD_CACHE_CAP,
 	type StringsWindowCards,
 	sameStringsWindowMessageIds,
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
+import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
 
 type StringsSearch = {
+	locale?: string;
+	after?: number;
 	q?: string;
 	key?: string;
 	scope?: CatalogValueScope;
@@ -56,6 +63,11 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	validateSearch: (search: Record<string, unknown>): StringsSearch => ({
+		locale: typeof search.locale === "string" ? search.locale : undefined,
+		after:
+			Number.isSafeInteger(Number(search.after)) && Number(search.after) >= -1
+				? Number(search.after)
+				: undefined,
 		q: typeof search.q === "string" ? search.q : undefined,
 		key: typeof search.key === "string" ? search.key : undefined,
 		scope: isCatalogValueScope(search.scope) ? search.scope : undefined,
@@ -72,11 +84,51 @@ function StringsRoute() {
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
-	// Strings opens on the compact Navigation read once; only the visible card
-	// window hydrates. Search and Catalog Scopes stay local over the digests.
-	const navigation = useQuery(api.catalogWorkspaceNavigation.navigation, {
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const targets = (locales ?? []).filter(
+		(locale) =>
+			!locale.isSource && locale.archivedAt === undefined && locale.catalogPath,
+	);
+	const selectedLocale =
+		targets.find((locale) => locale.code === search.locale) ?? targets[0];
+	const overview = useQuery(api.catalogBrowse.overview, {
 		projectId: convexProjectId,
 	});
+	const pageContext = JSON.stringify([
+		projectId,
+		overview?.kind === "ready" ? overview.projectionId : null,
+		selectedLocale?._id,
+		search.q,
+		search.scope,
+		search.release,
+	]);
+	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
+		context: pageContext,
+		pages: [],
+	});
+	const previousPages = previousStringsPages(pageHistory, pageContext, {
+		after: search.after,
+		key: search.key,
+	});
+	const observedProjection = useRef<
+		{ projectId: string; projectionId: string } | undefined
+	>(undefined);
+	useEffect(() => {
+		if (overview?.kind !== "ready") return;
+		const previous = observedProjection.current;
+		observedProjection.current = {
+			projectId,
+			projectionId: overview.projectionId,
+		};
+		if (
+			previous?.projectId === projectId &&
+			previous.projectionId !== overview.projectionId
+		)
+			void navigate({
+				search: (current) => ({ ...current, after: undefined }),
+				replace: true,
+			});
+	}, [overview, navigate, projectId]);
 	const releaseHandoff = useQuery(
 		api.releaseRecords.handoff,
 		search.release
@@ -86,6 +138,38 @@ function StringsRoute() {
 				}
 			: "skip",
 	);
+	const page = useCatalogBrowsePage(
+		overview?.kind === "ready" &&
+			locales !== undefined &&
+			(!search.release || releaseHandoff !== undefined)
+			? {
+					projectId: convexProjectId,
+					projectionId: overview.projectionId,
+					localeId: selectedLocale?._id,
+					after: search.after,
+					q: search.q,
+					scope: search.scope,
+					focusKey: search.key,
+					messageIds:
+						releaseHandoff?.status === "published" && releaseHandoff.keys.length
+							? releaseHandoff.keys.map((key) => key.messageId)
+							: undefined,
+				}
+			: "skip",
+		overview?.kind === "ready" ? overview.revision : undefined,
+	);
+	const navigation =
+		overview?.kind === "ready"
+			? page && !page.stale
+				? {
+						...overview,
+						keys: page.keys,
+						valueStateCounts: page.counts,
+						serverFiltered: true,
+					}
+				: undefined
+			: overview;
+
 	const [windowRequest, setWindowRequest] = useState<{
 		projectionId: string | undefined;
 		messageIds: string[];
@@ -98,7 +182,9 @@ function StringsRoute() {
 	// read's STALE_BASIS check, so the window is dropped at once and rebuilt
 	// from the new Navigation read on the next scroll or focus.
 	const windowedProjectionId =
-		navigation?.kind === "ready" ? navigation.projectionId : undefined;
+		navigation?.kind === "ready"
+			? `${navigation.projectionId}:${selectedLocale?._id ?? "source"}`
+			: undefined;
 	const windowMessageIds =
 		windowRequest.projectionId === windowedProjectionId
 			? windowRequest.messageIds
@@ -122,6 +208,7 @@ function StringsRoute() {
 					projectId: convexProjectId,
 					expectedProjectionId: navigation.projectionId,
 					messageIds: windowMessageIds,
+					localeIds: selectedLocale ? [selectedLocale._id] : [],
 				}
 			: ("skip" as const);
 	const windowResult = useCatalogWindow(windowArgs);
@@ -178,6 +265,12 @@ function StringsRoute() {
 					q: next.query || undefined,
 					key: next.key,
 					scope: next.scope,
+					after:
+						next.query !== (previous.q ?? "") ||
+						next.scope !== previous.scope ||
+						next.key !== previous.key
+							? undefined
+							: previous.after,
 				}),
 				replace: true,
 			});
@@ -196,6 +289,7 @@ function StringsRoute() {
 			search: (previous) => ({
 				...previous,
 				release: undefined,
+				after: undefined,
 				key: undefined,
 			}),
 			replace: true,
@@ -299,8 +393,7 @@ function StringsRoute() {
 		[createTranslationTask, convexProjectId, navigate, projectId],
 	);
 
-	const keyCount =
-		navigation?.kind === "ready" ? (navigation.keys?.length ?? 0) : 0;
+	const keyCount = overview?.kind === "ready" ? overview.keyCount : 0;
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
@@ -329,8 +422,30 @@ function StringsRoute() {
 					</div>
 				}
 			/>
+			<div className="mb-4 flex flex-wrap items-center gap-3">
+				<div className="w-64">
+					<LocaleSelector
+						locales={targets}
+						value={selectedLocale?.code ?? null}
+						placeholder="Working language"
+						onChange={(locale) => {
+							void navigate({
+								search: (previous) => ({
+									...previous,
+									locale: locale ?? undefined,
+									after: undefined,
+									key: undefined,
+								}),
+							});
+						}}
+					/>
+				</div>
+				<span className="text-muted-foreground text-sm">
+					Source and selected language · counts for this page
+				</span>
+			</div>
 			<StringsCatalogView
-				key={projectId}
+				key={`${projectId}:${selectedLocale?._id ?? "source"}`}
 				onUnsavedWorkChange={setHasUnsavedWork}
 				navigation={
 					search.release && releaseHandoff === undefined
@@ -358,6 +473,56 @@ function StringsRoute() {
 				}
 				onCreateTranslationTask={onCreateTranslationTask}
 			/>
+			{overview?.kind === "ready" ? (
+				<div className="mt-4 flex items-center justify-between gap-3">
+					<Button
+						variant="outline"
+						disabled={page === undefined || search.after === undefined}
+						onClick={() => {
+							const previous = previousPages.at(-1);
+							setPageHistory({
+								context: pageContext,
+								pages: previousPages.slice(0, -1),
+							});
+							void navigate({
+								search: (current) => ({
+									...current,
+									after: previous?.after,
+									key: previous?.key,
+								}),
+							});
+						}}
+					>
+						Previous page
+					</Button>
+					<span className="text-muted-foreground text-sm">
+						{page?.keys.length ?? 0} matching keys on this page
+					</span>
+					<Button
+						variant="outline"
+						disabled={page?.nextAfter == null}
+						onClick={() => {
+							if (page?.nextAfter == null) return;
+							setPageHistory({
+								context: pageContext,
+								pages: [
+									...previousPages,
+									{ after: search.after, key: search.key },
+								],
+							});
+							void navigate({
+								search: (current) => ({
+									...current,
+									after: page.nextAfter ?? undefined,
+									key: undefined,
+								}),
+							});
+						}}
+					>
+						Next page
+					</Button>
+				</div>
+			) : null}
 		</ProjectShell>
 	);
 }

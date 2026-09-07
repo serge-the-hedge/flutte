@@ -20,10 +20,14 @@ import {
 	taskProposalPage,
 	templateProposal,
 } from "./localeProposals";
+
 import {
-	applyReleaseBundleToDeliveryTree,
-	type ReleaseBundleArtifact,
-} from "./releaseBundleModel";
+	applyStoredReleaseTree,
+	downloadReleaseFile,
+	finalizeReleaseUpload,
+	storedReleaseBundle,
+} from "./releaseUploadDelivery";
+import { finalizeUpload, uploadFile } from "./snapshotUploads";
 
 function searchChoice<T extends string>(
 	params: URLSearchParams,
@@ -55,6 +59,7 @@ type AgentRateLimitName =
 type RepositoryAdapterRateLimitName =
 	| "repositorySnapshotContext"
 	| "repositorySnapshotSubmit"
+	| "repositorySnapshotUpload"
 	| "repositoryReleaseDelivery";
 
 const MAX_SNAPSHOT_FILES = 1_000;
@@ -626,44 +631,6 @@ function routeError(
 	);
 }
 
-async function storedReleaseBundle(
-	ctx: ActionCtx,
-	storageId: Id<"_storage">,
-	expectedHash: string | undefined,
-): Promise<ReleaseBundleArtifact> {
-	const blob = await ctx.storage.get(storageId);
-	if (!blob) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Release Bundle artifact is missing.",
-		});
-	}
-	const content = await blob.text();
-	if (
-		expectedHash !== undefined &&
-		(await sha256Hex(content)) !== expectedHash
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Release Bundle artifact failed its integrity check.",
-		});
-	}
-	const value: unknown = JSON.parse(content);
-	if (
-		!isRecord(value) ||
-		value.version !== 1 ||
-		!isRecord(value.releaseRecord) ||
-		!Array.isArray(value.catalogs) ||
-		!Array.isArray(value.changes)
-	) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Release Bundle artifact has an invalid shape.",
-		});
-	}
-	return value as ReleaseBundleArtifact;
-}
-
 authComponent.registerRoutesLazy(http, createAuth, {
 	cors: true,
 	trustedOrigins: getTrustedOrigins(),
@@ -708,6 +675,141 @@ http.route({
 							projectId,
 							actor: { kind: "repositoryAdapter", id: tokenId },
 						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	path: "/api/repository-adapter/v1/snapshot-uploads",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			const releaseRecordId =
+				body.kind === "release"
+					? (requiredJsonString(
+							body,
+							"releaseRecordId",
+						) as Id<"releaseRecords">)
+					: undefined;
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositorySnapshotSubmit",
+					async ({ projectId, tokenId }) => {
+						if (typeof body.expectedFiles !== "number")
+							throw new ConvexError({
+								code: "VALIDATION",
+								message: "expectedFiles must be a number.",
+							});
+						return await ctx.runMutation(internal.snapshotUploads.begin, {
+							projectId,
+							tokenId,
+							releaseRecordId,
+							repository: requiredJsonString(body, "repository"),
+							commit: requiredJsonString(body, "commit"),
+							expectedFiles: body.expectedFiles,
+							lineage: snapshotLineage(body),
+						});
+					},
+					releaseRecordId ? "export" : "snapshot-submission",
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+http.route({
+	path: "/api/repository-adapter/v1/snapshot-uploads/file",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositorySnapshotUpload",
+					async ({ projectId, tokenId }) =>
+						await uploadFile(ctx, {
+							projectId,
+							tokenId,
+							sessionId: requiredJsonString(
+								body,
+								"sessionId",
+							) as Id<"snapshotUploadSessions">,
+							catalogPath: requiredJsonString(body, "catalogPath"),
+							content: requiredJsonString(body, "content"),
+							contentHash: requiredJsonString(body, "contentHash"),
+						}),
+					body.kind === "release" ? "export" : "snapshot-submission",
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+http.route({
+	path: "/api/repository-adapter/v1/snapshot-uploads/finalize",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositorySnapshotSubmit",
+					async ({ projectId, tokenId }) => {
+						const args = {
+							projectId,
+							tokenId,
+							sessionId: requiredJsonString(
+								body,
+								"sessionId",
+							) as Id<"snapshotUploadSessions">,
+						};
+						return body.kind === "release"
+							? await finalizeReleaseUpload(ctx, args)
+							: await finalizeUpload(ctx, args);
+					},
+					body.kind === "release" ? "export" : "snapshot-submission",
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+http.route({
+	path: "/api/repository-adapter/v1/snapshot-uploads/download",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositorySnapshotUpload",
+					async ({ projectId, tokenId }) =>
+						await downloadReleaseFile(ctx, {
+							projectId,
+							tokenId,
+							sessionId: requiredJsonString(
+								body,
+								"sessionId",
+							) as Id<"snapshotUploadSessions">,
+							catalogPath: requiredJsonString(body, "catalogPath"),
+						}),
+					"export",
 				),
 			);
 		} catch (error) {
@@ -780,7 +882,10 @@ http.route({
 						return {
 							releaseRecord: bundle.releaseRecord,
 							catalogs: bundle.catalogs,
-							changeKeyCount: bundle.changes.length,
+							changeKeyCount:
+								bundle.version === 1
+									? bundle.changes.length
+									: bundle.changeKeyCount,
 						};
 					},
 					"export",
@@ -823,7 +928,7 @@ http.route({
 							context.bundleStorageId,
 							context.bundleHash,
 						);
-						const delivery = applyReleaseBundleToDeliveryTree(bundle, files);
+						const delivery = await applyStoredReleaseTree(ctx, bundle, files);
 						const captureContent = JSON.stringify({
 							version: 1,
 							releaseRecordId: recordId,
