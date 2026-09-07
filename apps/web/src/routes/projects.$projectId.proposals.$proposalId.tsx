@@ -1,3 +1,4 @@
+import { env } from "@blabla/env/web";
 import { Alert, AlertDescription } from "@blabla/ui/components/alert";
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
@@ -13,7 +14,11 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { ArrowLeft, Bot, Check, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-
+import { AgentReviewEvidence } from "@/components/localization/agent-review-evidence";
+import {
+	CandidateReviewDelegation,
+	candidateReviewUrl,
+} from "@/components/localization/candidate-review-delegation";
 import {
 	PageHeader,
 	ProjectShell,
@@ -159,6 +164,14 @@ function ProposalDetailRoute() {
 	const detail = useQuery(api.agentTranslationProposals.getForReview, {
 		proposalId: convexId<"agentTranslationProposals">(proposalId),
 	});
+	const reviewerTokens = useQuery(
+		api.apiTokens.list,
+		detail?.candidates.some(({ reviews }) =>
+			reviews.some((review) => review.reviewer.kind === "agent"),
+		)
+			? { projectId: convexId<"projects">(projectId) }
+			: "skip",
+	);
 	const reviewTaskValue = useMutation(
 		api.agentTranslationProposals.reviewTaskValue,
 	);
@@ -434,7 +447,8 @@ function ProposalDetailRoute() {
 							This task has a frozen {taskScope.localeCode} scope. Give an agent
 							with this project’s read/propose token the task id{" "}
 							<code className="break-all">{proposal._id}</code>. Agent
-							candidates remain inert until you decide them below.
+							candidates remain inert until you or an authorized independent
+							reviewer decide them.
 						</span>
 						{exactBatchRevisionIds.length > 0 ? (
 							<Button
@@ -546,6 +560,11 @@ function ProposalDetailRoute() {
 								</Badge>
 							</CardHeader>
 							<CardContent className="flex flex-col gap-3">
+								<AgentReviewEvidence
+									reviewer={review?.reviewer}
+									authorization={review?.reviewAuthorization}
+									tokens={reviewerTokens}
+								/>
 								<CandidateReviewContext
 									revisionId={revision._id}
 									onContextChange={recordReviewContext}
@@ -556,7 +575,9 @@ function ProposalDetailRoute() {
 											Agent candidate · revision {revision.revision}
 										</div>
 										<p className="whitespace-pre-wrap text-sm">
-											{revision.value}
+											{revision.intentionalBlankReason
+												? `Renders nothing — ${revision.intentionalBlankReason}`
+												: revision.value}
 										</p>
 										<WhitespaceFacts value={revision.value} />
 									</div>
@@ -680,6 +701,24 @@ function ProposalDetailRoute() {
 										</Button>
 									) : null}
 								</div>
+								{!isReviewed ? (
+									<CandidateReviewDelegation
+										revisionId={revision._id}
+										reviewUrl={candidateReviewUrl(
+											env.VITE_CONVEX_SITE_URL,
+											revision._id,
+										)}
+										disabled={
+											!canReview ||
+											reviewBusy ||
+											isDirty ||
+											(blankReasons[revision._id] !== undefined &&
+												blankReasons[revision._id] !==
+													(revision.intentionalBlankReason ?? "")) ||
+											!revisionBasisIsCurrent
+										}
+									/>
+								) : null}
 							</CardContent>
 						</Card>
 					);

@@ -31,6 +31,7 @@ const internalApi = internal;
 type AgentScope = TokenScope;
 type AgentRateLimitName =
 	| "agentRead"
+	| "agentReview"
 	| "agentSearch"
 	| "agentLocaleProposal"
 	| "agentTranslationProposal";
@@ -558,7 +559,10 @@ function agentJson<T>(result: {
 	return json(result.value, 200, result.responseHeaders);
 }
 
-function routeError(error: unknown) {
+function routeError(
+	error: unknown,
+	statusByCode: Partial<Record<string, number>> = {},
+) {
 	const details =
 		error instanceof ConvexError && isRecord(error.data)
 			? error.data
@@ -587,17 +591,19 @@ function routeError(error: unknown) {
 			message,
 		) ||
 		(error instanceof Error && error.name === "UnauthorizedError");
-	const status = isAuthError
-		? 401
-		: code === "CLI_UPGRADE_REQUIRED"
-			? 426
-			: code === "RATE_LIMITED"
-				? 429
-				: code === "REPOSITORY_MISMATCH" || code === "CONFLICT"
-					? 409
-					: code === "LIMIT_EXCEEDED"
-						? 413
-						: 400;
+	const status =
+		(code ? statusByCode[code] : undefined) ??
+		(isAuthError
+			? 401
+			: code === "CLI_UPGRADE_REQUIRED"
+				? 426
+				: code === "RATE_LIMITED"
+					? 429
+					: code === "REPOSITORY_MISMATCH" || code === "CONFLICT"
+						? 409
+						: code === "LIMIT_EXCEEDED"
+							? 413
+							: 400);
 	return json(
 		{
 			error: message,
@@ -1789,6 +1795,91 @@ for (const [path, method] of [
 				410,
 			),
 		),
+	});
+}
+
+for (const method of ["GET", "POST"] as const) {
+	http.route({
+		pathPrefix: "/api/agent/v1/candidate-reviews/",
+		method,
+		handler: httpAction(async (ctx, request) => {
+			try {
+				const candidateRevisionId = new URL(request.url).pathname.slice(
+					"/api/agent/v1/candidate-reviews/".length,
+				);
+				if (!candidateRevisionId || candidateRevisionId.includes("/"))
+					throw new Error("Expected one exact candidate revision ID.");
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						"review",
+						method === "GET" ? "agentRead" : "agentReview",
+						async (token) => {
+							if (method === "GET")
+								return await ctx.runQuery(
+									internalApi.agentTranslationProposals.contextForAgentReview,
+									{
+										token,
+										candidateRevisionId:
+											candidateRevisionId as Id<"agentTranslationCandidateRevisions">,
+									},
+								);
+							const body = await jsonObject(request);
+							const reviewToken = requiredJsonString(body, "reviewToken");
+							const decision = body.decision;
+							if (
+								!decision ||
+								typeof decision !== "object" ||
+								Array.isArray(decision)
+							)
+								throw new Error("Provide an exact accept or reject decision.");
+							if (
+								!("kind" in decision) ||
+								(decision.kind !== "accept" && decision.kind !== "reject")
+							)
+								throw new Error(
+									"Review agents can only accept or reject exact candidate revisions.",
+								);
+							const allowedFields =
+								decision.kind === "reject" ? ["kind", "reason"] : ["kind"];
+							if (
+								Object.keys(decision).some(
+									(key) => !allowedFields.includes(key),
+								)
+							)
+								throw new Error("Review agents cannot edit candidate values.");
+							const reason = "reason" in decision ? decision.reason : undefined;
+							if (reason !== undefined && typeof reason !== "string")
+								throw new Error("Review reason must be a string.");
+							return await ctx.runMutation(
+								internalApi.agentTranslationProposals.reviewCandidateForAgent,
+								{
+									token,
+									candidateRevisionId:
+										candidateRevisionId as Id<"agentTranslationCandidateRevisions">,
+									reviewToken,
+									decision:
+										decision.kind === "accept"
+											? { kind: "accept" }
+											: {
+													kind: "reject",
+													...(reason === undefined ? {} : { reason }),
+												},
+								},
+							);
+						},
+					),
+				);
+			} catch (error) {
+				return routeError(error, {
+					FORBIDDEN: 403,
+					STALE_BASIS: 409,
+					BAD_STATE: 409,
+					NOT_FOUND: 404,
+				});
+			}
+		}),
 	});
 }
 

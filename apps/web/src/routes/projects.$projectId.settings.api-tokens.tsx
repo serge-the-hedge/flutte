@@ -27,6 +27,7 @@ import { Skeleton } from "@blabla/ui/components/skeleton";
 import { cn } from "@blabla/ui/lib/utils";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { Copy, KeyRound, Plus, ShieldCheck, Terminal, X } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
@@ -47,7 +48,7 @@ const scopes = [
 	"export",
 	"snapshot-submission",
 ] as const;
-type TokenScope = (typeof scopes)[number];
+type TokenScope = FunctionArgs<typeof api.apiTokens.create>["scopes"][number];
 const workspaceScopes: TokenScope[] = [
 	"read",
 	"search",
@@ -55,11 +56,8 @@ const workspaceScopes: TokenScope[] = [
 	"export",
 	"snapshot-submission",
 ];
-type ApiToken = {
-	_id: string;
-	name: string;
-	scopes: TokenScope[];
-};
+const reviewerScopes: TokenScope[] = ["read", "review"];
+type ApiToken = FunctionReturnType<typeof api.apiTokens.list>[number];
 
 export const Route = createFileRoute(
 	"/projects/$projectId/settings/api-tokens",
@@ -71,6 +69,10 @@ function ApiTokensRoute() {
 	const { projectId } = useParams({
 		from: "/projects/$projectId/settings/api-tokens",
 	});
+	return <ApiTokensForProject key={projectId} projectId={projectId} />;
+}
+
+function ApiTokensForProject({ projectId }: { projectId: string }) {
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const tokens = useQuery(api.apiTokens.list, { projectId: convexProjectId });
@@ -78,23 +80,29 @@ function ApiTokensRoute() {
 	const revoke = useMutation(api.apiTokens.revoke);
 	const [name, setName] = useState("brickit-workspace");
 	const [selectedScopes, setSelectedScopes] =
-		useState<string[]>(workspaceScopes);
+		useState<TokenScope[]>(workspaceScopes);
 	const [showAdvancedScopes, setShowAdvancedScopes] = useState(false);
+	const [isReviewer, setIsReviewer] = useState(false);
+	const [issuedReviewerToken, setIssuedReviewerToken] = useState(false);
+	const effectiveScopes = isReviewer ? reviewerScopes : selectedScopes;
+	const isOwner = project?.role === "owner";
 	const [rawToken, setRawToken] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
 	const [revokingId, setRevokingId] = useState<string>();
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		if (!isOwner || isCreating) return;
 		setIsCreating(true);
 		try {
 			const result = await createToken({
 				projectId: convexProjectId,
 				name,
-				scopes: selectedScopes as TokenScope[],
+				scopes: effectiveScopes,
 			});
 			setRawToken(result.token);
-			setName("brickit-workspace");
+			setIssuedReviewerToken(isReviewer);
+			setName(isReviewer ? "independent-reviewer" : "brickit-workspace");
 			toast.success("Token created — copy it now");
 		} catch (error) {
 			toast.error(
@@ -153,159 +161,209 @@ function ApiTokensRoute() {
 				description="Project-scoped connections for the local adapter and external agents."
 			/>
 			<div className="flex flex-col gap-4">
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle>Create workspace connection</CardTitle>
-						<CardDescription>
-							Create one connection for this project. It lets local{" "}
-							<code>blabla</code> commands sync source snapshots and deliver
-							reviewed Release Bundles, while agents can propose translations.
-							It cannot push or merge changes by itself.
-						</CardDescription>
-					</CardHeader>
-					<CardContent>
-						<form onSubmit={submit}>
-							<FieldGroup>
-								<Field>
-									<FieldLabel htmlFor="token-name">Name</FieldLabel>
-									<Input
-										id="token-name"
-										name="tokenName"
-										autoComplete="off"
-										value={name}
-										onChange={(event) => setName(event.target.value)}
-										placeholder="agent-ci, translator-bot…"
-									/>
-								</Field>
-								<Field>
-									<FieldLabel>Permissions</FieldLabel>
-									<div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
-										<div className="flex flex-wrap items-center gap-1.5">
-											<span className="font-medium text-xs">
-												Workspace connection
-											</span>
-											{selectedScopes.map((scope) => (
-												<Badge
-													key={scope}
-													variant="secondary"
-													className="font-normal"
-												>
-													{scope}
-												</Badge>
-											))}
-										</div>
-										<Button
-											type="button"
-											size="xs"
-											variant="ghost"
-											onClick={() => setShowAdvancedScopes((value) => !value)}
-										>
-											{showAdvancedScopes ? "Hide advanced" : "Customize"}
-										</Button>
-									</div>
-									{showAdvancedScopes ? (
-										<div className="mt-3 flex flex-wrap gap-3 rounded-md border bg-muted/30 p-3">
-											{scopes.map((scope) => {
-												const id = `scope-${scope}`;
-												const checked = selectedScopes.includes(scope);
-												return (
-													<label
-														key={scope}
-														htmlFor={id}
-														className={cn(
-															"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
-															checked
-																? "border-brand/40 bg-brand/5 text-foreground"
-																: "border-input text-muted-foreground hover:text-foreground",
-														)}
-													>
-														<Checkbox
-															id={id}
-															checked={checked}
-															onCheckedChange={(value) =>
-																setSelectedScopes((current) =>
-																	value
-																		? [...current, scope]
-																		: current.filter((item) => item !== scope),
-																)
-															}
-														/>
-														<span className="capitalize">{scope}</span>
-													</label>
+				{isOwner ? (
+					<Card size="sm">
+						<CardHeader>
+							<CardTitle>Create API token</CardTitle>
+							<CardDescription>
+								Workspace credentials let local commands sync snapshots and
+								deliver reviewed bundles, and agents propose translations.
+								Reviewer credentials belong to a separate agent and only read
+								and review authorized candidates.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<form onSubmit={submit}>
+								<FieldGroup>
+									<Field orientation="horizontal">
+										<Checkbox
+											id="reviewer-token"
+											checked={isReviewer}
+											disabled={isCreating}
+											onCheckedChange={(checked) => {
+												setIsReviewer(checked === true);
+												setRawToken("");
+												setName(
+													checked === true
+														? "independent-reviewer"
+														: "brickit-workspace",
 												);
-											})}
+											}}
+										/>
+										<FieldLabel htmlFor="reviewer-token">
+											Dedicated Reviewer credential
+										</FieldLabel>
+									</Field>
+									{isReviewer ? (
+										<p className="text-muted-foreground text-xs">
+											Give this credential only to a separate reviewer agent. It
+											can read and review authorized candidates, but cannot
+											propose translations, submit snapshots, or deliver
+											changes.
+										</p>
+									) : null}
+									<Field>
+										<FieldLabel htmlFor="token-name">Name</FieldLabel>
+										<Input
+											id="token-name"
+											name="tokenName"
+											autoComplete="off"
+											value={name}
+											onChange={(event) => setName(event.target.value)}
+											placeholder="agent-ci, translator-bot…"
+										/>
+									</Field>
+									<Field>
+										<FieldLabel>Permissions</FieldLabel>
+										<div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+											<div className="flex flex-wrap items-center gap-1.5">
+												<span className="font-medium text-xs">
+													{isReviewer
+														? "Reviewer credential"
+														: "Workspace connection"}
+												</span>
+												{effectiveScopes.map((scope) => (
+													<Badge
+														key={scope}
+														variant="secondary"
+														className="font-normal"
+													>
+														{scope}
+													</Badge>
+												))}
+											</div>
+											{!isReviewer ? (
+												<Button
+													type="button"
+													size="xs"
+													variant="ghost"
+													onClick={() =>
+														setShowAdvancedScopes((value) => !value)
+													}
+												>
+													{showAdvancedScopes ? "Hide advanced" : "Customize"}
+												</Button>
+											) : null}
+										</div>
+										{showAdvancedScopes && !isReviewer ? (
+											<div className="mt-3 flex flex-wrap gap-3 rounded-md border bg-muted/30 p-3">
+												{scopes.map((scope) => {
+													const id = `scope-${scope}`;
+													const checked = selectedScopes.includes(scope);
+													return (
+														<label
+															key={scope}
+															htmlFor={id}
+															className={cn(
+																"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
+																checked
+																	? "border-brand/40 bg-brand/5 text-foreground"
+																	: "border-input text-muted-foreground hover:text-foreground",
+															)}
+														>
+															<Checkbox
+																id={id}
+																checked={checked}
+																onCheckedChange={(value) =>
+																	setSelectedScopes((current) =>
+																		value
+																			? [...current, scope]
+																			: current.filter(
+																					(item) => item !== scope,
+																				),
+																	)
+																}
+															/>
+															<span className="capitalize">{scope}</span>
+														</label>
+													);
+												})}
+											</div>
+										) : null}
+									</Field>
+									<Button
+										type="submit"
+										disabled={
+											!name.trim() || effectiveScopes.length === 0 || isCreating
+										}
+									>
+										<Plus data-icon="inline-start" />
+										{isCreating
+											? "Creating…"
+											: isReviewer
+												? "Create Reviewer token"
+												: "Create workspace connection"}
+									</Button>
+									{rawToken ? (
+										<div className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">
+											<div className="flex items-center justify-between gap-2">
+												<span className="font-medium">
+													Copy this token now — it won't be shown again.
+												</span>
+												<div className="flex items-center gap-1">
+													<Button
+														type="button"
+														size="xs"
+														variant="ghost"
+														onClick={copyToken}
+													>
+														<Copy data-icon="inline-start" />
+														Copy
+													</Button>
+													<Button
+														type="button"
+														size="xs"
+														variant="ghost"
+														onClick={closeToken}
+														aria-label="Close token"
+													>
+														<X data-icon="inline-start" />
+														Close
+													</Button>
+												</div>
+											</div>
+											<pre className="overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px]">
+												{rawToken}
+											</pre>
+											{!issuedReviewerToken ? (
+												<div className="mt-2 flex flex-col gap-2 border-warning/30 border-t pt-2">
+													<span className="font-medium">
+														Connect this machine once
+													</span>
+													<code className="break-all rounded-md bg-background p-2 font-mono text-[11px]">
+														{blablaCommand(
+															`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
+														)}
+													</code>
+													<Button
+														type="button"
+														size="xs"
+														variant="outline"
+														onClick={copyConnectionCommand}
+													>
+														<Terminal data-icon="inline-start" />
+														Copy setup command
+													</Button>
+													<span className="text-muted-foreground">
+														This command contains the secret token. Run it
+														locally; do not paste it into chat or commit it.
+													</span>
+												</div>
+											) : (
+												<p className="mt-2 text-muted-foreground">
+													Configure this token as the separate reviewer agent’s
+													Bearer credential. Keep it out of the translator’s
+													session and leave the local workspace CLI connection
+													unchanged.
+												</p>
+											)}
 										</div>
 									) : null}
-								</Field>
-								<Button
-									type="submit"
-									disabled={
-										!name.trim() || selectedScopes.length === 0 || isCreating
-									}
-								>
-									<Plus data-icon="inline-start" />
-									{isCreating ? "Creating…" : "Create connection"}
-								</Button>
-								{rawToken ? (
-									<div className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">
-										<div className="flex items-center justify-between gap-2">
-											<span className="font-medium">
-												Copy this token now — it won't be shown again.
-											</span>
-											<div className="flex items-center gap-1">
-												<Button
-													type="button"
-													size="xs"
-													variant="ghost"
-													onClick={copyToken}
-												>
-													<Copy data-icon="inline-start" />
-													Copy
-												</Button>
-												<Button
-													type="button"
-													size="xs"
-													variant="ghost"
-													onClick={closeToken}
-													aria-label="Close token"
-												>
-													<X data-icon="inline-start" />
-													Close
-												</Button>
-											</div>
-										</div>
-										<pre className="overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px]">
-											{rawToken}
-										</pre>
-										<div className="mt-2 flex flex-col gap-2 border-warning/30 border-t pt-2">
-											<span className="font-medium">
-												Connect this machine once
-											</span>
-											<code className="break-all rounded-md bg-background p-2 font-mono text-[11px]">
-												{blablaCommand(
-													`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
-												)}
-											</code>
-											<Button
-												type="button"
-												size="xs"
-												variant="outline"
-												onClick={copyConnectionCommand}
-											>
-												<Terminal data-icon="inline-start" />
-												Copy setup command
-											</Button>
-											<span className="text-muted-foreground">
-												This command contains the secret token. Run it locally;
-												do not paste it into chat or commit it.
-											</span>
-										</div>
-									</div>
-								) : null}
-							</FieldGroup>
-						</form>
-					</CardContent>
-				</Card>
+								</FieldGroup>
+							</form>
+						</CardContent>
+					</Card>
+				) : null}
 
 				<Card size="sm">
 					<CardHeader>
@@ -340,8 +398,9 @@ function ApiTokensRoute() {
 							<KeyRound className="size-4" />
 							<AlertTitle>Reviewable changes only</AlertTitle>
 							<AlertDescription>
-								Agent submissions create open tasks. A human still approves and
-								applies them from Translation tasks.
+								Translation credentials create inert candidates. A human decides
+								them, or authorizes a separate reviewer agent through the
+								project setting or an exact-revision delegation.
 							</AlertDescription>
 						</Alert>
 					</CardContent>
@@ -365,7 +424,7 @@ function ApiTokensRoute() {
 				) : (
 					<Card size="sm">
 						<CardContent className="divide-y">
-							{(tokens as ApiToken[]).map((token) => (
+							{tokens.map((token) => (
 								<div
 									key={token._id}
 									className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
@@ -386,16 +445,20 @@ function ApiTokensRoute() {
 											))}
 										</div>
 									</div>
-									<ConfirmAction
-										triggerLabel={
-											revokingId === token._id ? "Revoking…" : "Revoke"
-										}
-										title={`Revoke ${token.name}?`}
-										description="Any agent using this token will immediately lose access. This cannot be undone."
-										confirmLabel="Revoke token"
-										disabled={revokingId !== undefined}
-										onConfirm={() => revokeToken(token)}
-									/>
+									{isOwner && !token.revokedAt ? (
+										<ConfirmAction
+											triggerLabel={
+												revokingId === token._id ? "Revoking…" : "Revoke"
+											}
+											title={`Revoke ${token.name}?`}
+											description="Any agent using this token will immediately lose access. This cannot be undone."
+											confirmLabel="Revoke token"
+											disabled={revokingId !== undefined}
+											onConfirm={() => revokeToken(token)}
+										/>
+									) : token.revokedAt ? (
+										<Badge variant="outline">Revoked</Badge>
+									) : null}
 								</div>
 							))}
 						</CardContent>

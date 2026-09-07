@@ -2,9 +2,10 @@
 
 This app exposes a compact HTTP API for LLM agents working on translations.
 Agents use project-scoped API tokens to discover the accepted Catalog Workspace,
-submit immutable translation candidates, and leave the final value change to a
-human review. Legacy catalog operations are retired; their HTTP addresses return migration
-errors rather than accepting work into a disconnected corpus.
+submit immutable translation candidates, and leave the final value change to
+a human or an explicitly authorized independent Reviewer Agent. Legacy catalog
+operations are retired; their HTTP addresses return migration errors rather than
+accepting work into a disconnected corpus.
 
 Use this document as the canonical workflow guide for translation agents.
 
@@ -31,10 +32,11 @@ failure.
 2. Go to **Settings -> API tokens**.
 3. Create a project-scoped token with the minimum scopes:
    - Translation agents: `read`, `search`, `propose`.
+   - Independent Reviewer Agents: `read`, `review`, using a separate credential.
    - Local Repository Adapter delivery: `export`.
-   - The default workspace connection includes those scopes plus
-     `snapshot-submission`, so one stored token supports the complete local
-     workflow.
+   - The default workspace connection has `read`, `search`, `propose`, `export`,
+     and `snapshot-submission` for the complete local workflow. It never has
+     `review`; the Reviewer Agent uses a separate credential.
 4. Copy the raw token immediately. The app stores only a hash and cannot show
    the raw value again.
 5. Give agents the site base URL and token:
@@ -75,8 +77,9 @@ intentionally one-time visible.
    was the exact candidate, a human edit, or an explicit keep on a newer Source
    basis. Re-saving an already reviewed field appends immutable human review
    evidence. Rejection and Intentional Blank remain explicit decisions. Only an
-   editor save changes the Catalog Workspace or new-Locale draft.
-6. Report a value as **proposed** until the human review succeeds. The API
+   editor save or authorized independent agent acceptance changes the Catalog
+   Workspace or new-Locale draft.
+6. Report a value as **proposed** until authorized review succeeds. The API
    never claims that an agent submission is live.
 
 The authenticated Proposals workbench is at `/projects/:projectId/proposals`.
@@ -108,7 +111,8 @@ changes the working catalog.
    `/projects/:projectId/proposals/:taskId`. It mounts the same new-Locale
    workbench as the lower-level Portuguese route. Agent values remain awaiting
    review; corrections append immutable candidate revisions while the newest
-   revision becomes current. Only human-applied values can finalize.
+   revision becomes current. Only human-applied or explicitly authorized
+   agent-reviewed values can finalize.
 
 The `/locale-proposals/pt` endpoints remain available as a lower-level
 compatibility interface for clients that need explicit fingerprints,
@@ -129,6 +133,46 @@ Discover Locale codes through `/projects/current` and message identifiers throug
 `/workspace/search` or `/workspace/work`. Use a new-Locale Translation Task for
 the configured Portuguese introduction; other new Locales require project setup.
 
+## Independent Reviewer Agent workflow
+
+Human review is the default. Read [Agent Review](agent-review.md) for the full
+permission and evidence contract. A project owner can enable agent review for
+the project; alternatively, an editor can delegate the exact candidate revision
+to the named reviewer. Use a dedicated Reviewer token assigned to a separate agent;
+do not pass both translation and reviewer credentials to one agent.
+
+1. Get the candidate revision's review URL from the human review workbench.
+2. Read `GET /candidate-reviews/:revisionId` using the reviewer token. A
+   `kind: "candidate"` response contains Source, current target, candidate text,
+   blank reasons, basis status, authorization, and an opaque `reviewToken`.
+   Inspect these facts. A `kind: "recordedReview"` response instead contains
+   `latestReview`: the recorded decision, actual reviewer, authorization,
+   timestamp, and any final value fingerprint. It has no `reviewToken` and
+   requires no new decision.
+3. Submit `POST /candidate-reviews/:revisionId` with the returned opaque
+   `reviewToken` and a decision, for example:
+
+   ```json
+   { "reviewToken": "<from GET>", "decision": { "kind": "accept" } }
+   ```
+
+   To reject, use `{ "kind": "reject", "reason": "Explain the defect" }`.
+   Acceptance applies exact candidate bytes; it cannot supply an edited value.
+   An Intentional Blank must already have its reason in the candidate.
+4. If Source, target, candidate, prior review, or authority changed, fetch fresh
+   context and reassess it. Do not reuse the prior verdict automatically.
+5. Report the recorded review result. Rejection leaves the live value unchanged;
+   acceptance records the reviewer identity and human authorization. The reviewer
+   credential cannot finalize proposals, build releases, or deliver to Git. If a
+   response was lost, read the same URL to inspect its latest review result.
+
+Revoking a token blocks its future requests. Disabling project agent review
+stops reviews authorized by that setting; a separate active per-revision grant
+can still authorize its named reviewer. Completed evidence remains valid after
+later revocation. With current access, recorded results remain readable after
+candidate supersession, target removal, or Locale Proposal finalization; they do
+not depend on a currently editable target.
+
 ## Translation Rules
 
 - Preserve ICU syntax, placeholder names, interpolation markers, whitespace that
@@ -143,13 +187,17 @@ the configured Portuguese introduction; other new Locales require project setup.
   already reviewed values unless the task explicitly calls for further edits.
 - Keep each existing-Locale Translation Task focused on at most 32 selected
   messages. Submit at most 16 candidates per request.
-- Report candidates as proposed until a human saves the review in the task.
+- Report candidates as proposed until a human or authorized independent reviewer
+  accepts them. A translation credential cannot review its own work.
 
 ## Scopes
 
 - `read`: project metadata, workspace context, and task/proposal reads.
 - `search`: workspace search and work discovery.
 - `propose`: Translation Task and candidate creation; it cannot apply values.
+- `review`: independent exact candidate acceptance or rejection, subject to human
+  authorization. It cannot coexist with `propose`, `export`, or
+  `snapshot-submission` on a token.
 - `export`: immutable Release Bundle delivery through the local Repository
   Adapter; it does not grant a remote Git write.
 - `snapshot-submission`: repository snapshot submission through the local adapter.
@@ -194,12 +242,12 @@ hydrates full values only for matches.
 This is the discovery seam for claims such as “all missing translations.” Use
 `GET /workspace/search` for open-ended terminology and similar-key lookup. A
 queue item remains evidence of work to inspect, not permission to overwrite it;
-the agent still submits an inert Translation Task candidate for human review.
+the translator still submits an inert Translation Task candidate for authorized review.
 
 For a complete repair run, page one `localeCode` at a time. Create one
 Translation Task from each non-empty page, use `POST /workspace/context` to read
 the same keys across the established Locales, and submit candidates to that
-task. Do not interleave human acceptance with the initial discovery pass. After
+task. Do not interleave review acceptance with the initial discovery pass. After
 review, restart the queue from its first page and require an empty result before
 claiming the selected reasons are exhausted; this catches work invalidated or
 introduced while the run was open.
@@ -308,7 +356,7 @@ to discover and resume work instead of guessing task ids or creating duplicates.
 Returns a bounded page of the task (`limit` 1–16) and a `nextCursor`, which is
 `null` on the final page. Pass that cursor unchanged until it is `null`.
 Existing-Locale targets come from their frozen selection but resolve exact
-Source and current human-applied target text when each page is read. A Source
+Source and current reviewed target text when each page is read. A Source
 Proposal or target edit therefore updates the existing task rather than making
 the entire key selection obsolete. New-Locale targets page the complete pinned
 Source template. A new-Locale target also returns its current immutable
@@ -340,13 +388,14 @@ copy internal basis facts. The explicit shape is:
 
 The original `{ "messageId", "value" }` item remains readable for compatibility.
 An Intentional Blank candidate and its reason remain inert, cannot be exact-batch
-accepted, and must be confirmed individually by a human.
+accepted, and must be accepted individually by a human or authorized independent
+reviewer, preserving its reason.
 
 An exact retry is safe. A correction appends an immutable revision and makes it
 the candidate's current revision. A changed Source or target basis also creates
 a new immutable revision even when the proposed target text is unchanged. The
 server derives existing-Locale revision idempotency and new-Locale Source
-fingerprints from task-owned evidence. Candidates remain inert until an editor
+fingerprints from task-owned evidence. Candidates remain inert until a human or authorized independent agent
 reviews them. Existing-Locale review is in Translation Tasks; new-Locale review
 is in the configured Locale Proposal workbench mounted by the task route. Both
 task kinds can accept up to 16 exact current revisions atomically; stale
@@ -407,7 +456,7 @@ proposal with a Locale target:
 Its candidate basis carries the pinned `localeProposalId`, `snapshotId`, and
 source fingerprint instead of a mutable target Locale id. The candidate is
 reviewed in the same Proposals workbench; accepting it updates the staged
-Locale Proposal as a human-authored value, while rejecting it leaves no active
+Locale Proposal with the actual reviewer and authorization, while rejecting it leaves no active
 catalog change. The configured locale adapter is Portuguese today, but this
 candidate/review contract is intentionally independent of that code.
 
@@ -433,7 +482,7 @@ stored items, `retired: true`, and a migration explanation. It does not return a
 review link or apply those items to the Catalog Workspace. Historical tables
 and import/export job evidence remain stored; their old Convex writers have
 been removed. For pending historic work, read its values and submit a new task
-against the current Workspace basis for human review.
+against the current Workspace basis for authorized review.
 
 ### Portuguese Locale Proposal endpoints
 
@@ -494,7 +543,7 @@ Body:
 
 Derives `intl_pt.arb` from the pinned Source Snapshot and all staged values. A
 complete successful result becomes `ready` only after every agent-authored
-value has been human-reviewed. A failed result exposes an actionable
+value has been reviewed by a human or authorized independent reviewer. A failed result exposes an actionable
 diagnostic sample and persists it on the proposal.
 
 #### `GET /locale-proposals/pt/artifact?proposalId=...`

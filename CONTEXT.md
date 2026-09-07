@@ -53,8 +53,8 @@ _Avoid_: string, translation row
 
 **Target Value**:
 The content one target Locale currently renders for a Catalog Message, together
-with the Source Fingerprint it answers. Presence, validity, and human
-confirmation are independent facts about it.
+with the Source Fingerprint it answers. Presence, validity, and Translator
+Confirmation are independent facts about it.
 _Avoid_: translation status, translated string
 
 **Baseline Snapshot**:
@@ -122,7 +122,7 @@ _Avoid_: runtime fallback, compatibility alias
 **Locale Proposal**:
 A Blabla-authored candidate to add one target Locale and its complete Catalog
 Document, pinned to a Source Snapshot and carrying its Runtime Locale Mapping.
-An agent's Candidate Values can contribute only through human review; a ready
+An agent's Candidate Values can contribute only through authorized review; a ready
 artifact is delivery evidence, not an activation or a second approval stage.
 It remains a proposal until a Repository Adapter delivers it under developer
 Git credentials and a later Source Snapshot establishes its Locale Binding; it
@@ -213,9 +213,19 @@ _Avoid_: source snapshot, new key, separate pull request
 **Agent Translation Proposal**:
 A durable agent-authored collection of Candidate Values for either existing
 Catalog Workspace targets or one Locale Proposal, never both. It records its
-agent provenance and basis, but changes neither target until a human reviews a
-candidate through that target's own workflow.
+agent provenance and basis, but changes neither target until a person or an
+authorized independent Reviewer Agent reviews a candidate through that target's
+own workflow.
 _Avoid_: Change Set, direct edit, automatic translation
+
+**Reviewer Agent**:
+An agent assigned to review another agent's exact Candidate Value revision. Human
+review is the default. A project owner may enable agent review for the project,
+or an editor may authorize a named reviewer for one revision. The reviewer uses
+a separate credential that cannot submit translations; every review records its
+real agent identity and the human authorization. A translation agent cannot
+review its own work. See [Agent Review](docs/agent-review.md).
+_Avoid_: self-review, automatic approval, human reviewer
 
 **Candidate Value**:
 A durable proposed target value inside an Agent Translation Proposal, tied to
@@ -250,11 +260,12 @@ creating another one.
 _Avoid_: new string, Unconfirmed Import, recent key
 
 **First Review**:
-The first deliberate human decision for one target Locale of an Introduced
-Message: confirm, edit and save, accept a reviewed candidate, or record an
-Intentional Blank. It cannot be supplied by an agent or an ordinary-import
-batch, and later content changes remain governed by Translator Confirmation and
-Source Fingerprints.
+The first deliberate authorized decision for one target Locale of an Introduced
+Message: a human confirms, edits and saves, accepts a candidate, or records an
+Intentional Blank; an authorized independent Reviewer Agent may also accept an
+exact candidate, including its reasoned blank. Agent submission and ordinary-import
+batches never supply First Review. Later content changes remain governed by
+Translator Confirmation and Source Fingerprints.
 _Avoid_: automatic approval, bootstrap confirmation, translation presence
 
 **Release Scope**:
@@ -365,7 +376,8 @@ _Avoid_: translation completeness, content omission
 The mechanical reshaping of an existing target value to fit a changed Source
 Contract, applied automatically wherever it loses nothing. It preserves
 deliverability rather than currency, so it never updates a Source Fingerprint
-and a transformed value stays stale until a human writes it.
+and a transformed value stays stale until an authorized edit or candidate
+acceptance establishes its current Source basis.
 _Avoid_: rebase, migration, auto-translation
 
 **Translation Residue**:
@@ -549,11 +561,12 @@ it is therefore one of the two findings shown at rest.
 _Avoid_: example value, sample data, placeholder value
 
 **Translator Confirmation**:
-The stored record that a human working in Blabla affirmed an exact target value
-against an exact Source Contract: key, Locale, value fingerprint, and Source
+The stored record that a person or an authorized independent Reviewer Agent
+affirmed an exact target value against an exact Source Contract: key, Locale, value fingerprint, and Source
 Fingerprint. It is written by the same gesture that saves an edit or accepts a
 Candidate Value, so confirming an untouched value costs no more than editing
-one. An agent submission never writes it. A later content or source change does
+one. Agent submissions never write it; authorized agent acceptance records the
+reviewer identity and human authorization. A later content or source change does
 not erase the record; it remains historical evidence but stops applying until
 both fingerprints match again.
 _Avoid_: reviewer sign-off, approval step, translated flag

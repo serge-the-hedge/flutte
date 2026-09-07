@@ -7,8 +7,9 @@ import {
 	createBackend,
 	createProject,
 } from "../test/support";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { AgentReviewAuthorization } from "./agentReviewModel";
 
 async function ingestSourceBaseline(
 	user: AuthenticatedBackend,
@@ -268,11 +269,308 @@ async function portugueseArtifact(
 	);
 }
 
+/** Exercise the Locale adapter after the shared review module has authenticated
+ * an independent reviewer. Public authorization itself is covered by its suite. */
+async function authorizedLocaleReviewFixture(
+	t: Backend,
+	includeRawValue = false,
+) {
+	const user = await authenticatedBackend(t, "authorized-locale-owner");
+	const projectId = await createProject(user);
+	await ingestSourceBaseline(user, projectId, {
+		content: JSON.stringify({
+			"@@locale": "en",
+			welcome: "Welcome",
+			...(includeRawValue ? { raw: "Raw" } : {}),
+		}),
+	});
+	const { token, tokenId: translatorTokenId } = await proposalToken(
+		user,
+		projectId,
+	);
+	const { tokenId: reviewerTokenId } = await user.mutation(
+		api.apiTokens.create,
+		{
+			projectId,
+			name: "Independent reviewer",
+			scopes: ["read", "review"],
+		},
+	);
+	const task = await user.mutation(api.agentTranslationProposals.createTask, {
+		projectId,
+		title: "Portuguese review",
+		target: { kind: "newLocale", localeCode: "pt" },
+		scope: { kind: "completeCatalog" },
+	});
+	await successfulJson(
+		await agentRequest(
+			t,
+			token,
+			`/api/agent/v1/translation-tasks/${task.taskId}/candidates`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					items: [{ messageId: "welcome", value: "Bem-vindo" }],
+				}),
+			},
+		),
+	);
+	const revision = await t.run((ctx) =>
+		ctx.db
+			.query("agentTranslationCandidateRevisions")
+			.withIndex("by_proposal", (q) => q.eq("proposalId", task.taskId))
+			.unique(),
+	);
+	if (revision?.basis.kind !== "localeProposal")
+		throw new Error("Expected Locale candidate");
+	const proposalId = revision.basis.localeProposalId;
+	const reviewAuthorization: AgentReviewAuthorization = {
+		kind: "projectPolicy",
+		policyRevision: 1,
+		reviewerTokenId,
+		candidateRevisionId: revision._id,
+		authorizedByUserId: "authorized-locale-owner",
+		authorizedAt: 100,
+	};
+	await t.mutation(internal.localeProposals.applyReviewedValue, {
+		projectId,
+		proposalId,
+		messageId: revision.messageId,
+		sourceSnapshotId: revision.basis.snapshotId,
+		sourceFingerprint: revision.basis.sourceFingerprint,
+		candidateValueFingerprint: revision.valueFingerprint,
+		acceptedValue: revision.value,
+		decision: { kind: "accept" },
+		reviewer: { kind: "agent", id: reviewerTokenId },
+		reviewAuthorization,
+	});
+	await t.run((ctx) =>
+		ctx.db.patch(projectId, {
+			agentReviewPolicy: {
+				enabled: false,
+				revision: 2,
+				updatedByUserId: "authorized-locale-owner",
+				updatedAt: 101,
+			},
+		}),
+	);
+	return {
+		user,
+		projectId,
+		proposalId,
+		taskId: task.taskId,
+		token,
+		translatorTokenId,
+		reviewAuthorization,
+		revision,
+	};
+}
+
 describe("Portuguese Locale Proposals through the Agent API", () => {
 	let t: Backend;
 
 	beforeEach(() => {
 		t = createBackend();
+	});
+
+	test("authorized independent review retains provenance and can finalize after policy is disabled", async () => {
+		const { user, projectId, proposalId, taskId, reviewAuthorization } =
+			await authorizedLocaleReviewFixture(t);
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId,
+			taskId,
+			focus: "all",
+			limit: 16,
+		});
+		expect(page?.pendingReview).toEqual({ count: 0, hasMore: false });
+		expect(page?.messages[0]).toMatchObject({
+			value: {
+				value: "Bem-vindo",
+				updatedBy: { kind: "agent", id: reviewAuthorization.reviewerTokenId },
+				reviewAuthorization,
+			},
+		});
+		const storedReview = await t.run((ctx) =>
+			ctx.db
+				.query("localeProposalValueReviews")
+				.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+				.unique(),
+		);
+		expect(storedReview?.reviewAuthorization).toEqual(reviewAuthorization);
+		await expect(
+			user.action(api.localeProposals.finalizeForReview, {
+				projectId,
+				proposalId,
+			}),
+		).resolves.toMatchObject({ status: "ready" });
+	});
+
+	test("continuation carries approved agent evidence, skips raw submissions, and keeps its reviewed queue state", async () => {
+		const { user, projectId, proposalId, token, reviewAuthorization } =
+			await authorizedLocaleReviewFixture(t, true);
+		const template = await portugueseTemplate(t, token, proposalId);
+		const raw = template.messages.find((message) => message.id === "raw");
+		if (!raw) throw new Error("Expected raw source");
+		await successfulJson(
+			await stagePortugueseValues(t, token, proposalId, [
+				{
+					messageId: "raw",
+					value: "Sem revisão",
+					sourceFingerprint: raw.sourceFingerprint,
+				},
+			]),
+		);
+		await ingestSourceBaseline(user, projectId, {
+			commit: "next",
+			content: JSON.stringify({
+				"@@locale": "en",
+				welcome: "Welcome",
+				raw: "Raw",
+			}),
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+		});
+		const carried = await user.action(
+			api.localeProposals.carryForwardForReview,
+			{ projectId, proposalId },
+		);
+		expect(carried).toMatchObject({
+			carriedValueCount: 1,
+			remainingValueCount: 1,
+		});
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId: carried.localeProposalId,
+			focus: "all",
+			limit: 16,
+		});
+		expect(page?.pendingReview).toEqual({ count: 0, hasMore: false });
+		expect(
+			page?.messages.find((message) => message.messageId === "welcome"),
+		).toMatchObject({
+			facts: { state: "reviewed" },
+			value: { value: "Bem-vindo", reviewAuthorization },
+		});
+		expect(
+			page?.messages.find((message) => message.messageId === "raw"),
+		).toMatchObject({ value: null });
+	});
+
+	test("raw retries preserve reviewed exact content, while replacements require review again", async () => {
+		const {
+			user,
+			projectId,
+			proposalId,
+			token,
+			taskId,
+			revision,
+			reviewAuthorization,
+		} = await authorizedLocaleReviewFixture(t);
+		const stage = (value: string) =>
+			stagePortugueseValues(t, token, proposalId, [
+				{
+					messageId: "welcome",
+					value,
+					sourceFingerprint: revision.basis.sourceFingerprint,
+				},
+			]);
+		await successfulJson(await stage(revision.value));
+		const read = () =>
+			t.run((ctx) =>
+				ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+					.unique(),
+			);
+		expect((await read())?.reviewAuthorization).toEqual(reviewAuthorization);
+		await successfulJson(await stage("Outra tradução"));
+		expect((await read())?.reviewAuthorization).toBeUndefined();
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId,
+			taskId,
+			focus: "awaiting",
+			limit: 16,
+		});
+		expect(page?.pendingReview).toEqual({ count: 1, hasMore: false });
+		await expect(
+			user.action(api.localeProposals.finalizeForReview, {
+				projectId,
+				proposalId,
+			}),
+		).rejects.toThrow("needs human or authorized independent-agent review");
+	});
+
+	test("a new reviewed revision reapplies recurring bytes instead of reusing an unrelated prior application", async () => {
+		const {
+			user,
+			projectId,
+			proposalId,
+			token,
+			revision,
+			reviewAuthorization,
+		} = await authorizedLocaleReviewFixture(t);
+		await successfulJson(
+			await stagePortugueseValues(t, token, proposalId, [
+				{
+					messageId: "welcome",
+					value: "Different staged text",
+					sourceFingerprint: revision.basis.sourceFingerprint,
+				},
+			]),
+		);
+		const submitted = await t.mutation(
+			internal.agentTranslationProposals.submitRevisions,
+			{
+				token,
+				proposalId: revision.proposalId,
+				items: [
+					{
+						messageId: "welcome",
+						value: revision.value,
+						basis: revision.basis,
+						clientRevisionKey: "recurring-bytes",
+						expectedCandidateRevision: revision.revision,
+					},
+				],
+			},
+		);
+		const nextId = submitted.revisions[0]?.revisionId;
+		if (!nextId || revision.basis.kind !== "localeProposal")
+			throw new Error("Expected recurring candidate");
+		const nextAuthorization = {
+			...reviewAuthorization,
+			candidateRevisionId: nextId,
+		};
+		await t.mutation(internal.localeProposals.applyReviewedValue, {
+			projectId,
+			proposalId,
+			messageId: "welcome",
+			sourceSnapshotId: revision.basis.snapshotId,
+			sourceFingerprint: revision.basis.sourceFingerprint,
+			candidateValueFingerprint: revision.valueFingerprint,
+			acceptedValue: revision.value,
+			decision: { kind: "accept" },
+			reviewer: { kind: "agent", id: reviewAuthorization.reviewerTokenId },
+			reviewAuthorization: nextAuthorization,
+		});
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId,
+			limit: 16,
+		});
+		expect(page?.messages[0]).toMatchObject({
+			value: { value: revision.value, reviewAuthorization: nextAuthorization },
+			review: { reviewAuthorization: nextAuthorization },
+		});
+		const reviews = await t.run((ctx) =>
+			ctx.db
+				.query("localeProposalValueReviews")
+				.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+				.collect(),
+		);
+		expect(reviews).toHaveLength(2);
+		expect(reviews[0]?.reviewAuthorization).toEqual(reviewAuthorization);
 	});
 
 	test("resumes one current Portuguese proposal without creating a Locale", async () => {
@@ -674,7 +972,7 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 			limit: 16,
 		});
 		expect(awaitingReview?.proposal.progress.remaining).toBe(0);
-		expect(awaitingReview?.pendingHumanReview).toEqual({
+		expect(awaitingReview?.pendingReview).toEqual({
 			count: 1,
 			hasMore: false,
 		});

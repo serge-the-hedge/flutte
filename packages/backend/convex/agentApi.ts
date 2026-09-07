@@ -5,11 +5,13 @@ import {
 	type MutationCtx,
 	type QueryCtx,
 } from "./_generated/server";
+import { isReviewOnlyToken } from "./agentReviewModel";
 import { hashToken } from "./apiTokens";
 import { assertProjectExists } from "./permissions";
 
 const scopeValidator = v.union(
 	v.literal("read"),
+	v.literal("review"),
 	v.literal("search"),
 	v.literal("propose"),
 	v.literal("export"),
@@ -19,7 +21,13 @@ const scopeValidator = v.union(
 async function authenticate(
 	ctx: QueryCtx | MutationCtx,
 	rawToken: string,
-	scope: "read" | "search" | "propose" | "export" | "snapshot-submission",
+	scope:
+		| "read"
+		| "search"
+		| "review"
+		| "propose"
+		| "export"
+		| "snapshot-submission",
 ) {
 	const tokenHash = await hashToken(rawToken);
 	const token = await ctx.db
@@ -29,7 +37,8 @@ async function authenticate(
 	if (
 		!token ||
 		token.revokedAt !== undefined ||
-		!token.scopes.includes(scope)
+		!token.scopes.includes(scope) ||
+		(token.scopes.includes("review") && !isReviewOnlyToken(token.scopes))
 	) {
 		throw new ConvexError({
 			code: "UNAUTHORIZED",

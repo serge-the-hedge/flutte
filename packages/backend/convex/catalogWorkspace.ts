@@ -4,6 +4,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./_generated/server";
 import {
+	type AgentReviewAuthorization,
+	isHumanOrAuthorizedReview,
+} from "./agentReviewModel";
+import {
 	activeProjectionFor,
 	activeWorkingCatalog,
 	MAX_WORKING_CATALOG_ROWS,
@@ -71,6 +75,7 @@ type CatalogWorkspaceValueHeadInput = {
 	revision: number;
 	reconciliationGeneration: number;
 	updatedBy: Actor;
+	reviewAuthorization?: AgentReviewAuthorization;
 	updatedAt: number;
 };
 type CatalogWorkspaceDecisionBasis = {
@@ -79,6 +84,7 @@ type CatalogWorkspaceDecisionBasis = {
 	sourceFingerprint: string;
 	valueFingerprint: string;
 	recordedBy: Actor;
+	reviewAuthorization?: AgentReviewAuthorization;
 	recordedAt: number;
 };
 type CatalogWorkspaceDecisionRecordInput =
@@ -102,6 +108,9 @@ function valueHeadByteLength(head: CatalogWorkspaceValueHeadInput): number {
 		revision: head.revision,
 		reconciliationGeneration: head.reconciliationGeneration,
 		updatedBy: head.updatedBy,
+		...(head.reviewAuthorization
+			? { reviewAuthorization: head.reviewAuthorization }
+			: {}),
 		updatedAt: head.updatedAt,
 	});
 }
@@ -117,6 +126,9 @@ function decisionRecordByteLength(
 		valueFingerprint: head.valueFingerprint,
 		...(head.kind === "intentionalBlank" ? { reason: head.reason } : {}),
 		recordedBy: head.recordedBy,
+		...(head.reviewAuthorization
+			? { reviewAuthorization: head.reviewAuthorization }
+			: {}),
 		recordedAt: head.recordedAt,
 	});
 }
@@ -386,7 +398,10 @@ async function upsertValueHead(
 		});
 	}
 	if (input.previous) {
-		await ctx.db.patch(input.previous._id, input.next);
+		await ctx.db.patch(input.previous._id, {
+			...input.next,
+			reviewAuthorization: input.next.reviewAuthorization,
+		});
 	} else {
 		await ctx.db.insert("catalogWorkspaceValueHeads", {
 			projectId: input.projectId,
@@ -776,10 +791,17 @@ export async function applyAgentTargetValue(
 		expectedGitValueRevision: number;
 		expectedWorkspaceRevision: number;
 		expectedSourceFingerprint: string;
-		actor: { kind: "user"; id: string };
+		actor: { kind: "user" | "agent"; id: string };
+		reviewAuthorization?: AgentReviewAuthorization;
 		intentionalBlankReason?: string;
 	},
 ): Promise<{ workspaceRevision: number }> {
+	if (!isHumanOrAuthorizedReview(input.actor, input.reviewAuthorization)) {
+		throw new ConvexError({
+			code: "FORBIDDEN",
+			message: "Agent application requires explicit review authorization.",
+		});
+	}
 	if (
 		!Number.isSafeInteger(input.expectedGitValueRevision) ||
 		input.expectedGitValueRevision < 0 ||
@@ -953,6 +975,7 @@ export async function applyAgentTargetValue(
 		revision: nextRevision,
 		reconciliationGeneration: state?.reconciliationGeneration ?? 0,
 		updatedBy: input.actor,
+		reviewAuthorization: input.reviewAuthorization,
 		updatedAt: timestamp,
 	};
 	await upsertValueHead(ctx, {
@@ -966,6 +989,7 @@ export async function applyAgentTargetValue(
 		localeId: input.localeId,
 		sourceFingerprint: effectiveSource.sourceFingerprint,
 		recordedBy: input.actor,
+		reviewAuthorization: input.reviewAuthorization,
 		recordedAt: timestamp,
 		valueFingerprint,
 	};
