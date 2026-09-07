@@ -13,7 +13,7 @@ void main() {
     // Refuse the permission change if secret bytes are already visible outside
     // their containing directory. The child uses a deliberately permissive umask.
     await wrapper.writeAsString(r'''#!/bin/sh
-if [ -s "$2" ]; then
+if [ -f "$2" ] && [ -s "$2" ]; then
   parent=$(dirname "$2")
   if [ "$(uname)" = Darwin ]; then
     mode=$(stat -f '%Lp' "$parent")
