@@ -12,6 +12,7 @@ import { Skeleton } from "@blabla/ui/components/skeleton";
 import { cn } from "@blabla/ui/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
+	BookOpen,
 	Bot,
 	ChevronLeft,
 	KeyRound,
@@ -57,6 +58,11 @@ const navGroups: NavGroup[] = [
 	{
 		label: "Settings",
 		items: [
+			{
+				label: "Translation guidance",
+				to: "/projects/$projectId/settings/guidance",
+				icon: BookOpen,
+			},
 			{
 				label: "API tokens",
 				to: "/projects/$projectId/settings/api-tokens",

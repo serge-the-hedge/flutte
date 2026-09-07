@@ -13,7 +13,8 @@ when a product decision changes.
 | Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
-| Dictionary and explained Source Echoes | Planned; current UI only observes source-identical text |
+| Dictionary and Locale voice guidance | Human authoring, immutable citations, and bounded agent reads implemented; Dictionary Conflict and explained Source Echo observations remain planned |
+| Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | MCP adapter | Planned; HTTP is the supported agent transport |
 
 Charted by [Wayfinder: Make Blabla Brickit's trusted localization control
@@ -462,9 +463,10 @@ preview nor its confirmation mutation can start against an incomplete index.
 **Search is one box over all six Locales plus key, run client-side as a
 substring scan.** No language selector. It filters in place, in Catalog Order,
 and never ranks — a substring scan produces no honest relevance signal. An index
-cannot do this job: `searchText` indexes no value text today, and Convex's
-tokenizer cannot search Chinese at all, since 1,180 of 1,424 `zh` values contain
-no space. Code Area and tag are deliberately not copied into the compact
+cannot preserve these semantics: the retired `searchText` index contains no
+value text, and native Convex tokenization misses internal terms in unspaced
+Chinese. A real-backend fixture evaluation found only 10 of 122 literal usages
+of `积木`; see the [native search evaluation](../../reports/native-convex-search-evaluation-2026-09-07.md). Code Area and tag are deliberately not copied into the compact
 Navigation read: they are derived Code Context and mutable metadata, and belong
 to a separate bounded context/scope read when that contract is implemented.
 
@@ -635,15 +637,24 @@ entry (one definition plus a rendering per Locale). [Decide the disposition of
 imported source-identical
 values](https://github.com/serge-the-hedge/flutte/issues/22)
 
-It does exactly two things: it silences a **Source Echo**, and it flags a
-**Dictionary Conflict**. No suggestions, no autocomplete, no enforcement.
-Neither observation ever blocks.
+It supplies explicit wording guidance to translators and independent reviewers.
+Its planned derived observations silence a **Source Echo** and flag a
+**Dictionary Conflict**; those observations are not implemented yet. There is no
+automatic term promotion, autocomplete, or release enforcement.
 
 An entry silences an echo only when declared terms account for the value's whole
 translatable content, after setting aside placeholders and punctuation. Terms
 match **case-sensitively**. **It starts empty and nothing is seeded** — the
 eleven all-Locale-identical keys include `Start`, which is plainly untranslated
 in Russian, and auto-seeding would write that bug in as a permanent excuse.
+
+Editors maintain Dictionary entries and per-Locale **Voice Guides** in project
+settings. Both start empty and retain immutable authored revisions when changed
+or removed. A Voice Guide states audience, tone and editorial conventions with
+curated bilingual examples; catalog frequency never creates one automatically.
+Agents receive applicable rules once per bounded context request, with citations.
+Reviewer context binds its guidance revision so changed human guidance requires
+fresh assessment. These reads do not give agents authoring or release powers.
 
 A **Source Echo** is derived and never stored: recomputed whenever either value
 changes, never cleared by a human saving the value, and independent of how the

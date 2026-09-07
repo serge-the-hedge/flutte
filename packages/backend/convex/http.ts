@@ -4,7 +4,8 @@ import { ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
-import type { TranslationWorkReason } from "./agentTranslationProposals";
+import type { TranslationWorkReason } from "./agentRetrieval";
+
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
 import { resend } from "./emails";
 import { sha256Hex, type TokenScope } from "./lib";
@@ -24,6 +25,22 @@ import {
 	applyReleaseBundleToDeliveryTree,
 	type ReleaseBundleArtifact,
 } from "./releaseBundleModel";
+
+function searchChoice<T extends string>(
+	params: URLSearchParams,
+	name: string,
+	choices: readonly T[],
+): T | undefined {
+	const raw = params.get(name);
+	if (raw === null) return undefined;
+	const value = choices.find((choice) => choice === raw);
+	if (value === undefined)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: `Invalid ${name} search option.`,
+		});
+	return value;
+}
 
 const http = httpRouter();
 const internalApi = internal;
@@ -435,12 +452,50 @@ function readToken(request: Request): string {
 	return token;
 }
 
+/** The CLI compatibility floor applies only to repository delivery clients. */
+async function cliResponseHeaders(
+	ctx: ActionCtx,
+	request: Request,
+	projectId: Id<"projects">,
+): Promise<Record<string, string>> {
+	const compatibility = await ctx.runQuery(
+		internalApi.agentApi.cliCompatibility,
+		{ projectId },
+	);
+	const protocolHeader = request.headers.get("X-Blabla-CLI-Protocol");
+	const protocol = protocolHeader === null ? undefined : Number(protocolHeader);
+	if (
+		compatibility.minimumProtocol !== undefined &&
+		(protocol === undefined ||
+			!Number.isSafeInteger(protocol) ||
+			protocol < compatibility.minimumProtocol)
+	) {
+		throw new ConvexError({
+			code: "CLI_UPGRADE_REQUIRED",
+			message: `Blabla requires CLI protocol ${compatibility.minimumProtocol}. Install a compatible Blabla CLI and retry.`,
+		});
+	}
+	return {
+		...(compatibility.minimumVersion === undefined
+			? {}
+			: { "X-Blabla-Minimum-CLI-Version": compatibility.minimumVersion }),
+		...(compatibility.minimumProtocol === undefined
+			? {}
+			: {
+					"X-Blabla-Minimum-CLI-Protocol": String(
+						compatibility.minimumProtocol,
+					),
+				}),
+	};
+}
+
 async function withAgent<T>(
 	ctx: ActionCtx,
 	request: Request,
 	scope: AgentScope | readonly AgentScope[],
 	rateLimitName: AgentRateLimitName,
 	handler: (token: string, actor: ProposalActor) => Promise<T>,
+	options: { requireCliProtocol?: boolean } = {},
 ): Promise<{ value: T; responseHeaders: Record<string, string> }> {
 	const token = readToken(request);
 	const scopes = Array.isArray(scope) ? scope : [scope];
@@ -456,23 +511,9 @@ async function withAgent<T>(
 			scope: requiredScope,
 		});
 	}
-	const compatibility = await ctx.runQuery(
-		internalApi.agentApi.cliCompatibility,
-		{ projectId: auth.projectId },
-	);
-	const protocolHeader = request.headers.get("X-Blabla-CLI-Protocol");
-	const protocol = protocolHeader === null ? undefined : Number(protocolHeader);
-	if (
-		compatibility.minimumProtocol !== undefined &&
-		(protocol === undefined ||
-			!Number.isSafeInteger(protocol) ||
-			protocol < compatibility.minimumProtocol)
-	) {
-		throw new ConvexError({
-			code: "CLI_UPGRADE_REQUIRED",
-			message: `Blabla requires CLI protocol ${compatibility.minimumProtocol}. Install a compatible Blabla CLI and retry.`,
-		});
-	}
+	const responseHeaders = options.requireCliProtocol
+		? await cliResponseHeaders(ctx, request, auth.projectId)
+		: {};
 	await ctx.runMutation(internalApi.rateLimits.consume, {
 		name: rateLimitName,
 		key: auth._id,
@@ -483,18 +524,7 @@ async function withAgent<T>(
 			projectId: auth.projectId,
 			tokenId: auth._id,
 		}),
-		responseHeaders: {
-			...(compatibility.minimumVersion === undefined
-				? {}
-				: { "X-Blabla-Minimum-CLI-Version": compatibility.minimumVersion }),
-			...(compatibility.minimumProtocol === undefined
-				? {}
-				: {
-						"X-Blabla-Minimum-CLI-Protocol": String(
-							compatibility.minimumProtocol,
-						),
-					}),
-		},
+		responseHeaders,
 	};
 }
 
@@ -513,23 +543,11 @@ async function withRepositoryAdapter<T>(
 		token,
 		scope,
 	});
-	const compatibility = await ctx.runQuery(
-		internalApi.agentApi.cliCompatibility,
-		{ projectId: auth.projectId },
+	const responseHeaders = await cliResponseHeaders(
+		ctx,
+		request,
+		auth.projectId,
 	);
-	const protocolHeader = request.headers.get("X-Blabla-CLI-Protocol");
-	const protocol = protocolHeader === null ? undefined : Number(protocolHeader);
-	if (
-		compatibility.minimumProtocol !== undefined &&
-		(protocol === undefined ||
-			!Number.isSafeInteger(protocol) ||
-			protocol < compatibility.minimumProtocol)
-	) {
-		throw new ConvexError({
-			code: "CLI_UPGRADE_REQUIRED",
-			message: `Blabla requires CLI protocol ${compatibility.minimumProtocol}. Install a compatible Blabla CLI and retry.`,
-		});
-	}
 	await ctx.runMutation(internalApi.rateLimits.consume, {
 		name: rateLimitName,
 		key: auth._id,
@@ -537,18 +555,7 @@ async function withRepositoryAdapter<T>(
 	await ctx.runMutation(internalApi.agentApi.touchToken, { tokenId: auth._id });
 	return {
 		value: await handler({ projectId: auth.projectId, tokenId: auth._id }),
-		responseHeaders: {
-			...(compatibility.minimumVersion === undefined
-				? {}
-				: { "X-Blabla-Minimum-CLI-Version": compatibility.minimumVersion }),
-			...(compatibility.minimumProtocol === undefined
-				? {}
-				: {
-						"X-Blabla-Minimum-CLI-Protocol": String(
-							compatibility.minimumProtocol,
-						),
-					}),
-		},
+		responseHeaders,
 	};
 }
 
@@ -898,19 +905,36 @@ http.route({
 					"search",
 					"agentSearch",
 					async (token) =>
-						await ctx.runQuery(
-							internalApi.agentTranslationProposals.workspaceSearch,
-							{
-								token,
-								q: url.searchParams.get("q") ?? undefined,
-								localeCode: url.searchParams.get("localeCode") ?? undefined,
-								limit: Number(url.searchParams.get("limit") ?? 50),
-							},
-						),
+						await ctx.runQuery(internalApi.agentRetrieval.workspaceSearch, {
+							token,
+							q: url.searchParams.get("q") ?? undefined,
+							localeCode: url.searchParams.get("localeCode") ?? undefined,
+							limit: Number(url.searchParams.get("limit") ?? 16),
+							cursor: url.searchParams.get("cursor") ?? undefined,
+							keyPrefix: url.searchParams.get("keyPrefix") ?? undefined,
+							searchIn: searchChoice(url.searchParams, "searchIn", [
+								"all",
+								"key",
+								"source",
+								"target",
+							] as const),
+							match: searchChoice(url.searchParams, "match", [
+								"substring",
+								"exact",
+							] as const),
+							quality: searchChoice(url.searchParams, "quality", [
+								"all",
+								"confirmed",
+							] as const),
+							view: searchChoice(url.searchParams, "view", [
+								"compact",
+								"full",
+							] as const),
+						}),
 				),
 			);
 		} catch (error) {
-			return routeError(error);
+			return routeError(error, { NOT_FOUND: 404, STALE_BASIS: 409 });
 		}
 	}),
 });
@@ -928,23 +952,20 @@ http.route({
 					"search",
 					"agentSearch",
 					async (token) =>
-						await ctx.runQuery(
-							internalApi.agentTranslationProposals.workspaceWorkPage,
-							{
-								token,
-								cursor: url.searchParams.get("cursor") ?? "",
-								limit: Number(url.searchParams.get("limit") ?? 16),
-								localeCode: url.searchParams.get("localeCode") ?? undefined,
-								reasons: translationWorkReasons(
-									url.searchParams.getAll("reason"),
-								),
-								q: url.searchParams.get("q") ?? undefined,
-							},
-						),
+						await ctx.runQuery(internalApi.agentRetrieval.workspaceWorkPage, {
+							token,
+							cursor: url.searchParams.get("cursor") ?? "",
+							limit: Number(url.searchParams.get("limit") ?? 16),
+							localeCode: url.searchParams.get("localeCode") ?? undefined,
+							reasons: translationWorkReasons(
+								url.searchParams.getAll("reason"),
+							),
+							q: url.searchParams.get("q") ?? undefined,
+						}),
 				),
 			);
 		} catch (error) {
-			return routeError(error);
+			return routeError(error, { NOT_FOUND: 404, STALE_BASIS: 409 });
 		}
 	}),
 });
@@ -967,14 +988,149 @@ http.route({
 					"read",
 					"agentRead",
 					async (token) =>
-						await ctx.runQuery(
-							internalApi.agentTranslationProposals.workspaceContext,
-							{ token, keys, locales },
-						),
+						await ctx.runQuery(internalApi.agentRetrieval.workspaceContext, {
+							token,
+							keys,
+							locales,
+						}),
 				),
 			);
 		} catch (error) {
-			return routeError(error);
+			return routeError(error, { NOT_FOUND: 404, STALE_BASIS: 409 });
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/proposal-examples/search",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			if (!isRecord(body.scope))
+				throw new Error("scope must identify a task or candidate review.");
+			const rawScope = body.scope;
+			const scope =
+				rawScope.kind === "task"
+					? {
+							kind: "task" as const,
+							taskId: requiredJsonString(
+								rawScope,
+								"taskId",
+							) as Id<"agentTranslationProposals">,
+						}
+					: rawScope.kind === "review"
+						? {
+								kind: "review" as const,
+								candidateRevisionId: requiredJsonString(
+									rawScope,
+									"candidateRevisionId",
+								) as Id<"agentTranslationCandidateRevisions">,
+							}
+						: null;
+			if (scope === null) throw new Error("scope.kind must be task or review.");
+			const optionalString = (field: string) =>
+				body[field] === undefined ? undefined : jsonString(body, field);
+			const searchIn = body.searchIn;
+			const match = body.match;
+			const limit = body.limit;
+			if (
+				searchIn !== undefined &&
+				searchIn !== "all" &&
+				searchIn !== "key" &&
+				searchIn !== "source" &&
+				searchIn !== "target"
+			) {
+				throw new Error("searchIn must be all, key, source, or target.");
+			}
+			if (match !== undefined && match !== "substring" && match !== "exact")
+				throw new Error("match must be substring or exact.");
+			if (limit !== undefined && typeof limit !== "number")
+				throw new Error("limit must be a number.");
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"search",
+					"agentSearch",
+					async (token) =>
+						await ctx.runQuery(internalApi.agentProposalRetrieval.search, {
+							token,
+							scope,
+							q: optionalString("q"),
+							searchIn,
+							match,
+							keyPrefix: optionalString("keyPrefix"),
+							limit,
+							cursor: optionalString("cursor"),
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, {
+				NOT_FOUND: 404,
+				FORBIDDEN: 403,
+				STALE_BASIS: 409,
+			});
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/guidance/context",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			if (!isStringArray(body.texts) || !isStringArray(body.locales))
+				throw new Error("texts and locales must be string arrays.");
+			const texts = body.texts;
+			const localeCodes = body.locales;
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"read",
+					"agentRead",
+					async (token) =>
+						await ctx.runQuery(internalApi.agentRetrieval.guidanceContext, {
+							token,
+							texts,
+							localeCodes,
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/guidance/revisions/",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const revisionId = new URL(request.url).pathname.slice(
+				"/api/agent/v1/guidance/revisions/".length,
+			);
+			if (!revisionId || revisionId.includes("/"))
+				throw new Error("Missing guidance revision id.");
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"read",
+					"agentRead",
+					async (token) =>
+						await ctx.runQuery(internalApi.agentRetrieval.guidanceRevision, {
+							token,
+							revisionId: revisionId as Id<"translationGuidanceRevisions">,
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
 		}
 	}),
 });
@@ -1226,6 +1382,14 @@ http.route({
 								candidateCount: descriptor.candidateCount,
 							},
 							targets,
+							guidance: await ctx.runQuery(
+								internalApi.agentRetrieval.guidanceContext,
+								{
+									token,
+									texts: targets.map((target) => target.sourceValue),
+									localeCodes: [descriptor.localeCode],
+								},
+							),
 							nextCursor:
 								targets.length < page.messages.length
 									? cursor + targets.length
@@ -1607,6 +1771,7 @@ http.route({
 					["read", "propose"],
 					"agentLocaleProposal",
 					async (_token, actor) => await readProposal(ctx, actor, proposalId),
+					{ requireCliProtocol: true },
 				),
 			);
 		} catch (error) {
@@ -1738,6 +1903,7 @@ http.route({
 					"agentLocaleProposal",
 					async (_token, actor) =>
 						await readProposalArtifact(ctx, actor, proposalId),
+					{ requireCliProtocol: true },
 				),
 			);
 		} catch (error) {

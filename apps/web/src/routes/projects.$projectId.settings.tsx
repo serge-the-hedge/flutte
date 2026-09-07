@@ -12,7 +12,7 @@ import {
 	useRouterState,
 } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowUpRight, KeyRound, Users } from "lucide-react";
+import { ArrowUpRight, BookOpen, KeyRound, Users } from "lucide-react";
 import { AgentReviewPolicyCard } from "@/components/localization/agent-review-policy-card";
 import {
 	PageHeader,
@@ -25,6 +25,12 @@ export const Route = createFileRoute("/projects/$projectId/settings")({
 });
 
 const settingsLinks = [
+	{
+		to: "/projects/$projectId/settings/guidance" as const,
+		title: "Translation guidance",
+		description: "Dictionary terms and Locale voice guidance.",
+		icon: BookOpen,
+	},
 	{
 		to: "/projects/$projectId/settings/api-tokens" as const,
 		title: "API tokens",

@@ -350,7 +350,7 @@ describe("Agent Translation Proposals", () => {
 			token,
 			"/api/agent/v1/workspace/work?cursor=v1.stale-projection.0.0",
 		);
-		expect(staleCursor.status).toBe(400);
+		expect(staleCursor.status).toBe(409);
 		expect(await staleCursor.json()).toMatchObject({ code: "STALE_BASIS" });
 	});
 

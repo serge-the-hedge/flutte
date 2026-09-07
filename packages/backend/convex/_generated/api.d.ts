@@ -9,6 +9,12 @@
  */
 
 import type * as accessControl from "../accessControl.js";
+import type * as agentRetrieval from "../agentRetrieval.js";
+import type * as catalogSearch from "../catalogSearch.js";
+import type * as catalogWorkspaceRead from "../catalogWorkspaceRead.js";
+import type * as agentProposalRetrieval from "../agentProposalRetrieval.js";
+import type * as translationGuidance from "../translationGuidance.js";
+import type * as translationGuidanceModel from "../translationGuidanceModel.js";
 import type * as agentApi from "../agentApi.js";
 import type * as agentReviewModel from "../agentReviewModel.js";
 import type * as agentReviews from "../agentReviews.js";
@@ -58,6 +64,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accessControl: typeof accessControl;
+  agentRetrieval: typeof agentRetrieval;
+  catalogSearch: typeof catalogSearch;
+  catalogWorkspaceRead: typeof catalogWorkspaceRead;
+  agentProposalRetrieval: typeof agentProposalRetrieval;
+  translationGuidance: typeof translationGuidance;
+  translationGuidanceModel: typeof translationGuidanceModel;
   agentApi: typeof agentApi;
   agentReviewModel: typeof agentReviewModel;
   agentReviews: typeof agentReviews;

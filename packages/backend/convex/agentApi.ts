@@ -18,7 +18,7 @@ const scopeValidator = v.union(
 	v.literal("snapshot-submission"),
 );
 
-async function authenticate(
+export async function authenticateAgent(
 	ctx: QueryCtx | MutationCtx,
 	rawToken: string,
 	scope:
@@ -51,7 +51,8 @@ async function authenticate(
 
 export const authenticateToken = internalQuery({
 	args: { token: v.string(), scope: scopeValidator },
-	handler: async (ctx, args) => await authenticate(ctx, args.token, args.scope),
+	handler: async (ctx, args) =>
+		await authenticateAgent(ctx, args.token, args.scope),
 });
 
 export const cliCompatibility = internalQuery({
@@ -82,7 +83,7 @@ export const touchToken = internalMutation({
 export const currentProject = internalQuery({
 	args: { token: v.string() },
 	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "read");
+		const token = await authenticateAgent(ctx, args.token, "read");
 		const project = await assertProjectExists(ctx, token.projectId);
 		const sourceLocale = project.sourceLocaleId
 			? await ctx.db.get(project.sourceLocaleId)
@@ -91,14 +92,7 @@ export const currentProject = internalQuery({
 			.query("locales")
 			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
 			.collect();
-		const screens = await ctx.db
-			.query("screens")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.collect();
-		const tags = await ctx.db
-			.query("tags")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.collect();
+
 		return {
 			projectId: token.projectId,
 			name: project.name,
@@ -106,12 +100,30 @@ export const currentProject = internalQuery({
 			locales: locales
 				.filter((locale) => locale.archivedAt === undefined)
 				.map((locale) => locale.code),
-			screens: screens
-				.filter((screen) => screen.archivedAt === undefined)
-				.map((screen) => ({ id: screen._id, slug: screen.slug })),
-			tags: tags
-				.filter((tag) => tag.archivedAt === undefined)
-				.map((tag) => ({ id: tag._id, slug: tag.slug })),
+			tokenScopes: token.scopes,
+			capabilities: {
+				search: {
+					engine: "literal",
+					fields: ["key", "source", "target"],
+					modes: ["substring", "exact"],
+					maxResults: 50,
+					continuation: true,
+					confirmedExamples: true,
+				},
+				context: {
+					maxKeys: 50,
+					maxLocales: 20,
+					maxPairs: 128,
+					guidance: true,
+					codeContext: "unavailable",
+				},
+				newLocaleTargets: locales.some(
+					(locale) => locale.code === "pt" && locale.archivedAt === undefined,
+				)
+					? []
+					: ["pt"],
+				reviewedProposalExamples: true,
+			},
 		};
 	},
 });
@@ -119,7 +131,7 @@ export const currentProject = internalQuery({
 export const getChangeSet = internalQuery({
 	args: { token: v.string(), changeSetId: v.id("changeSets") },
 	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "read");
+		const token = await authenticateAgent(ctx, args.token, "read");
 		const changeSet = await ctx.db.get(args.changeSetId);
 		if (!changeSet || changeSet.projectId !== token.projectId) {
 			throw new ConvexError({

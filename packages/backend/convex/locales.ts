@@ -7,6 +7,7 @@ import {
 	requireEditor,
 	requireViewer,
 } from "./permissions";
+import { correctGuidanceLocaleCode } from "./translationGuidance";
 
 /**
  * Check and tidy a repository-relative catalog file path for a Locale Binding.
@@ -200,7 +201,7 @@ export const correctSetupBinding = mutation({
 				message: "Locale not found.",
 			});
 		}
-		await requireEditor(ctx, locale.projectId);
+		const { userId } = await requireEditor(ctx, locale.projectId);
 
 		const code = normalizeLocaleCode(args.code);
 		const label = args.label?.trim() || code;
@@ -265,17 +266,22 @@ export const correctSetupBinding = mutation({
 			}
 
 			await ctx.db.delete(codeMatch._id);
-			await ctx.db.patch(locale._id, { code, label, catalogPath });
-			return locale._id;
-		}
-
-		if (pathConflict) {
+		} else if (pathConflict) {
 			throw new ConvexError({
 				code: "CONFLICT",
 				message: `Catalog path is already bound to the "${pathConflict.code}" Locale.`,
 			});
 		}
 
+		if (codeChanges) {
+			await correctGuidanceLocaleCode(ctx, {
+				projectId: locale.projectId,
+				fromCode: locale.code,
+				toCode: code,
+				isSource: locale.isSource,
+				userId,
+			});
+		}
 		await ctx.db.patch(locale._id, { code, label, catalogPath });
 		return locale._id;
 	},

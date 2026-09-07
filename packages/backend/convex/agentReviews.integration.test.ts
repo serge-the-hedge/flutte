@@ -175,6 +175,58 @@ async function context(
 }
 
 describe("independent agent review", () => {
+	test("binds a review to human guidance and retains superseded guidance citations", async () => {
+		const f = await setup();
+		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+			projectId: f.projectId,
+			enabled: true,
+		});
+		const before = await context(f);
+		const term = await f.owner.mutation(api.translationGuidance.saveTerm, {
+			projectId: f.projectId,
+			expectedRevision: 0,
+			term: {
+				kind: "translated",
+				sourceTerm: "Hello",
+				definition: "Friendly greeting",
+				renderings: [{ localeCode: "de", value: "Guten Tag" }],
+			},
+		});
+		const stale = await request(f.t, f.reviewer.token, f.revisionId, {
+			reviewToken: before.reviewToken,
+			decision: { kind: "accept" },
+		});
+		expect(stale.status).toBe(409);
+		expect(await stale.json()).toMatchObject({ code: "STALE_BASIS" });
+		const refreshed = await request(f.t, f.reviewer.token, f.revisionId);
+		expect(await refreshed.json()).toMatchObject({
+			guidance: {
+				revision: 1,
+				terms: [
+					{
+						revisionId: term.revisionId,
+						matchedTextIndexes: [0],
+						term: { sourceTerm: "Hello" },
+					},
+				],
+			},
+		});
+		await f.owner.mutation(api.translationGuidance.removeTerm, {
+			projectId: f.projectId,
+			expectedRevision: 1,
+			sourceTerm: "Hello",
+		});
+		const historical = await f.t.fetch(
+			`/api/agent/v1/guidance/revisions/${term.revisionId}`,
+			{ headers: { Authorization: `Bearer ${f.reviewer.token}` } },
+		);
+		expect(historical.status).toBe(200);
+		expect(await historical.json()).toMatchObject({
+			revision: 1,
+			content: { kind: "term", term: { sourceTerm: "Hello" } },
+		});
+	});
+
 	test("does not present a revoked reviewer delegation as usable", async () => {
 		const f = await setup();
 		const grantId = await f.owner.mutation(
