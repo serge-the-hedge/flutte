@@ -604,6 +604,8 @@ async function navigationKeyBatchForProjection(
 		heads.push(...keyHeads);
 		byteLength += encodedSize(keyRows) + encodedSize(keyHeads);
 		messageIds.push(messageId);
+		// catalogIndex is the Source key ordinal, shared by every Locale row.
+		// Resuming strictly after it skips the whole completed key.
 		lastCatalogIndex = keyRows[0]?.catalogIndex ?? lastCatalogIndex;
 		if (messageIds.length >= input.maxKeys || byteLength >= 2 * 1024 * 1024)
 			break;
