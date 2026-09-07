@@ -129,7 +129,12 @@ async function exerciseCapacity(extended: boolean) {
 		if (!card) throw new Error("Missing introduced message card");
 		return card;
 	}
-	async function confirm(localeCode: string) {
+	async function commitTarget(
+		localeCode: string,
+		intent: { kind: "confirm" } | { kind: "save"; value: string } = {
+			kind: "confirm",
+		},
+	) {
 		const target = (await addedCard()).values.find(
 			(value) => value.localeCode === localeCode,
 		);
@@ -145,7 +150,7 @@ async function exerciseCapacity(extended: boolean) {
 			projectId,
 			messageId: addedMessageId,
 			localeId: target.localeId,
-			intent: { kind: "confirm" },
+			intent,
 			expectedGitValueFingerprint: target.gitValueFingerprint,
 			expectedGitValueRevision: target.gitValueRevision,
 			expectedWorkspaceRevision: target.workspaceRevision,
@@ -237,7 +242,7 @@ async function exerciseCapacity(extended: boolean) {
 			code === "en" ? "A new message" : `Reviewed example ${code}`;
 	await ingest("capacity-introduction");
 	expect((await navigation()).keys).toHaveLength(1435);
-	await confirm("de");
+	await commitTarget("de");
 	expect(
 		(await addedCard()).values.find((value) => value.localeCode === "de"),
 	).toMatchObject({ valueState: "settled" });
@@ -269,7 +274,8 @@ async function exerciseCapacity(extended: boolean) {
 	expect(
 		(await addedCard()).values.find((value) => value.localeCode === "de"),
 	).toMatchObject({ valueState: "stale", sourceChangeKind: "semantic" });
-	for (const code of codes.filter((code) => code !== "en")) await confirm(code);
+	for (const code of codes.filter((code) => code !== "en"))
+		await commitTarget(code);
 	expect(
 		(await addedCard()).values
 			.filter((value) => !value.isSource)
@@ -277,6 +283,11 @@ async function exerciseCapacity(extended: boolean) {
 				(value) => "valueState" in value && value.valueState === "settled",
 			),
 	).toBe(true);
+
+	// Automatic restorations travel separately from a Release Bundle. Save a
+	// reviewed workspace edit so this proof exercises an actual release delta.
+	await commitTarget("ja", { kind: "save", value: "Updated Japanese example" });
+	await commitTarget("ja");
 
 	const started = await owner.mutation(api.releaseRecords.prepare, {
 		projectId,

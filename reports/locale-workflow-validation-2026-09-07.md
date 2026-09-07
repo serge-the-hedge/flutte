@@ -34,6 +34,15 @@ rows. However, complete archival required 14,341,856 bytes and restoration
 that envelope further would leave insufficient space for stored metadata and
 other reads within [Convex's 16 MiB transaction limit](https://docs.convex.dev/production/state/limits). Ten is the selected bound.
 
+The ten-language baseline passed with transaction-limit enforcement:
+
+| Surface | Bytes |
+| --- | ---: |
+| Stored projection rows (14,340 values) | 12,179,093 |
+| Stored Navigation rows | 6,059,875 |
+| Full archive content | 11,996,542 |
+| Full restored projection content | 11,861,559 |
+
 The capacity test uses the production archival and restoration helpers and
 checks stored documents separately from public results. The extended proof
 runs the complete introduction, review, archive, restore, Source change and
