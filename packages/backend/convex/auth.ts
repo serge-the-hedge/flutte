@@ -7,7 +7,7 @@ import type { DataModel } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { query } from "./_generated/server";
 import authConfig from "./auth.config";
-import { queuePasswordResetEmail } from "./emails";
+import { queuePasswordResetEmail, queueVerificationEmail } from "./emails";
 
 function requiredEnv(name: string) {
 	const value = process.env[name]?.trim();
@@ -45,8 +45,15 @@ function createAuth(ctx: GenericCtx<DataModel>) {
 		baseURL: authBaseUrl,
 		trustedOrigins,
 		database: authComponent.adapter(ctx),
+		emailVerification: {
+			sendVerificationEmail: async ({ user, url }) => {
+				await queueVerificationEmail(ctx, { email: user.email, url });
+			},
+		},
 		emailAndPassword: {
 			enabled: true,
+			// Personal workspaces remain usable without email delivery. Email-based
+			// invitations independently require verification before granting access.
 			requireEmailVerification: false,
 			revokeSessionsOnPasswordReset: true,
 			resetPasswordTokenExpiresIn: 60 * 60,
@@ -78,13 +85,21 @@ type AuthUserLike = {
 	userId?: string | null;
 	id?: string;
 	email?: string;
+	emailVerified?: boolean;
 	name?: string;
-	user?: { _id?: string; id?: string; email?: string; name?: string };
+	user?: {
+		_id?: string;
+		id?: string;
+		email?: string;
+		emailVerified?: boolean;
+		name?: string;
+	};
 };
 
 export function normalizeAuthUser(authUser: unknown): {
 	id: string;
 	email?: string;
+	emailVerified: boolean;
 	name?: string;
 } | null {
 	const user = authUser as AuthUserLike | null;
@@ -99,12 +114,21 @@ export function normalizeAuthUser(authUser: unknown): {
 	return {
 		id,
 		email: user.email ?? user.user?.email,
+		emailVerified: (user.emailVerified ?? user.user?.emailVerified) === true,
 		name: user.name ?? user.user?.name,
 	};
 }
 
 export async function getAnyUserById(ctx: QueryCtx | MutationCtx, id: string) {
-	return normalizeAuthUser(await authComponent.getAnyUserById(ctx, id));
+	// Memberships use the app userId when present; older accounts and fixtures
+	// can retain that mapping instead of the Better Auth document ID.
+	const mappedUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+		model: "user",
+		where: [{ field: "userId", value: id }],
+	});
+	return normalizeAuthUser(
+		mappedUser ?? (await authComponent.getAnyUserById(ctx, id)),
+	);
 }
 
 export async function getAnyUserByEmail(
@@ -121,6 +145,7 @@ export async function getAnyUserByEmail(
 export async function requireUser(ctx: QueryCtx | MutationCtx): Promise<{
 	id: string;
 	email?: string;
+	emailVerified: boolean;
 	name?: string;
 }> {
 	const authUser = normalizeAuthUser(await authComponent.safeGetAuthUser(ctx));

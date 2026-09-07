@@ -1691,6 +1691,7 @@ export default defineSchema({
 		.index("by_revision", ["revisionId"])
 		.index("by_candidate", ["candidateId"]),
 
+	// Retained historical evidence. No legacy catalog or Change Set writers remain.
 	changeSets: defineTable({
 		projectId: v.id("projects"),
 		title: v.string(),

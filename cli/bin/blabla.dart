@@ -256,12 +256,12 @@ Future<int> _sync(
       token: token,
       onWarning: write,
     );
-    await RepositorySyncAdapter().sync(
+    final receipt = await RepositorySyncAdapter().sync(
       checkout: checkout,
       gateway: gateway,
       write: write,
     );
-    return 0;
+    return receipt.succeeded ? 0 : 1;
   } on RepositoryAdapterException catch (error) {
     writeError(error.message);
     return 1;

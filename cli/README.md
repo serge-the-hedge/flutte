@@ -15,7 +15,8 @@ blabla sync
 ```
 
 `sync` reads the bound ARB files from the checkout, submits one durable Source
-Snapshot, and prints the receipt. It is read-only locally: it never edits the
+Snapshot, and prints the receipt. It exits with status `0` only when ingestion
+succeeds; a failed run returns `1` with its diagnostics. It is read-only locally: it never edits the
 checkout, fetches or pushes Git, or opens a pull request. The web Sync page can
 create a single workspace connection with the `snapshot-submission` permission
 and the agent permissions together, then gives you the one-time `login`
@@ -91,8 +92,9 @@ never installs a Dart package globally.
 The web project's **API tokens** page creates the workspace connection used by
 both `sync` and translation agents. Copy its one-time setup command and run it
 locally. This writes only
-`~/.config/blabla/credentials.json` at mode `0600`; it never writes to a
-Brickit checkout.
+`~/.config/blabla/credentials.json` at mode `0600`. Secret bytes are written
+inside a private temporary directory before the protected file atomically
+replaces the previous credentials. It never writes to a Brickit checkout.
 
 ```sh
 blabla login --server https://your-blabla.example --token ...
@@ -134,15 +136,25 @@ resolved in this order: `--flutter-sdk`, `FLUTTER_ROOT`, the checkout's
 `.fvm/flutter_sdk`, its `.fvmrc` through an installed `fvm`, then `flutter` on
 `PATH`. The root `pubspec.yaml` Flutter constraint is printed as informational
 context, never a version gate: preflight generation is the compatibility check.
+Local SDK paths are resolved absolutely, so `--checkout .` also works when
+generation moves into the disposable worktree.
 
-Before it touches the checkout, the Adapter checks that the proposal is current
-and ready, its integration branch matches the checkout, its artifact
-hash/provenance matches the checkout's `origin`, the source commit is reachable,
-relevant localization paths are clean, and the Git index is empty. It then
-performs preflight and candidate `flutter gen-l10n`
-runs in a disposable Git worktree. Only a candidate that changes exactly the
-Portuguese ARB, runtime locale registration, and expected generated Dart files
-is copied to a new local branch and committed.
+All three HTTP gateways use the same compatibility headers: an unsupported
+protocol blocks the request; a newer minimum CLI version prints one advisory
+warning per gateway. Equal or older minimum versions do not warn.
+
+Before writing to the checkout, delivery validates artifact provenance, the
+integration branch, and relevant localization paths. Preflight and candidate
+`flutter gen-l10n` runs use a disposable Git worktree pinned to the captured
+checkout commit. After revalidating the server artifacts, both delivery paths
+recheck local changes, branch, and HEAD before creating a local review branch.
+A checkout that advances during preparation must be retried.
+
+Existing-Locale delivery preserves unrelated staged work outside its commit.
+Combined delivery requires a clean checkout; the Portuguese-only compatibility
+command requires clean localization paths and an empty index. Portuguese output
+is limited to its ARB, runtime locale registration, and expected generated Dart
+files; Release Delta output is verified against its delivery manifest.
 
 The final output prints `git push` and `gh pr create` commands for the developer
 to choose to run. The Adapter never runs either command itself.

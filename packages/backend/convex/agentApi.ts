@@ -1,6 +1,4 @@
 import { ConvexError, v } from "convex/values";
-
-import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalMutation,
 	internalQuery,
@@ -8,37 +6,7 @@ import {
 	type QueryCtx,
 } from "./_generated/server";
 import { hashToken } from "./apiTokens";
-import {
-	assertBoundedChangeSetSize,
-	MAX_CHANGE_SET_ITEMS,
-	MAX_TAGS_PER_METADATA_CHANGE,
-} from "./changeSetValidation";
-import { summarizeItems } from "./diffs";
-import { buildExportContent } from "./exports";
-import { buildReviewUrl, slugify } from "./lib";
-
-type ResolvedTranslationProposal = {
-	keyId: Id<"translationKeys">;
-	localeId: Id<"locales">;
-	fieldPath: string;
-	nextValue: string;
-	baseVersion?: number;
-	liveValue: Doc<"translationValues"> | null;
-	status: "pending" | "conflicted";
-};
-
-const MAX_CONTEXT_KEYS = 50;
-const MAX_CONTEXT_LOCALES = 20;
-const MAX_SEARCH_RESULTS = 50;
-
-function assertArrayLimit(name: string, length: number, limit: number) {
-	if (length > limit) {
-		throw new ConvexError({
-			code: "LIMIT_EXCEEDED",
-			message: `${name} supports at most ${limit} entries.`,
-		});
-	}
-}
+import { assertProjectExists } from "./permissions";
 
 const scopeValidator = v.union(
 	v.literal("read"),
@@ -53,9 +21,10 @@ async function authenticate(
 	rawToken: string,
 	scope: "read" | "search" | "propose" | "export" | "snapshot-submission",
 ) {
+	const tokenHash = await hashToken(rawToken);
 	const token = await ctx.db
 		.query("apiTokens")
-		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", hashToken(rawToken)))
+		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
 		.unique();
 	if (
 		!token ||
@@ -67,6 +36,7 @@ async function authenticate(
 			message: "Invalid or insufficient API token.",
 		});
 	}
+	await assertProjectExists(ctx, token.projectId);
 	return token;
 }
 
@@ -75,9 +45,6 @@ export const authenticateToken = internalQuery({
 	handler: async (ctx, args) => await authenticate(ctx, args.token, args.scope),
 });
 
-/// Returns the project-owned compatibility policy for an already authenticated
-/// Agent API call. The HTTP adapter turns these facts into response headers so
-/// a thin CLI can warn on a version floor and refuse only a protocol break.
 export const cliCompatibility = internalQuery({
 	args: { projectId: v.id("projects") },
 	handler: async (ctx, args) => {
@@ -107,14 +74,9 @@ export const currentProject = internalQuery({
 	args: { token: v.string() },
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
-		const project = (await ctx.db.get(token.projectId)) as any;
-		if (!project)
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Project not found.",
-			});
+		const project = await assertProjectExists(ctx, token.projectId);
 		const sourceLocale = project.sourceLocaleId
-			? ((await ctx.db.get(project.sourceLocaleId)) as any)
+			? await ctx.db.get(project.sourceLocaleId)
 			: null;
 		const locales = await ctx.db
 			.query("locales")
@@ -145,562 +107,6 @@ export const currentProject = internalQuery({
 	},
 });
 
-export const searchStrings = internalQuery({
-	args: {
-		token: v.string(),
-		q: v.optional(v.string()),
-		locale: v.optional(v.string()),
-		screen: v.optional(v.string()),
-		tag: v.optional(v.string()),
-		status: v.optional(
-			v.union(
-				v.literal("missing"),
-				v.literal("translated"),
-				v.literal("needs_review"),
-				v.literal("stale"),
-			),
-		),
-		limit: v.optional(v.number()),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "search");
-		const locale = args.locale
-			? await ctx.db
-					.query("locales")
-					.withIndex("by_project_code", (q) =>
-						q.eq("projectId", token.projectId).eq("code", args.locale!),
-					)
-					.unique()
-			: null;
-		const screen = args.screen
-			? await ctx.db
-					.query("screens")
-					.withIndex("by_project_slug", (q) =>
-						q.eq("projectId", token.projectId).eq("slug", args.screen!),
-					)
-					.unique()
-			: null;
-		const tag = args.tag
-			? await ctx.db
-					.query("tags")
-					.withIndex("by_project_slug", (q) =>
-						q.eq("projectId", token.projectId).eq("slug", args.tag!),
-					)
-					.unique()
-			: null;
-		if (
-			(args.locale && (!locale || locale.archivedAt !== undefined)) ||
-			(args.screen && (!screen || screen.archivedAt !== undefined)) ||
-			(args.tag && (!tag || tag.archivedAt !== undefined))
-		) {
-			return [];
-		}
-		const limit = Math.min(
-			MAX_SEARCH_RESULTS,
-			Math.max(1, Math.trunc(args.limit ?? 25)),
-		);
-		const keys =
-			args.q && args.q.trim().length > 0
-				? await ctx.db
-						.query("translationKeys")
-						.withSearchIndex("searchText", (q) =>
-							q.search("searchText", args.q!).eq("projectId", token.projectId),
-						)
-						.take(limit)
-				: await ctx.db
-						.query("translationKeys")
-						.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-						.take(limit);
-		const values = locale
-			? await ctx.db
-					.query("translationValues")
-					.withIndex("by_locale", (q) => q.eq("localeId", locale._id))
-					.collect()
-			: [];
-		const sourceValues = await ctx.db
-			.query("translationValues")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.collect();
-		const project = (await ctx.db.get(token.projectId)) as any;
-		const screens = await ctx.db
-			.query("screens")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.collect();
-		const tags = await ctx.db
-			.query("tags")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.collect();
-		const valuesByKey = new Map(values.map((value) => [value.keyId, value]));
-		const sourceByKey = new Map(
-			sourceValues
-				.filter((value) => value.localeId === project?.sourceLocaleId)
-				.map((value) => [value.keyId, value]),
-		);
-		const screenById = new Map(screens.map((screen) => [screen._id, screen]));
-		const tagById = new Map(tags.map((tag) => [tag._id, tag]));
-		return keys
-			.filter((key) => key.archivedAt === undefined)
-			.filter((key) => (screen ? key.screenId === screen._id : true))
-			.filter((key) => (tag ? key.tagIds.includes(tag._id) : true))
-			.map((key) => {
-				const target = valuesByKey.get(key._id);
-				const rowScreen = key.screenId ? screenById.get(key.screenId) : null;
-				return {
-					key: key.key,
-					screen:
-						rowScreen && rowScreen.archivedAt === undefined
-							? rowScreen.slug
-							: null,
-					tags: key.tagIds
-						.map((tagId) => tagById.get(tagId))
-						.filter(
-							(tag): tag is NonNullable<typeof tag> =>
-								tag !== undefined && tag.archivedAt === undefined,
-						)
-						.map((tag) => tag.slug),
-					source: sourceByKey.get(key._id)?.value ?? "",
-					target: target?.value ?? "",
-					locale: locale?.code ?? null,
-					status: target?.status ?? "missing",
-					version: target?.version ?? 0,
-				};
-			})
-			.filter((row) => (args.status ? row.status === args.status : true));
-	},
-});
-
-export const getContext = internalQuery({
-	args: {
-		token: v.string(),
-		keys: v.array(v.string()),
-		locales: v.array(v.string()),
-		includeHistory: v.optional(v.boolean()),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "read");
-		assertArrayLimit("Context keys", args.keys.length, MAX_CONTEXT_KEYS);
-		assertArrayLimit(
-			"Context locales",
-			args.locales.length,
-			MAX_CONTEXT_LOCALES,
-		);
-		const keys = await Promise.all(
-			args.keys.map((key) =>
-				ctx.db
-					.query("translationKeys")
-					.withIndex("by_project_key", (q: any) =>
-						q.eq("projectId", token.projectId).eq("key", key),
-					)
-					.unique(),
-			),
-		);
-		const locales = await Promise.all(
-			args.locales.map((code) =>
-				ctx.db
-					.query("locales")
-					.withIndex("by_project_code", (q: any) =>
-						q.eq("projectId", token.projectId).eq("code", code),
-					)
-					.unique(),
-			),
-		);
-		const rows = [];
-		for (const key of keys.filter(Boolean) as any[]) {
-			for (const locale of locales.filter(Boolean) as any[]) {
-				const value = await ctx.db
-					.query("translationValues")
-					.withIndex("by_project_key_locale", (q: any) =>
-						q
-							.eq("projectId", token.projectId)
-							.eq("keyId", key._id)
-							.eq("localeId", locale._id),
-					)
-					.unique();
-				const history = args.includeHistory
-					? await ctx.db
-							.query("translationHistory")
-							.withIndex("by_key_locale", (q: any) =>
-								q.eq("keyId", key._id).eq("localeId", locale._id),
-							)
-							.order("desc")
-							.take(3)
-					: [];
-				rows.push({ key, locale, value, history });
-			}
-		}
-		return { rows };
-	},
-});
-
-export const createChangeSetFromKeys = internalMutation({
-	args: {
-		token: v.string(),
-		title: v.string(),
-		description: v.optional(v.string()),
-		items: v.array(
-			v.object({
-				key: v.string(),
-				locale: v.string(),
-				baseVersion: v.optional(v.number()),
-				nextValue: v.string(),
-			}),
-		),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "propose");
-		assertBoundedChangeSetSize(args.items.length);
-		const title = args.title.trim();
-		if (!title) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Provide a change set title.",
-			});
-		}
-		if (args.items.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Provide at least one proposed translation change.",
-			});
-		}
-		const invalidItems = [];
-		const emptyItems = [];
-		const resolvedItems: ResolvedTranslationProposal[] = [];
-		let rejectedNoops = 0;
-		for (const item of args.items) {
-			if (item.nextValue.trim().length === 0) {
-				emptyItems.push(`${item.locale}:${item.key}`);
-				continue;
-			}
-			const key = await ctx.db
-				.query("translationKeys")
-				.withIndex("by_project_key", (q) =>
-					q.eq("projectId", token.projectId).eq("key", item.key),
-				)
-				.unique();
-			const locale = await ctx.db
-				.query("locales")
-				.withIndex("by_project_code", (q) =>
-					q.eq("projectId", token.projectId).eq("code", item.locale),
-				)
-				.unique();
-			if (
-				!key ||
-				key.archivedAt !== undefined ||
-				!locale ||
-				locale.archivedAt !== undefined
-			) {
-				invalidItems.push(`${item.locale}:${item.key}`);
-				continue;
-			}
-			const liveValue = await ctx.db
-				.query("translationValues")
-				.withIndex("by_project_key_locale", (q: any) =>
-					q
-						.eq("projectId", token.projectId)
-						.eq("keyId", key._id)
-						.eq("localeId", locale._id),
-				)
-				.unique();
-			const status: "pending" | "conflicted" =
-				item.baseVersion !== undefined &&
-				liveValue !== null &&
-				liveValue.version !== item.baseVersion
-					? "conflicted"
-					: "pending";
-			if (status !== "conflicted" && liveValue?.value === item.nextValue) {
-				rejectedNoops += 1;
-				continue;
-			}
-			resolvedItems.push({
-				keyId: key._id,
-				localeId: locale._id,
-				fieldPath: `locales/${locale.code}/${key.key}.json`,
-				nextValue: item.nextValue,
-				baseVersion: item.baseVersion,
-				liveValue,
-				status,
-			});
-		}
-		if (invalidItems.length > 0) {
-			const sample = invalidItems.slice(0, 5).join(", ");
-			const more =
-				invalidItems.length > 5 ? ` and ${invalidItems.length - 5} more` : "";
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: `Unknown or archived key/locale pairs: ${sample}${more}.`,
-			});
-		}
-		if (emptyItems.length > 0) {
-			const sample = emptyItems.slice(0, 5).join(", ");
-			const more =
-				emptyItems.length > 5 ? ` and ${emptyItems.length - 5} more` : "";
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: `Translation proposals cannot be empty: ${sample}${more}.`,
-			});
-		}
-		if (resolvedItems.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					rejectedNoops > 0
-						? "No proposed translation changes differ from live values."
-						: "No valid translation changes were provided.",
-			});
-		}
-		const changeSetId = await ctx.db.insert("changeSets", {
-			projectId: token.projectId,
-			title,
-			description: args.description,
-			author: { kind: "agent", id: token._id },
-			authorKind: "agent",
-			authorId: token._id,
-			status: "open",
-			baseSnapshotVersion: Date.now(),
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			openedAt: Date.now(),
-			summary: {
-				filesChanged: 0,
-				fieldsChanged: 0,
-				additions: 0,
-				deletions: 0,
-			},
-		});
-		const createdItems = [];
-		let conflicts = 0;
-		for (const item of resolvedItems) {
-			if (item.status === "conflicted") conflicts += 1;
-			const created = {
-				projectId: token.projectId,
-				changeSetId,
-				kind: "translation_value" as const,
-				keyId: item.keyId,
-				localeId: item.localeId,
-				fieldPath: item.fieldPath,
-				previousValue: item.liveValue?.value ?? null,
-				nextValue: item.nextValue,
-				originalNextValue: item.nextValue,
-				baseVersion: item.baseVersion,
-				status: item.status,
-				createdAt: Date.now(),
-			};
-			await ctx.db.insert("changeSetItems", created);
-			createdItems.push(created);
-		}
-		await ctx.db.patch(changeSetId, {
-			summary: summarizeItems(createdItems),
-			updatedAt: Date.now(),
-		});
-		return {
-			projectId: token.projectId,
-			changeSetId,
-			proposed: createdItems.length,
-			conflicts,
-			rejected: rejectedNoops,
-		};
-	},
-});
-
-async function resolveSelectionKeys(
-	ctx: MutationCtx,
-	projectId: Id<"projects">,
-	selection: {
-		type: "all" | "keys" | "tag" | "screen";
-		keys?: string[];
-		tag?: string;
-		screen?: string;
-	},
-) {
-	if (selection.type === "keys") {
-		const requestedKeys = Array.from(new Set(selection.keys ?? []));
-		assertBoundedChangeSetSize(requestedKeys.length);
-		const keys = await Promise.all(
-			requestedKeys.map((key) =>
-				ctx.db
-					.query("translationKeys")
-					.withIndex("by_project_key", (q) =>
-						q.eq("projectId", projectId).eq("key", key),
-					)
-					.unique(),
-			),
-		);
-		return keys.filter(
-			(key): key is NonNullable<typeof key> =>
-				key !== null && key.archivedAt === undefined,
-		);
-	}
-	if (selection.type === "screen" && selection.screen) {
-		const screenSlug = slugify(selection.screen);
-		const screen = await ctx.db
-			.query("screens")
-			.withIndex("by_project_slug", (q) =>
-				q.eq("projectId", projectId).eq("slug", screenSlug),
-			)
-			.unique();
-		if (!screen || screen.archivedAt !== undefined) return [];
-		const keys = await ctx.db
-			.query("translationKeys")
-			.withIndex("by_project_screen", (q) =>
-				q.eq("projectId", projectId).eq("screenId", screen._id),
-			)
-			.take(MAX_CHANGE_SET_ITEMS + 1);
-		assertBoundedChangeSetSize(keys.length);
-		return keys.filter((key) => key.archivedAt === undefined);
-	}
-	const activeKeys = await ctx.db
-		.query("translationKeys")
-		.withIndex("by_project_archivedAt", (q) =>
-			q.eq("projectId", projectId).eq("archivedAt", undefined),
-		)
-		.take(MAX_CHANGE_SET_ITEMS + 1);
-	assertBoundedChangeSetSize(activeKeys.length);
-	if (selection.type === "tag" && selection.tag) {
-		const tagSlug = slugify(selection.tag);
-		const tag = await ctx.db
-			.query("tags")
-			.withIndex("by_project_slug", (q) =>
-				q.eq("projectId", projectId).eq("slug", tagSlug),
-			)
-			.unique();
-		return tag && tag.archivedAt === undefined
-			? activeKeys.filter((key) => key.tagIds.includes(tag._id))
-			: [];
-	}
-	return activeKeys;
-}
-
-export const proposeTagBatch = internalMutation({
-	args: {
-		token: v.string(),
-		title: v.optional(v.string()),
-		description: v.optional(v.string()),
-		selection: v.object({
-			type: v.union(
-				v.literal("all"),
-				v.literal("keys"),
-				v.literal("tag"),
-				v.literal("screen"),
-			),
-			keys: v.optional(v.array(v.string())),
-			tag: v.optional(v.string()),
-			screen: v.optional(v.string()),
-		}),
-		tagSlugs: v.array(v.string()),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "propose");
-		assertArrayLimit(
-			"Tag proposals",
-			args.tagSlugs.length,
-			MAX_TAGS_PER_METADATA_CHANGE,
-		);
-		const tagSlugs = Array.from(
-			new Set(args.tagSlugs.map(slugify).filter(Boolean)),
-		);
-		if (tagSlugs.length > MAX_TAGS_PER_METADATA_CHANGE) {
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: `Tag proposals support at most ${MAX_TAGS_PER_METADATA_CHANGE} tags.`,
-			});
-		}
-		if (tagSlugs.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Provide at least one tag slug.",
-			});
-		}
-		const keys = await resolveSelectionKeys(
-			ctx,
-			token.projectId,
-			args.selection,
-		);
-		if (keys.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Selection did not match any active strings.",
-			});
-		}
-		const proposedItems = [];
-		let rejectedNoops = 0;
-		for (const key of keys) {
-			const currentTags = await Promise.all(
-				key.tagIds.map((tagId: any) => ctx.db.get(tagId)),
-			);
-			const currentSlugs = currentTags
-				.filter((tag: any) => tag && tag.archivedAt === undefined)
-				.map((tag: any) => tag.slug);
-			const missingTagSlugs = tagSlugs.filter(
-				(tagSlug) => !currentSlugs.includes(tagSlug),
-			);
-			if (missingTagSlugs.length === 0) {
-				rejectedNoops += 1;
-				continue;
-			}
-			proposedItems.push({
-				key,
-				currentSlugs,
-			});
-		}
-		if (proposedItems.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Selected strings already have the requested tags.",
-			});
-		}
-		const changeSetId = await ctx.db.insert("changeSets", {
-			projectId: token.projectId,
-			title: args.title ?? `Tag ${proposedItems.length} strings`,
-			description: args.description,
-			author: { kind: "agent", id: token._id },
-			authorKind: "agent",
-			authorId: token._id,
-			status: "open",
-			baseSnapshotVersion: Date.now(),
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			openedAt: Date.now(),
-			summary: {
-				filesChanged: 0,
-				fieldsChanged: 0,
-				additions: 0,
-				deletions: 0,
-			},
-		});
-		for (const item of proposedItems) {
-			const key = item.key;
-			await ctx.db.insert("changeSetItems", {
-				projectId: token.projectId,
-				changeSetId,
-				kind: "key_metadata",
-				keyId: key._id,
-				fieldPath: `keys/${key.key}.tags.json`,
-				previousValue: JSON.stringify({
-					tagSlugs: item.currentSlugs,
-				}),
-				nextValue: JSON.stringify({ tagSlugs }),
-				status: "pending",
-				createdAt: Date.now(),
-			});
-		}
-		const items = await ctx.db
-			.query("changeSetItems")
-			.withIndex("by_changeSet", (q) => q.eq("changeSetId", changeSetId))
-			.take(MAX_CHANGE_SET_ITEMS + 1);
-		assertBoundedChangeSetSize(items.length);
-		await ctx.db.patch(changeSetId, {
-			summary: summarizeItems(items),
-			updatedAt: Date.now(),
-		});
-		return {
-			projectId: token.projectId,
-			changeSetId,
-			proposed: proposedItems.length,
-			rejected: rejectedNoops,
-		};
-	},
-});
-
 export const getChangeSet = internalQuery({
 	args: { token: v.string(), changeSetId: v.id("changeSets") },
 	handler: async (ctx, args) => {
@@ -715,41 +121,18 @@ export const getChangeSet = internalQuery({
 		const items = await ctx.db
 			.query("changeSetItems")
 			.withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
-			.take(MAX_CHANGE_SET_ITEMS + 1);
-		assertBoundedChangeSetSize(items.length);
+			.take(51);
+		if (items.length > 50)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "Historical Change Set exceeds the 50-item read limit.",
+			});
 		return {
 			...changeSet,
 			items,
-			reviewUrl: buildReviewUrl(token.projectId, args.changeSetId),
+			retired: true,
+			migration:
+				"Historical evidence only. Create a Translation Task to propose current catalog values.",
 		};
-	},
-});
-
-export const exportContent = internalQuery({
-	args: {
-		token: v.string(),
-		format: v.union(v.literal("json"), v.literal("arb")),
-		locale: v.string(),
-		selection: v.object({
-			type: v.union(
-				v.literal("all"),
-				v.literal("keys"),
-				v.literal("tag"),
-				v.literal("screen"),
-			),
-			keys: v.optional(v.array(v.string())),
-			tag: v.optional(v.string()),
-			screen: v.optional(v.string()),
-		}),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "export");
-		const content = await buildExportContent(ctx, {
-			projectId: token.projectId,
-			localeCode: args.locale,
-			format: args.format,
-			selection: args.selection,
-		});
-		return { content };
 	},
 });

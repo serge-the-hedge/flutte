@@ -5,6 +5,24 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'local FVM executable survives moving into a staging directory',
+    () async {
+      final fixture = await ToolchainFixture.create(parent: Directory('.'));
+      addTearDown(fixture.dispose);
+      await fixture.sdk('.fvm/flutter_sdk', 'Flutter 3.44.6');
+      final resolved = await FlutterToolchainResolver(
+        environment: const {},
+      ).resolve(fixture.root);
+      final result = await Process.run(resolved.executable, [
+        '--version',
+      ], workingDirectory: Directory.systemTemp.path);
+      expect(result.exitCode, 0);
+      expect(result.stdout, contains('Flutter 3.44.6'));
+      expect(File(resolved.executable).isAbsolute, isTrue);
+    },
+  );
+
+  test(
     'explicit SDK wins and reports version plus committed constraint',
     () async {
       final fixture = await ToolchainFixture.create();
@@ -48,8 +66,10 @@ class ToolchainFixture {
   final Directory root;
   Directory get checkout => root;
 
-  static Future<ToolchainFixture> create() async {
-    final root = await Directory.systemTemp.createTemp('blabla-flutter-sdk-');
+  static Future<ToolchainFixture> create({Directory? parent}) async {
+    final root = await (parent ?? Directory.systemTemp).createTemp(
+      'blabla-flutter-sdk-',
+    );
     await File('${root.path}/pubspec.yaml').writeAsString('''name: brickit
 environment:
   sdk: ^3.12.0

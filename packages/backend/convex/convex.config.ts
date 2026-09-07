@@ -8,6 +8,8 @@ import { defineApp } from "convex/server";
 
 const app = defineApp();
 app.use(betterAuth);
+// Retain historical component mounts until deployed data can be audited.
+// Application code no longer uses the old migrations/aggregate/workflow scaffolding.
 app.use(migrations);
 app.use(rateLimiter);
 app.use(resend);

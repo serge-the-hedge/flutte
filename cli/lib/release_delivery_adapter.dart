@@ -226,6 +226,7 @@ class ReleaseRepositoryAdapter {
       _runner,
       checkout,
       prefix: 'blabla-release-',
+      commit: appliedOnto,
     );
     try {
       await _assertRegularLocalizationFiles(
@@ -290,6 +291,12 @@ class ReleaseRepositoryAdapter {
         changedPaths,
       );
 
+      final current = await request.gateway.readRelease(request.recordId);
+      _validateSameRelease(summary, current);
+      if (localeArtifact != null) {
+        await _portuguese.ensureUnchanged(localeInput!.gateway, localeArtifact);
+      }
+
       await _ensureRelevantPathsAreClean(
         checkout,
         summary.catalogs,
@@ -306,16 +313,7 @@ class ReleaseRepositoryAdapter {
             ? const {}
             : {_portuguese.runtimeConstantsPath},
       );
-      if (await _git(checkout, ['rev-parse', 'HEAD']) != appliedOnto) {
-        throw RepositoryAdapterException(
-          'The Brickit checkout advanced while the release was being prepared. Retry from the new integration-branch HEAD.',
-        );
-      }
-      final current = await request.gateway.readRelease(request.recordId);
-      _validateSameRelease(summary, current);
-      if (localeArtifact != null) {
-        await _portuguese.ensureUnchanged(localeInput!.gateway, localeArtifact);
-      }
+      await staging.ensureCheckoutUnchanged(currentBranch);
 
       await _git(checkout, ['switch', '-c', branchName]);
       await _writeCandidateFiles(checkout, candidateFiles);

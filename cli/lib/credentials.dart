@@ -72,7 +72,14 @@ class CredentialStore {
     }
     final credentialsFile = file;
     await credentialsFile.parent.create(recursive: true);
-    final temporary = File('${credentialsFile.path}.tmp-${pid}');
+    // createTemp uses a private directory on POSIX, before any token bytes exist.
+    // Keeping it beside the final file also makes the rename atomic.
+    final privateDirectory = await credentialsFile.parent.createTemp(
+      '.credentials-',
+    );
+    final temporary = File(
+      '${privateDirectory.path}${Platform.pathSeparator}credentials.json',
+    );
     try {
       await temporary.writeAsString(
         '${jsonEncode({'server': credentials.server, 'token': credentials.token})}\n',
@@ -86,7 +93,7 @@ class CredentialStore {
       }
       await temporary.rename(credentialsFile.path);
     } finally {
-      if (await temporary.exists()) await temporary.delete();
+      await privateDirectory.delete(recursive: true);
     }
   }
 }

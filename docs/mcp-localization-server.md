@@ -1,81 +1,25 @@
-# Localization MCP Server Contract
+# Planned localization MCP adapter
 
-The first implementation ships HTTP endpoints. A future MCP server should be a
-thin adapter over those endpoints so agents get the same semantics in every
-environment.
+Status: **not implemented**. The supported agent transport is the HTTP
+[Agent Translation Guide](agent-api.md). A future MCP adapter should call those
+endpoints and preserve their bounds, provenance, and human-review boundary.
 
-## Tools
+| Proposed tool | HTTP endpoint under `/api/agent/v1` | Scope |
+| --- | --- | --- |
+| `localization_project` | `GET /projects/current` | `read` |
+| `localization_search` | `GET /workspace/search` | `search` |
+| `localization_work` | `GET /workspace/work` | `search` |
+| `localization_context` | `POST /workspace/context` | `read` |
+| `localization_create_task` | `POST /translation-tasks` | `propose` |
+| `localization_list_tasks` | `GET /translation-tasks` | `read` |
+| `localization_read_task` | `GET /translation-tasks/:id` | `read` |
+| `localization_propose_candidates` | `POST /translation-tasks/:id/candidates` | `propose` |
 
-### `localization_project`
+Pass opaque cursors and task identities through unchanged. Return candidates as
+proposed until human review succeeds; agent tools cannot accept or apply them.
+Mirror HTTP validation and rate-limit responses rather than inventing a second
+policy. Read the HTTP guide for each endpoint's complete scope checks.
 
-Maps to `GET /api/agent/v1/projects/current`.
-
-Returns compact project metadata, including source locale, locales, screens, and
-tags.
-
-### `localization_search_strings`
-
-Maps to `GET /api/agent/v1/strings/search`.
-
-Inputs:
-
-- `q`
-- `locale`
-- `screen`
-- `tag`
-- `status`
-- `limit`
-
-Returns compact string rows suitable for low-token agent browsing.
-
-### `localization_get_context`
-
-Maps to `POST /api/agent/v1/context`.
-
-Inputs:
-
-- `keys`
-- `locales`
-- `includeHistory`
-
-Returns requested values, metadata, and optional recent field history.
-
-### `localization_create_change_set`
-
-Maps to `POST /api/agent/v1/change-sets`.
-
-Creates a human-reviewable change set. This tool must not apply changes.
-
-### `localization_tag_strings`
-
-Maps to `POST /api/agent/v1/strings/tags`.
-
-Inputs:
-
-- `selection`: `all`, `keys`, `tag`, or `screen`
-- `tagSlugs`: new or existing tag slugs to add
-- `title`
-- `description`
-
-Creates a human-reviewable metadata change set for batch tag assignment. This
-tool must not apply changes.
-
-### `localization_get_change_set`
-
-Maps to `GET /api/agent/v1/change-sets/:id`.
-
-Returns review status, item statuses, and conflicts.
-
-### `localization_export`
-
-Reserved for the future immutable Release Bundle workflow. The legacy
-`POST /api/agent/v1/export` endpoint returns `410 Gone` and must not be exposed
-as an MCP tool.
-
-## Token Scope Mapping
-
-- `read`: `localization_project`, `localization_get_context`,
-  `localization_get_change_set`
-- `search`: `localization_search_strings`
-- `propose`: `localization_create_change_set`, `localization_tag_strings`
-- `export`: reserved for `localization_export` once Release Bundles ship
+Release construction stays in the authenticated human UI, and Git delivery stays
+with the local Repository Adapter. Legacy search, context, Change Set, tag, and
+export addresses return `410 Gone` and are not MCP tool targets.

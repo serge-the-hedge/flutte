@@ -7,6 +7,73 @@ import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
 void main() {
+  for (final deliverRelease in [false, true]) {
+    test(
+      'refuses concurrent committed work during ${deliverRelease ? 'release' : 'Portuguese'} delivery',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        final artifact = await portugueseArtifact(fixture);
+        if (deliverRelease) await fixture.addGermanCatalog();
+        final runner = CountingCommandRunner(
+          onFirstGeneration: () async {
+            final constants = fixture.file(
+              'packages/brickit/lib/constants/locale_const.dart',
+            );
+            await constants.writeAsString(
+              '${await constants.readAsString()}\n// Concurrent runtime registration change\n',
+            );
+            await fixture.git(['add', constants.path]);
+            await fixture.git([
+              'commit',
+              '-m',
+              'concurrent runtime registration',
+            ]);
+          },
+        );
+        final delivery = deliverRelease
+            ? ReleaseRepositoryAdapter(runner: runner).deliver(
+                ReleaseDeliveryRequest(
+                  checkout: fixture.root,
+                  recordId: 'release_123',
+                  flutter: testFlutter(fixture.flutterExecutable),
+                  gateway: StaticReleaseGateway(
+                    await existingLocaleRelease(fixture),
+                  ),
+                  write: (_) {},
+                ),
+              )
+            : RepositoryAdapter(
+                runner: runner,
+              ).deliver(requestFor(fixture, artifact));
+        await expectLater(
+          delivery,
+          throwsA(
+            isA<RepositoryAdapterException>().having(
+              (error) => error.message,
+              'message',
+              contains('checkout changed'),
+            ),
+          ),
+        );
+        expect(await fixture.git(['branch', '--show-current']), 'develop');
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        expect(
+          await fixture
+              .file('packages/brickit/lib/constants/locale_const.dart')
+              .readAsString(),
+          contains('Concurrent runtime registration change'),
+        );
+        expect(
+          await fixture
+              .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+              .exists(),
+          isFalse,
+        );
+      },
+    );
+  }
+
   test(
     'refuses a stale Portuguese proposal without changing the checkout',
     () async {
@@ -1098,6 +1165,8 @@ class UnchangedAppliedReleaseGateway implements ReleaseGateway {
 }
 
 class CountingCommandRunner implements CommandRunner {
+  CountingCommandRunner({this.onFirstGeneration});
+  final Future<void> Function()? onFirstGeneration;
   final _delegate = const SystemCommandRunner();
   var generationCount = 0;
 
@@ -1107,8 +1176,11 @@ class CountingCommandRunner implements CommandRunner {
     List<String> arguments, {
     required String workingDirectory,
     List<int>? stdin,
-  }) {
-    if (arguments.contains('gen-l10n')) generationCount += 1;
+  }) async {
+    if (arguments.contains('gen-l10n')) {
+      generationCount += 1;
+      if (generationCount == 1) await onFirstGeneration?.call();
+    }
     return _delegate.run(
       executable,
       arguments,

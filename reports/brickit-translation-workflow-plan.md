@@ -431,7 +431,7 @@ are made:
 
 These are decision questions, not implementation tickets. They are charted in
 the canonical GitHub
-[Wayfinder map](https://github.com/serge-the-hedge/blabla/issues/4).
+[Wayfinder map](https://github.com/serge-the-hedge/flutte/issues/4).
 
 ## Deliberately not in the first destination
 

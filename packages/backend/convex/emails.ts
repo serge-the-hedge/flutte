@@ -46,3 +46,23 @@ export async function queuePasswordResetEmail(
 		html: `<p>A password reset was requested for your Flutte account.</p><p><a href="${resetUrl}">Choose a new password</a></p><p>If you did not request this, you can ignore this email.</p>`,
 	});
 }
+
+/** Queue proof-of-address mail; only the signed Better Auth link verifies it. */
+export async function queueVerificationEmail(
+	ctx: GenericCtx<DataModel>,
+	input: { email: string; url: string },
+): Promise<void> {
+	await resend.sendEmail(requireActionCtx(ctx), {
+		from: requiredEnv("AUTH_EMAIL_FROM"),
+		to: input.email,
+		subject: "Verify your Flutte email address",
+		text: [
+			"Verify your email address to accept Flutte project invitations.",
+			"",
+			input.url,
+			"",
+			"If you did not request this, you can ignore this email.",
+		].join("\n"),
+		html: `<p>Verify your email address to accept Flutte project invitations.</p><p><a href="${escapeHtml(input.url)}">Verify email address</a></p><p>If you did not request this, you can ignore this email.</p>`,
+	});
+}

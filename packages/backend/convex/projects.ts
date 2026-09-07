@@ -58,7 +58,7 @@ function normalizeEmail(email: string) {
 async function assertCanChangeMemberRole(
 	ctx: QueryCtx | MutationCtx,
 	member: { projectId: Id<"projects">; role: Role },
-	nextRole: Role,
+	nextRole: Role | null,
 ) {
 	if (member.role !== "owner" || nextRole === "owner") {
 		return;
@@ -107,6 +107,7 @@ async function upsertProjectMember(
 		)
 		.unique();
 	if (existing) {
+		await assertCanChangeMemberRole(ctx, existing, role);
 		await ctx.db.patch(existing._id, { role });
 		return existing._id;
 	}
@@ -304,10 +305,18 @@ export const addMember = mutation({
 	handler: async (ctx, args) => {
 		await requireOwner(ctx, args.projectId);
 		await assertProjectExists(ctx, args.projectId);
+		const userId = args.userId.trim();
+		const account = userId ? await getAnyUserById(ctx, userId) : null;
+		if (!account) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Account not found. Invite new members by email instead.",
+			});
+		}
 		return await upsertProjectMember(
 			ctx,
 			args.projectId,
-			args.userId.trim(),
+			account.id,
 			args.role,
 		);
 	},
@@ -332,7 +341,7 @@ export const inviteMemberByEmail = mutation({
 		);
 		const authUser = await getAnyUserByEmail(ctx, emailLower);
 
-		if (authUser) {
+		if (authUser?.emailVerified) {
 			const memberId = await upsertProjectMember(
 				ctx,
 				args.projectId,
@@ -386,6 +395,12 @@ export const acceptPendingInvites = mutation({
 	args: {},
 	handler: async (ctx) => {
 		const user = await requireUser(ctx);
+		if (!user.emailVerified) {
+			throw new ConvexError({
+				code: "EMAIL_NOT_VERIFIED",
+				message: "Verify your email before accepting project invitations.",
+			});
+		}
 		if (!user.email) {
 			throw new ConvexError({
 				code: "VALIDATION",
@@ -446,8 +461,7 @@ export const updateMemberRole = mutation({
 				message: "Member not found.",
 			});
 		await requireOwner(ctx, member.projectId);
-		await assertCanChangeMemberRole(ctx, member, args.role);
-		await ctx.db.patch(args.memberId, { role: args.role });
+		await upsertProjectMember(ctx, member.projectId, member.userId, args.role);
 		return null;
 	},
 });
@@ -462,20 +476,7 @@ export const removeMember = mutation({
 				message: "Member not found.",
 			});
 		await requireOwner(ctx, member.projectId);
-		if (member.role === "owner") {
-			const owners = await ctx.db
-				.query("projectMembers")
-				.withIndex("by_project_role", (q) =>
-					q.eq("projectId", member.projectId).eq("role", "owner"),
-				)
-				.take(2);
-			if (owners.length <= 1) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "A project needs at least one owner.",
-				});
-			}
-		}
+		await assertCanChangeMemberRole(ctx, member, null);
 		await ctx.db.delete(args.memberId);
 		return null;
 	},

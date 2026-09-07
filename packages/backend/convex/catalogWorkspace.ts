@@ -2,31 +2,18 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import {
-	internalMutation,
-	internalQuery,
-	mutation,
-	query,
-} from "./_generated/server";
-import { hasMinimumRole } from "./accessControl";
+import { internalMutation, mutation } from "./_generated/server";
 import {
 	activeProjectionFor,
 	activeWorkingCatalog,
 	MAX_WORKING_CATALOG_ROWS,
-	readActiveCatalog,
 } from "./catalogProjection";
 import { recomputeNavigationRows } from "./catalogWorkspaceNavigation";
 import {
-	type CatalogWorkspaceValueState,
-	composeWorkspaceKeyCards,
-	currentSourceProposalRows,
-	currentWorkspaceRows,
 	decisionIdentity,
 	decisionRecordMap,
 	encodedSize,
 	isCurrentHeadForRow,
-	sourceChangeMap,
-	translatorConfirmationMap,
 	valueIdentity,
 } from "./catalogWorkspaceView";
 import {
@@ -41,14 +28,13 @@ import {
 	ordinaryImportConfirmationCandidateIdentity,
 	ordinaryImportConfirmationPlan,
 } from "./ordinaryImportConfirmations";
-import { requireEditor, requireViewer } from "./permissions";
+import { requireEditor } from "./permissions";
 import {
 	isCurrentSourceProposalHeadForSource,
 	MAX_SOURCE_PROPOSAL_VALUE_BYTES,
 	publishedResolutionFor,
 	saveSourceProposal,
 	sourceProposalHeadFor,
-	sourceProposalHeadMap,
 	sourceProposalHeadsFor,
 	sourceProposalStatusesFor,
 } from "./sourceProposals";
@@ -72,34 +58,6 @@ const commitIntentValidator = v.union(
 	v.object({ kind: v.literal("confirm") }),
 	v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 );
-
-const ordinaryImportConfirmationCandidateValidator = v.object({
-	messageId: v.string(),
-	localeId: v.id("locales"),
-	sourceFingerprint: v.string(),
-	valueFingerprint: v.string(),
-});
-
-const ordinaryImportConfirmationCountsValidator = v.object({
-	total: v.number(),
-	eligible: v.number(),
-	empty: v.number(),
-	sourceIdentical: v.number(),
-	repeated: v.number(),
-	modified: v.number(),
-	stale: v.number(),
-	alreadyConfirmed: v.number(),
-	pendingSourceProposal: v.number(),
-});
-
-const ordinaryImportConfirmationPlanValidator = v.object({
-	policy: v.literal(ORDINARY_IMPORT_CONFIRMATION_POLICY),
-	projectionId: v.id("catalogProjections"),
-	snapshotId: v.id("sourceSnapshots"),
-	canConfirm: v.boolean(),
-	counts: ordinaryImportConfirmationCountsValidator,
-	candidates: v.array(ordinaryImportConfirmationCandidateValidator),
-});
 
 type CatalogWorkspaceDecisionRecord = Doc<"catalogWorkspaceDecisionRecords">;
 type CatalogWorkspaceValueHeadInput = {
@@ -218,26 +176,6 @@ async function decisionRecordsFor(
 	return records;
 }
 
-async function gitChangesForProjection(
-	ctx: QueryCtx | MutationCtx,
-	projection: Doc<"catalogProjections">,
-): Promise<Doc<"catalogProjectionGitChanges">[]> {
-	const rows = await ctx.db
-		.query("catalogProjectionGitChanges")
-		.withIndex("by_projection_and_isSource", (q) =>
-			q.eq("projectionId", projection._id).eq("isSource", true),
-		)
-		.take(MAX_WORKING_CATALOG_ROWS + 1);
-	if (rows.length > MAX_WORKING_CATALOG_ROWS) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message:
-				"Catalog Workspace source-change evidence exceeds its projection envelope.",
-		});
-	}
-	return rows;
-}
-
 function assertWorkspaceEnvelope(
 	state: Doc<"catalogWorkspaceStates"> | null,
 	heads: readonly Doc<"catalogWorkspaceValueHeads">[],
@@ -294,23 +232,6 @@ function assertDecisionEnvelope(
 				"Catalog Workspace does not match its declared decision-record envelope.",
 		});
 	}
-}
-
-function headMap(
-	heads: readonly Doc<"catalogWorkspaceValueHeads">[],
-): Map<string, Doc<"catalogWorkspaceValueHeads">> {
-	const result = new Map<string, Doc<"catalogWorkspaceValueHeads">>();
-	for (const head of heads) {
-		const identity = valueIdentity(head);
-		if (result.has(identity)) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Catalog Workspace contains duplicate Locale value heads.",
-			});
-		}
-		result.set(identity, head);
-	}
-	return result;
 }
 
 function assertIntentionalBlankReason(reason: string): string {

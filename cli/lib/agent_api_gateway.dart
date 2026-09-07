@@ -18,7 +18,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
   final Uri baseUrl;
   final String token;
   final void Function(String line)? onWarning;
-  String? _lastCompatibilityWarning;
+  final _compatibility = CliCompatibility();
 
   @override
   Future<LocaleProposalSummary> readProposal(String proposalId) async {
@@ -81,8 +81,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
       final request = await client.getUrl(uri);
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set('X-Blabla-CLI-Version', blablaCliVersion);
-      request.headers.set('X-Blabla-CLI-Protocol', '$blablaCliProtocol');
+      _compatibility.stamp(request.headers);
       final response = await request.close();
       final body = await utf8.decoder.bind(response).join();
       if (response.statusCode != HttpStatus.ok) {
@@ -90,7 +89,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
           'Blabla rejected the Portuguese proposal request (${response.statusCode}). ${_errorMessage(body)}',
         );
       }
-      _checkCompatibility(response);
+      _compatibility.check(response.headers, onWarning: onWarning);
       try {
         return _object(jsonDecode(body));
       } on FormatException {
@@ -121,51 +120,6 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
     }
     return 'Check the proposal id and the token scopes.';
   }
-
-  void _checkCompatibility(HttpClientResponse response) {
-    final requiredProtocol = int.tryParse(
-      response.headers.value('X-Blabla-Minimum-CLI-Protocol') ?? '',
-    );
-    if (requiredProtocol != null && requiredProtocol > blablaCliProtocol) {
-      throw RepositoryAdapterException(
-        'Blabla requires CLI protocol $requiredProtocol, but this binary supports $blablaCliProtocol. Install a newer Blabla CLI before retrying.',
-      );
-    }
-
-    final minimumVersion = response.headers.value(
-      'X-Blabla-Minimum-CLI-Version',
-    );
-    if (minimumVersion == null ||
-        _compareVersion(blablaCliVersion, minimumVersion) >= 0) {
-      return;
-    }
-    final warning =
-        'A newer Blabla CLI ($minimumVersion or newer) is available. This request remains compatible, but update before the next protocol change.';
-    if (_lastCompatibilityWarning == warning) return;
-    _lastCompatibilityWarning = warning;
-    onWarning?.call(warning);
-  }
-}
-
-int _compareVersion(String left, String right) {
-  List<int>? parse(String value) {
-    final match = RegExp(r'^(\d+)\.(\d+)\.(\d+)').firstMatch(value.trim());
-    if (match == null) return null;
-    return [
-      int.parse(match.group(1)!),
-      int.parse(match.group(2)!),
-      int.parse(match.group(3)!),
-    ];
-  }
-
-  final leftParts = parse(left);
-  final rightParts = parse(right);
-  if (leftParts == null || rightParts == null) return 0;
-  for (var index = 0; index < leftParts.length; index += 1) {
-    final comparison = leftParts[index].compareTo(rightParts[index]);
-    if (comparison != 0) return comparison;
-  }
-  return 0;
 }
 
 Map<String, Object?> _object(Object? value) {

@@ -6,7 +6,109 @@ import 'package:blabla_cli/command_runner.dart';
 import 'package:blabla_cli/snapshot_sync_adapter.dart';
 import 'package:test/test.dart';
 
+import '../bin/blabla.dart' show runCli;
+
 void main() {
+  for (final succeeded in [false, true]) {
+    test(
+      'sync CLI exits ${succeeded ? 0 : 1} for a ${succeeded ? 'published' : 'failed'} run',
+      () async {
+        final fixture = await SyncFixture.create();
+        addTearDown(fixture.dispose);
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(server.close);
+        final output = <String>[];
+        server.listen((request) async {
+          await request.drain<void>();
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode(
+              request.method == 'GET'
+                  ? {
+                      'version': 1,
+                      'canSubmit': true,
+                      'setupIssues': [],
+                      'repository': null,
+                      'integrationBranch': 'develop',
+                      'bindings': [
+                        {
+                          'localeCode': 'en',
+                          'catalogPath':
+                              'packages/brickit_generated/lib/l10n/intl_en.arb',
+                          'isSource': true,
+                        },
+                      ],
+                      'baseline': null,
+                      'limits': {'maxFiles': 1000, 'maxBytes': 8388608},
+                    }
+                  : {
+                      'version': 1,
+                      'run': {
+                        'id': 'run_1',
+                        'status': succeeded ? 'succeeded' : 'failed',
+                        'snapshotId': succeeded ? 'snapshot_1' : null,
+                        'diagnosticCount': succeeded ? 0 : 1,
+                        'diagnostics': succeeded
+                            ? []
+                            : [
+                                {'message': 'Catalog rejected'},
+                              ],
+                        'unboundLocaleFileCount': 0,
+                        'absentTargetLocaleCount': 0,
+                      },
+                    },
+            ),
+          );
+          await request.response.close();
+        });
+        final code = await runCli(
+          [
+            'sync',
+            '--checkout',
+            fixture.root.path,
+            '--server',
+            'http://${server.address.address}:${server.port}',
+            '--token',
+            'test-token',
+          ],
+          environment: const {},
+          write: output.add,
+          writeError: output.add,
+        );
+        expect(code, succeeded ? 0 : 1);
+        if (!succeeded) expect(output.join('\n'), contains('Catalog rejected'));
+      },
+    );
+  }
+
+  test('sync does not warn when the minimum CLI version is older', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    server.listen((request) async {
+      request.response.headers.set('X-Blabla-Minimum-CLI-Version', '0.0.1');
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'version': 1,
+          'canSubmit': true,
+          'setupIssues': [],
+          'repository': null,
+          'bindings': [],
+          'baseline': null,
+          'limits': {'maxFiles': 1000, 'maxBytes': 8388608},
+        }),
+      );
+      await request.response.close();
+    });
+    final warnings = <String>[];
+    await HttpSnapshotSyncGateway(
+      baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+      token: 'test-token',
+      onWarning: warnings.add,
+    ).readContext();
+    expect(warnings, isEmpty);
+  });
+
   test(
     'reads bound catalogs and unbound sibling ARB files without writing',
     () async {

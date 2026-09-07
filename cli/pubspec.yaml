@@ -7,6 +7,7 @@ environment:
 
 dependencies:
   crypto: ^3.0.6
+  pub_semver: ^2.2.0
 
 dev_dependencies:
   test: ^1.26.3

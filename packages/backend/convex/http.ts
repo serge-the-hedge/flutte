@@ -29,12 +29,9 @@ const http = httpRouter();
 const internalApi = internal;
 
 type AgentScope = TokenScope;
-type StringStatus = "missing" | "translated" | "needs_review" | "stale";
 type AgentRateLimitName =
 	| "agentRead"
 	| "agentSearch"
-	| "agentCreateChangeSet"
-	| "agentExport"
 	| "agentLocaleProposal"
 	| "agentTranslationProposal";
 type RepositoryAdapterRateLimitName =
@@ -80,21 +77,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isStringArray(value: unknown): value is string[] {
 	return (
 		Array.isArray(value) && value.every((item) => typeof item === "string")
-	);
-}
-
-function optionalStringStatus(value: string | null): StringStatus | undefined {
-	if (value === null) return undefined;
-	if (
-		value === "missing" ||
-		value === "translated" ||
-		value === "needs_review" ||
-		value === "stale"
-	) {
-		return value;
-	}
-	throw new Error(
-		"status must be missing, translated, needs_review, or stale.",
 	);
 }
 
@@ -898,36 +880,6 @@ http.route({
 });
 
 http.route({
-	path: "/api/agent/v1/strings/search",
-	method: "GET",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const url = new URL(request.url);
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					"search",
-					"agentSearch",
-					async (token) =>
-						await ctx.runQuery(internalApi.agentApi.searchStrings, {
-							token,
-							q: url.searchParams.get("q") ?? undefined,
-							locale: url.searchParams.get("locale") ?? undefined,
-							screen: url.searchParams.get("screen") ?? undefined,
-							tag: url.searchParams.get("tag") ?? undefined,
-							status: optionalStringStatus(url.searchParams.get("status")),
-							limit: Number(url.searchParams.get("limit") ?? 25),
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
-
-http.route({
 	path: "/api/agent/v1/workspace/search",
 	method: "GET",
 	handler: httpAction(async (ctx, request) => {
@@ -1043,72 +995,6 @@ http.route({
 							},
 						),
 				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
-
-http.route({
-	path: "/api/agent/v1/context",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await request.json();
-			return agentJson(
-				await withAgent(
-					ctx,
-					request,
-					"read",
-					"agentRead",
-					async (token) =>
-						await ctx.runQuery(internalApi.agentApi.getContext, {
-							token,
-							keys: body.keys ?? [],
-							locales: body.locales ?? [],
-							includeHistory: Boolean(body.includeHistory),
-						}),
-				),
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
-
-http.route({
-	path: "/api/agent/v1/change-sets",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await request.json();
-			const agentResult = await withAgent(
-				ctx,
-				request,
-				"propose",
-				"agentCreateChangeSet",
-				async (token) =>
-					await ctx.runMutation(internalApi.agentApi.createChangeSetFromKeys, {
-						token,
-						title: body.title,
-						description: body.description,
-						items: body.items ?? [],
-					}),
-			);
-			return json(
-				{
-					changeSetId: agentResult.value.changeSetId,
-					status: "open",
-					itemsProposed: agentResult.value.proposed,
-					itemsConflicted: agentResult.value.conflicts,
-					itemsRejected: agentResult.value.rejected,
-					itemsAccepted:
-						agentResult.value.proposed - agentResult.value.conflicts,
-					reviewUrl: `/projects/${agentResult.value.projectId}/reviews/${agentResult.value.changeSetId}`,
-				},
-				200,
-				agentResult.responseHeaders,
 			);
 		} catch (error) {
 			return routeError(error);
@@ -1855,45 +1741,6 @@ http.route({
 });
 
 http.route({
-	path: "/api/agent/v1/strings/tags",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		try {
-			const body = await request.json();
-			const agentResult = await withAgent(
-				ctx,
-				request,
-				"propose",
-				"agentCreateChangeSet",
-				async (token) =>
-					await ctx.runMutation(internalApi.agentApi.proposeTagBatch, {
-						token,
-						title: body.title,
-						description: body.description,
-						selection: body.selection ?? { type: "keys", keys: [] },
-						tagSlugs: body.tagSlugs ?? [],
-					}),
-			);
-			return json(
-				{
-					changeSetId: agentResult.value.changeSetId,
-					status: "open",
-					itemsProposed: agentResult.value.proposed,
-					itemsConflicted: 0,
-					itemsRejected: agentResult.value.rejected,
-					itemsAccepted: agentResult.value.proposed,
-					reviewUrl: `/projects/${agentResult.value.projectId}/reviews/${agentResult.value.changeSetId}`,
-				},
-				200,
-				agentResult.responseHeaders,
-			);
-		} catch (error) {
-			return routeError(error);
-		}
-	}),
-});
-
-http.route({
 	pathPrefix: "/api/agent/v1/change-sets/",
 	method: "GET",
 	handler: httpAction(async (ctx, request) => {
@@ -1921,18 +1768,28 @@ http.route({
 	}),
 });
 
-http.route({
-	path: "/api/agent/v1/export",
-	method: "POST",
-	handler: httpAction(async () =>
-		json(
-			{
-				error:
-					"Legacy export is retired. Build a Ready Release Bundle in the web app and deliver it with the Repository Adapter.",
-			},
-			410,
+// Keep migration errors at the old transport addresses; no legacy write is registered.
+for (const [path, method] of [
+	["/strings/search", "GET"],
+	["/context", "POST"],
+	["/change-sets", "POST"],
+	["/strings/tags", "POST"],
+	["/export", "POST"],
+] as const) {
+	http.route({
+		path: `/api/agent/v1${path}`,
+		method,
+		handler: httpAction(async () =>
+			json(
+				{
+					code: "RETIRED_WORKFLOW",
+					error:
+						"Legacy catalog operations are retired. Use /workspace/search and /translation-tasks for proposals, or build a Ready Release Bundle for delivery.",
+				},
+				410,
+			),
 		),
-	),
-});
+	});
+}
 
 export default http;

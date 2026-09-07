@@ -1,220 +1,118 @@
-# blabla
+# Blabla
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Router, Convex, and more.
+Blabla is Brickit's localization workspace. Developers sync committed Flutter
+ARB catalogs from Git, translators edit and review values in the web app, and a
+local CLI delivers reviewed output on a branch with matching generated Dart.
+Agents propose candidates; a human decides what becomes current. Blabla never
+pushes to Git or opens a pull request on the developer's behalf.
 
-## Features
+## Start here
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Router** - File-based routing with full type safety
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Convex** - Reactive backend-as-a-service platform
-- **Authentication** - Better-Auth
-- **Biome** - Linting and formatting
-- **Turborepo** - Optimized monorepo build system
+- [Catalog message lifecycle](docs/catalog-message-lifecycle.md): the implemented
+  path from Git import through review to delivery.
+- [Product specification](docs/spec/localization-control-plane.md): accepted
+  product rules, with an implementation-status table separating shipped and
+  planned work.
+- [Agent API](docs/agent-api.md): workspace discovery and Translation Tasks.
+- [CLI](cli/README.md): installation, sync, delivery, and real-Flutter checks.
+- [Hosted setup](docs/hosted-auth-setup.md): Vercel, Convex, and account email.
+- [Domain glossary](CONTEXT.md): shared product vocabulary.
 
-## Getting Started
+## Local development
 
-First, install the dependencies:
+Use Bun **1.3.13** (the version pinned in `package.json` and CI). The CLI also
+needs Dart; see its [toolchain requirements](cli/README.md).
 
-```bash
-bun install
-```
-
-## Convex Setup
-
-This project uses Convex as a backend. You'll need to set up Convex before running the app:
-
-```bash
+```sh
+bun install --frozen-lockfile
 bun run dev:setup
 ```
 
-Follow the prompts to create a new Convex project and connect it to your application.
+Configure the chosen Convex development deployment's runtime authentication
+variables before starting the app:
 
-Copy environment variables from `packages/backend/.env.local` to `apps/*/.env`.
-
-Then, run the development server:
-
-```bash
-bun run dev
-```
-
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
-Your app will connect to the Convex cloud backend automatically.
-
-## MVP workflow
-
-The product path is intentionally small:
-
-1. Open the project's **Sync** page and add the source and target catalog
-   bindings once.
-2. Open **Settings → API tokens**, create the workspace connection, and run
-   the one-time setup command it gives you.
-3. In the Brickit checkout, update the project's integration branch (`develop`
-   for the current Brickit repository) with the team's normal fast-forward
-   pull, then run `blabla sync` whenever the source commit changes.
-4. Use **Strings** for manual edits and **Translation tasks** to prepare a
-   locale or hand a bounded translation task to an agent.
-5. Review the proposed values in the task before any delivery action.
-6. Prepare a Release Record for reviewed existing-Locale work. Deliver it from
-   that same integration-branch checkout, adding `--locale-proposal` when a
-   Portuguese task is ready too. The adapter creates one local review branch
-   and prints the exact push and pull-request commands; it never runs them for
-   you.
-
-The setup page is the workflow surface. Project ids, Convex URLs, token scopes,
-snapshot ids, and proposal ids are implementation details unless you open an
-advanced/API view.
-
-For the authoritative map of how one catalog message moves from Git import,
-through human or agent review, into a shipped Flutter application, see
-[Catalog Message Lifecycle](docs/catalog-message-lifecycle.md).
-
-An unpublished local checkout needs no CLI installation. The web app shows
-repository-local commands in development:
-
-```bash
-bun run blabla -- login --server https://<deployment>.convex.site --token ...
-git -C /path/to/brickit-flutter fetch origin develop
-git -C /path/to/brickit-flutter switch develop
-git -C /path/to/brickit-flutter pull --ff-only origin develop
-# run the following from this Blabla repository root
-bun run blabla -- sync --checkout /path/to/brickit-flutter
-bun run blabla -- deliver --release <release-record-id> --locale-proposal <proposal-id> --checkout /path/to/brickit-flutter
-```
-
-Run them from this repository root. A production build shows the equivalent
-installed-binary commands (`blabla login`, `blabla sync`, and `blabla deliver`)
-instead. `deliver-portuguese` remains available for old new-Locale-only jobs.
-
-## Development Authentication
-
-This project uses Better Auth through the Convex HTTP site URL. In development,
-use the normal email/password sign-up flow instead of adding an anonymous login
-button. Anonymous auth is useful for real guest-mode product requirements, but it
-adds a Better Auth plugin, schema changes, and account-linking behavior. For this
-app, project ownership and audit data should be tied to a real user account even
-in local development.
-
-To sign in locally:
-
-1. Start the backend and web app with `bun run dev`.
-2. Open [http://localhost:3001](http://localhost:3001).
-3. Use the sign-up form once with any valid dev email and an 8+ character
-   password, for example `dev@example.test` and `password123`.
-4. Use the sign-in form with the same credentials on later runs.
-
-The dev auth origin must match the Vite dev server origin exactly:
-
-- `apps/web/vite.config.ts` runs Vite on `http://localhost:3001`.
-- `packages/backend/convex/auth.ts` uses `SITE_URL` as the canonical app URL and
-  `TRUSTED_ORIGINS` for extra browser origins.
-- Local development must be included in `TRUSTED_ORIGINS` when `SITE_URL` points
-  at the hosted preview.
-
-Local files such as `packages/backend/.env.local` document the values, but Convex
-functions read runtime environment variables from the Convex deployment. After
-creating or switching a dev deployment, set the auth env on that deployment:
-
-```bash
+```sh
 cd packages/backend
-bunx convex env set SITE_URL https://blabla.seryozha.world
-bunx convex env set TRUSTED_ORIGINS "https://blabla.seryozha.world,http://localhost:3001"
-BUILT_CONVEX_SITE_URL="$(grep '^CONVEX_SITE_URL=' .env.local | cut -d= -f2-)"
-bunx convex env set BETTER_AUTH_URL "$BUILT_CONVEX_SITE_URL"
-bunx convex env set BETTER_AUTH_SECRET "$(openssl rand -base64 32)"
+bunx convex env set SITE_URL http://localhost:3001
+bunx convex env set TRUSTED_ORIGINS http://localhost:3001
+# Enter a strong secret at the prompt; keep it stable for this deployment.
+bunx convex env set BETTER_AUTH_SECRET
 ```
 
-Keep `apps/web/.env` pointed at the same Convex deployment:
+Better Auth uses the deployment's automatic `CONVEX_SITE_URL` unless an explicit
+`BETTER_AUTH_URL` is configured. Set `apps/web/.env` to the matching deployment:
 
-```bash
+```dotenv
 VITE_CONVEX_URL=https://<deployment>.convex.cloud
-VITE_CONVEX_SITE_URL=https://<deployment>.convex.site
 VITE_SITE_URL=http://localhost:3001
 ```
 
-If login fails after setup, first verify that the browser origin is
-listed in `TRUSTED_ORIGINS`, `VITE_CONVEX_SITE_URL` points to the active
-deployment's `.convex.site` URL, and the Convex deployment env contains
-`BETTER_AUTH_URL` with the same Convex site URL.
+The web app derives the corresponding `.convex.site` URL. For a custom backend
+hostname, also set `VITE_CONVEX_SITE_URL`. Backend `.env.local` files configure
+the CLI; Convex functions read runtime variables from the selected deployment.
 
-## Hosted Deployment
+From the repository root:
 
-The production frontend is planned for
-[`https://blabla.seryozha.world`](https://blabla.seryozha.world), deployed on
-Vercel with DNS managed in Gandi. The repo includes `vercel.json` for the Vite
-SPA and Convex deployment build.
-
-Vercel uses environment-scoped Convex deploy keys:
-
-```txt
-Production: CONVEX_DEPLOY_KEY=<production deploy key>
-Preview:    CONVEX_DEPLOY_KEY=<preview deploy key>
+```sh
+bun run dev
 ```
 
-The build injects `VITE_CONVEX_URL`; the app derives the corresponding
-`.convex.site` URL. Do not pin either Convex URL in Vercel, or branch previews
-will accidentally connect to production. Production does set
-`VITE_SITE_URL=https://blabla.seryozha.world` so account-recovery links return
-to the canonical hostname; previews omit it and use their current origin.
+Open [localhost:3001](http://localhost:3001) and create an email/password account.
+Personal project creation and sign-in work without email delivery. Joining a
+project by email invitation requires verification: use the account banner to
+send a link, then open it. Existing unverified accounts use the same flow.
+Configure Resend and `AUTH_EMAIL_FROM` using the hosted setup guide to exercise
+verification or password recovery; development test mode only sends to Resend
+test recipients.
 
-See [docs/hosted-auth-setup.md](docs/hosted-auth-setup.md) for the Vercel,
-Gandi, and Convex runtime steps.
+## Working on translations
 
-To share a project with a colleague:
+1. Add the source and target catalog bindings on the project's **Sync** page.
+2. Create a workspace connection under **Settings → API tokens** and run its
+   one-time login command.
+3. Update the Brickit integration branch (`develop`) with a fast-forward pull,
+   then run `blabla sync` from that checkout.
+4. Edit values in **Strings**, or prepare candidates in **Translation tasks**.
+   Review agent candidates before delivery.
+5. Prepare and build a Ready **Release Record**. Run the displayed `blabla
+   deliver` command from the integration checkout; include `--locale-proposal`
+   when combining a ready Portuguese task with existing-Locale work.
+6. Inspect the local review branch, then run the printed push/PR commands yourself.
 
-1. Sign in as the project owner.
-2. Open Settings -> Members.
-3. Invite the colleague by email and assign a role.
-4. Ask them to sign up with the same email at the canonical hosted app.
-5. Pending invites are accepted automatically after sign-in.
+For an unpublished CLI, run repository-local commands from this repository root:
 
-## UI Customization
-
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
-
-```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
+```sh
+bun run blabla -- login --server https://<deployment>.convex.site --token ...
+bun run blabla -- sync --checkout /path/to/brickit-flutter
+bun run blabla -- deliver --release <record-id> --checkout /path/to/brickit-flutter
 ```
 
-Import shared components like this:
+Legacy catalog writes and exports are retired. Historic Change Sets and job
+records remain evidence; their values do not update the current Workspace.
+See the API guide's migration instructions for unfinished legacy proposals.
 
-```tsx
-import { Button } from "@blabla/ui/components/button";
+## Checks
+
+```sh
+bun run check       # lint, type checks, tests, production build
+bun run check:fix   # apply Biome formatting and safe fixes
 ```
 
-### Add app-specific blocks
+Lint warnings fail the check. TypeScript and web/backend tests run through
+Turborepo. CI also checks the separate Dart CLI on macOS and Linux; run its
+format, analysis, test, and compile commands from the CLI README when changing it.
+Real-Flutter acceptance requires a supplied Brickit checkout and is separate
+from the default fixture-based suite.
 
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
+## Repository layout
 
-## Git Hooks and Formatting
+- `apps/web`: React, TanStack Router, and the translator UI.
+- `packages/backend/convex`: snapshot, catalog, review, release, and auth modules.
+- `packages/ui`: shared shadcn primitives and design tokens.
+- `packages/env`, `packages/config`: environment validation and TypeScript config.
+- `cli`: Dart repository adapter, tests, and installer.
+- `docs`: maintained contracts and operating instructions.
+- `reports`: dated research and historical verification, not current product rules.
 
-- Format and lint fix: `bun run check`
-
-## Project Structure
-
-```
-blabla/
-├── apps/
-│   ├── web/         # Frontend application (React + TanStack Router)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── backend/     # Convex backend functions and schema
-```
-
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run dev:setup`: Setup and configure your Convex project
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run check`: Run Biome formatting and linting
+Change shared design tokens in `packages/ui/src/styles/globals.css`. Add shared
+components with `bunx --bun shadcn@latest add <component> -c packages/ui`.
