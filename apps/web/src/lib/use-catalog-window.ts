@@ -13,9 +13,16 @@ type WindowResult = FunctionReturnType<
  * only the failed batch; every leaf stays reactive and the full window remains
  * available to the existing card cache once its requests finish. */
 export function useCatalogWindow(
-	args: WindowArgs | "skip",
+	input: WindowArgs | "skip",
 ): WindowResult | undefined {
-	const requestKey = JSON.stringify(args);
+	const requestKey = JSON.stringify(input);
+	// useQueries replaces its subscription when the query map identity changes.
+	// Callers may construct equivalent arguments on every render, so memoize by
+	// their serialized values before deriving the query map.
+	const args = useMemo(
+		() => JSON.parse(requestKey) as WindowArgs | "skip",
+		[requestKey],
+	);
 	const [split, setSplit] = useState<{
 		requestKey: string;
 		batches: string[][];
