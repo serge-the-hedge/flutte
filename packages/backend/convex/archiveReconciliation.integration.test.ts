@@ -20,11 +20,11 @@ async function bindTwoLocales(
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});
@@ -180,7 +180,7 @@ describe("Archive Reconciliation", () => {
 		// Rebinding after a Preview was recorded must not change the evidence it
 		// later projects. The replay below reuses its Snapshot Identity, so it
 		// must stage the original absent Locale rather than inspecting this path.
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: targetId,
 			catalogPath: "moved/de.arb",
 		});
@@ -440,7 +440,7 @@ describe("Archive Reconciliation", () => {
 				{ catalogPath: "de.arb", content: '{"@@locale":"de"}' },
 			],
 		});
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: targetId,
 			catalogPath: "next/de.arb",
 		});

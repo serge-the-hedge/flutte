@@ -34,6 +34,7 @@ import { Route as ProjectsProjectIdReviewsIndexRouteImport } from './routes/proj
 import { Route as ProjectsProjectIdReviewsChangeSetIdRouteImport } from './routes/projects.$projectId.reviews.$changeSetId'
 import { Route as ProjectsProjectIdSettingsApiTokensRouteImport } from './routes/projects.$projectId.settings.api-tokens'
 import { Route as ProjectsProjectIdSettingsGuidanceRouteImport } from './routes/projects.$projectId.settings.guidance'
+import { Route as ProjectsProjectIdSettingsLanguagesRouteImport } from './routes/projects.$projectId.settings.languages'
 import { Route as ProjectsProjectIdSettingsMembersRouteImport } from './routes/projects.$projectId.settings.members'
 
 const IndexRoute = IndexRouteImport.update({
@@ -175,6 +176,12 @@ const ProjectsProjectIdSettingsGuidanceRoute =
     path: '/guidance',
     getParentRoute: () => ProjectsProjectIdSettingsRoute,
   } as any)
+const ProjectsProjectIdSettingsLanguagesRoute =
+  ProjectsProjectIdSettingsLanguagesRouteImport.update({
+    id: '/languages',
+    path: '/languages',
+    getParentRoute: () => ProjectsProjectIdSettingsRoute,
+  } as any)
 const ProjectsProjectIdSettingsMembersRoute =
   ProjectsProjectIdSettingsMembersRouteImport.update({
     id: '/members',
@@ -206,6 +213,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/guidance': typeof ProjectsProjectIdSettingsGuidanceRoute
+  '/projects/$projectId/settings/languages': typeof ProjectsProjectIdSettingsLanguagesRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
   '/projects/$projectId/proposals/': typeof ProjectsProjectIdProposalsIndexRoute
   '/projects/$projectId/reviews/': typeof ProjectsProjectIdReviewsIndexRoute
@@ -232,6 +240,7 @@ export interface FileRoutesByTo {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/guidance': typeof ProjectsProjectIdSettingsGuidanceRoute
+  '/projects/$projectId/settings/languages': typeof ProjectsProjectIdSettingsLanguagesRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
   '/projects/$projectId/proposals': typeof ProjectsProjectIdProposalsIndexRoute
   '/projects/$projectId/reviews': typeof ProjectsProjectIdReviewsIndexRoute
@@ -261,6 +270,7 @@ export interface FileRoutesById {
   '/projects/$projectId/reviews/$changeSetId': typeof ProjectsProjectIdReviewsChangeSetIdRoute
   '/projects/$projectId/settings/api-tokens': typeof ProjectsProjectIdSettingsApiTokensRoute
   '/projects/$projectId/settings/guidance': typeof ProjectsProjectIdSettingsGuidanceRoute
+  '/projects/$projectId/settings/languages': typeof ProjectsProjectIdSettingsLanguagesRoute
   '/projects/$projectId/settings/members': typeof ProjectsProjectIdSettingsMembersRoute
   '/projects/$projectId/proposals/': typeof ProjectsProjectIdProposalsIndexRoute
   '/projects/$projectId/reviews/': typeof ProjectsProjectIdReviewsIndexRoute
@@ -291,6 +301,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/guidance'
+    | '/projects/$projectId/settings/languages'
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/proposals/'
     | '/projects/$projectId/reviews/'
@@ -317,6 +328,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/guidance'
+    | '/projects/$projectId/settings/languages'
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/proposals'
     | '/projects/$projectId/reviews'
@@ -345,6 +357,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId/reviews/$changeSetId'
     | '/projects/$projectId/settings/api-tokens'
     | '/projects/$projectId/settings/guidance'
+    | '/projects/$projectId/settings/languages'
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/proposals/'
     | '/projects/$projectId/reviews/'
@@ -535,6 +548,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdSettingsGuidanceRouteImport
       parentRoute: typeof ProjectsProjectIdSettingsRoute
     }
+    '/projects/$projectId/settings/languages': {
+      id: '/projects/$projectId/settings/languages'
+      path: '/languages'
+      fullPath: '/projects/$projectId/settings/languages'
+      preLoaderRoute: typeof ProjectsProjectIdSettingsLanguagesRouteImport
+      parentRoute: typeof ProjectsProjectIdSettingsRoute
+    }
     '/projects/$projectId/settings/members': {
       id: '/projects/$projectId/settings/members'
       path: '/members'
@@ -582,6 +602,7 @@ const ProjectsProjectIdReviewsRouteWithChildren =
 interface ProjectsProjectIdSettingsRouteChildren {
   ProjectsProjectIdSettingsApiTokensRoute: typeof ProjectsProjectIdSettingsApiTokensRoute
   ProjectsProjectIdSettingsGuidanceRoute: typeof ProjectsProjectIdSettingsGuidanceRoute
+  ProjectsProjectIdSettingsLanguagesRoute: typeof ProjectsProjectIdSettingsLanguagesRoute
   ProjectsProjectIdSettingsMembersRoute: typeof ProjectsProjectIdSettingsMembersRoute
 }
 
@@ -591,6 +612,8 @@ const ProjectsProjectIdSettingsRouteChildren: ProjectsProjectIdSettingsRouteChil
       ProjectsProjectIdSettingsApiTokensRoute,
     ProjectsProjectIdSettingsGuidanceRoute:
       ProjectsProjectIdSettingsGuidanceRoute,
+    ProjectsProjectIdSettingsLanguagesRoute:
+      ProjectsProjectIdSettingsLanguagesRoute,
     ProjectsProjectIdSettingsMembersRoute:
       ProjectsProjectIdSettingsMembersRoute,
   }

@@ -71,7 +71,9 @@ export function ReleaseDeliveryScope({
 			</div>
 			{localeProposal ? (
 				<div className="border-border border-t bg-background p-3 sm:border-t-0 sm:border-l">
-					<p className="font-medium text-sm">Portuguese · new locale</p>
+					<p className="font-medium text-sm">
+						{localeProposal.localeCode} · new locale
+					</p>
 					<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
 						{NUMBER_FORMAT.format(localeProposal.valueCount)} catalog values
 					</p>

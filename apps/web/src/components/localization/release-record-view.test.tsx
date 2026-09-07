@@ -86,7 +86,7 @@ describe("Release Record UI", () => {
 		);
 
 		expect(markup).toContain("72 changed keys · 380 target values");
-		expect(markup).toContain("Portuguese · new locale");
+		expect(markup).toContain("pt · new locale");
 		expect(markup).toContain("1,549 catalog values");
 		expect(markup).not.toContain("deliver --release");
 	});

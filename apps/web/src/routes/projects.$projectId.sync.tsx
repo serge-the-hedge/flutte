@@ -16,7 +16,7 @@ import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	Check,
 	Clipboard,
@@ -177,7 +177,7 @@ function SyncCommand({
 function BindingSetup({ setup }: { setup: SyncSetup }) {
 	const projectId = convexId<"projects">(setup.project.id);
 	const createLocale = useMutation(api.locales.create);
-	const bindLocale = useMutation(api.locales.bind);
+	const bindLocale = useAction(api.locales.bind);
 	const correctSetupBinding = useMutation(api.locales.correctSetupBinding);
 	const suggestedBinding = setup.bindings.find(
 		(binding) => binding.catalogPath === null,

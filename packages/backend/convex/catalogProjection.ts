@@ -26,15 +26,15 @@ import {
  * A projection is intentionally smaller than the snapshot-ingestion envelope:
  * its rows are immediately readable working state, whereas the original
  * Catalog Documents remain the immutable evidence in file storage. The
- * envelope is the measured Brickit catalog named by the control-plane spec.
+ * envelope supports the measured ten-Locale rollout over the Brickit corpus.
  * Browse exposes compact Navigation digests and bounded card Windows; the
  * complete composer remains an internal parity/reference path rather than the
  * public read contract.
  */
-export const MAX_PROJECTED_LOCALES = 6;
+export const MAX_PROJECTED_LOCALES = 10;
 export const MAX_WORKING_CATALOG_KEYS = 8_192;
-export const MAX_WORKING_CATALOG_ROWS = 10_038;
-export const MAX_WORKING_CATALOG_BYTES = 8 * 1024 * 1024;
+export const MAX_WORKING_CATALOG_ROWS = 20_000;
+export const MAX_WORKING_CATALOG_BYTES = 12 * 1024 * 1024;
 export const MAX_RESTORE_PROPOSAL_MESSAGE_ID_BYTES = 512;
 // An Archive Reconciliation can retain a whole accepted working catalog plus
 // its archive provenance. It remains comfortably below Convex's 16 MiB return
@@ -849,7 +849,7 @@ export function gitChangeEnvelope(changes: readonly GitAuthoredChange[]): {
 		throw new ConvexError({
 			code: "VALIDATION",
 			message:
-				"Git-authored catalog changes exceed the supported Brickit byte envelope.",
+				"Git-authored catalog changes exceed the supported working-catalog byte envelope.",
 		});
 	}
 	return { changeCount: changes.length, byteLength };
@@ -879,7 +879,7 @@ export function projectionEnvelope(messages: readonly ProjectedMessage[]): {
 		throw new ConvexError({
 			code: "VALIDATION",
 			message:
-				"The working catalog exceeds the supported Brickit byte envelope.",
+				"The working catalog exceeds the supported working-catalog byte envelope.",
 		});
 	}
 	return { keyCount, messageCount: messages.length, byteLength };
@@ -1075,6 +1075,12 @@ export function sourceProposalObservationBatches(
 export const begin = internalMutation({
 	args: {
 		projectId: v.id("projects"),
+		expectedBindingBasis: v.optional(
+			v.object({
+				projectionId: v.union(v.id("catalogProjections"), v.null()),
+				localeBindingRevision: v.number(),
+			}),
+		),
 		repository: v.string(),
 		commit: v.string(),
 		manifestHash: v.string(),
@@ -1109,6 +1115,18 @@ export const begin = internalMutation({
 				message: "Project not found.",
 			});
 		}
+		if (
+			args.expectedBindingBasis &&
+			(args.expectedBindingBasis.projectionId !==
+				(project.activeCatalogProjectionId ?? null) ||
+				args.expectedBindingBasis.localeBindingRevision !==
+					(project.localeBindingRevision ?? 0))
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"Locale bindings or the active projection changed while Snapshot files were read. Retry the operation.",
+			});
 		const sourceProposalHeadVersion = project.sourceProposalHeadVersion ?? 0;
 		if (
 			!Number.isSafeInteger(sourceProposalHeadVersion) ||
@@ -1140,6 +1158,7 @@ export const begin = internalMutation({
 			previousCatalogProjectionId = previousProjection._id;
 		}
 		const projectionId = await ctx.db.insert("catalogProjections", {
+			localeBindingRevision: project.localeBindingRevision ?? 0,
 			projectId: args.projectId,
 			repository: args.repository,
 			commit: args.commit,

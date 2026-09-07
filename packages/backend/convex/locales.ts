@@ -1,52 +1,34 @@
 import { ConvexError, v } from "convex/values";
-
-import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import {
+	action,
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
+import { normalizeCatalogPath } from "./catalogPaths";
 import { normalizeLocaleCode, now } from "./lib";
 import {
 	assertProjectExists,
 	requireEditor,
 	requireViewer,
 } from "./permissions";
+import { realizeLocaleBinding } from "./snapshots";
 import { correctGuidanceLocaleCode } from "./translationGuidance";
 
-/**
- * Check and tidy a repository-relative catalog file path for a Locale Binding.
- * Returns the tidied path; throws when it is not a path inside the repository.
- *
- * Deliberately strict, because a binding names a file the delivery command
- * will later write inside somebody's checkout: a path that escapes the
- * repository or points at an absolute location is refused when it is typed
- * rather than when it is used.
- *
- * `.` segments are dropped so that two spellings of one file — `lib/l10n/x.arb`
- * and `lib/./l10n/x.arb` — cannot be claimed by two different Locales.
- */
-export function normalizeCatalogPath(input: string): string {
-	const invalid = (reason: string): never => {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: `Catalog path ${reason}.`,
-		});
-	};
+export { normalizeCatalogPath } from "./catalogPaths";
 
-	const raw = input.trim();
-	if (raw.length === 0) invalid("cannot be empty");
-	if (raw.startsWith("/")) invalid("must be relative to the repository root");
-	if (raw.endsWith("/")) invalid("must name a file, not a directory");
-	if (raw.includes("\\")) invalid("must use forward slashes");
-	if (raw.includes("\0")) invalid("contains an invalid character");
-
-	const segments = raw.split("/");
-	if (segments.some((segment) => segment === "..")) {
-		invalid("cannot point outside the repository");
-	}
-	if (segments.some((segment) => segment.length === 0)) {
-		invalid("cannot contain an empty segment");
-	}
-
-	const path = segments.filter((segment) => segment !== ".").join("/");
-	if (path.length === 0) invalid("must name a file");
-	return path;
+async function advanceBindingRevision(
+	ctx: MutationCtx,
+	projectId: Id<"projects">,
+) {
+	const project = await assertProjectExists(ctx, projectId);
+	await ctx.db.patch(projectId, {
+		localeBindingRevision: (project.localeBindingRevision ?? 0) + 1,
+	});
 }
 
 export const list = query({
@@ -121,6 +103,7 @@ export const create = mutation({
 				updatedAt: timestamp,
 			});
 		}
+		await advanceBindingRevision(ctx, args.projectId);
 		return localeId;
 	},
 });
@@ -139,7 +122,7 @@ export const create = mutation({
  * two live Locales on one file. Reusing a path means moving the Locale that
  * holds it.
  */
-export const bind = mutation({
+export const bindingPlan = internalQuery({
 	args: {
 		localeId: v.id("locales"),
 		catalogPath: v.string(),
@@ -171,7 +154,131 @@ export const bind = mutation({
 			});
 		}
 
-		await ctx.db.patch(args.localeId, { catalogPath });
+		const project = await assertProjectExists(ctx, locale.projectId);
+		const snapshot = project.baselineSnapshotId
+			? await ctx.db.get(project.baselineSnapshotId)
+			: null;
+		const unboundFile = snapshot
+			? await ctx.db
+					.query("sourceSnapshotUnboundFiles")
+					.withIndex("by_snapshot_and_catalogPath", (q) =>
+						q.eq("snapshotId", snapshot._id).eq("catalogPath", catalogPath),
+					)
+					.unique()
+			: null;
+		const realized = snapshot
+			? await ctx.db
+					.query("localeBindingRealizations")
+					.withIndex("by_snapshot_and_localeCode", (q) =>
+						q.eq("snapshotId", snapshot._id).eq("localeCode", locale.code),
+					)
+					.unique()
+			: null;
+		if (locale.archivedAt !== undefined)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Restore the Locale before binding it.",
+			});
+		if (unboundFile && !realized && locale.isSource)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Source Locale changes require ordinary ingestion.",
+			});
+		if (
+			unboundFile?.declaredLocaleCode !== undefined &&
+			unboundFile.declaredLocaleCode !== locale.code
+		)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "The Unbound Locale File declares a different Locale code.",
+			});
+		const originalFile = snapshot
+			? await ctx.db
+					.query("sourceSnapshotFiles")
+					.withIndex("by_snapshot_and_localeCode", (q) =>
+						q.eq("snapshotId", snapshot._id).eq("localeCode", locale.code),
+					)
+					.unique()
+			: null;
+		return {
+			locale,
+			catalogPath,
+			snapshot,
+			unboundFile: realized || originalFile ? null : unboundFile,
+		};
+	},
+});
+
+export const commitUnobservedBinding = internalMutation({
+	args: {
+		localeId: v.id("locales"),
+		catalogPath: v.string(),
+		expectedCatalogPath: v.optional(v.string()),
+		expectedBaselineSnapshotId: v.optional(v.id("sourceSnapshots")),
+		expectedLocaleCode: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const locale = await ctx.db.get(args.localeId);
+		if (!locale)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale not found.",
+			});
+		await requireEditor(ctx, locale.projectId);
+		const project = await assertProjectExists(ctx, locale.projectId);
+		if (
+			locale.catalogPath !== args.expectedCatalogPath ||
+			locale.archivedAt !== undefined ||
+			locale.code !== args.expectedLocaleCode ||
+			project.baselineSnapshotId !== args.expectedBaselineSnapshotId
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "Binding or Baseline changed. Retry binding the Locale.",
+			});
+		const other = await ctx.db
+			.query("locales")
+			.withIndex("by_project_catalogPath", (q) =>
+				q.eq("projectId", locale.projectId).eq("catalogPath", args.catalogPath),
+			)
+			.take(2);
+		if (other.some((candidate) => candidate._id !== locale._id))
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "Catalog path is already bound.",
+			});
+		if (locale.catalogPath !== args.catalogPath) {
+			await ctx.db.patch(locale._id, { catalogPath: args.catalogPath });
+			await advanceBindingRevision(ctx, locale.projectId);
+		}
+		return null;
+	},
+});
+
+/** Binding an already observed file stages its complete derived projection and
+ * publishes the binding with that projection. The Baseline identity is unchanged. */
+export const bind = action({
+	args: { localeId: v.id("locales"), catalogPath: v.string() },
+	handler: async (ctx, args): Promise<null> => {
+		const plan = await ctx.runQuery(internal.locales.bindingPlan, args);
+		if (plan.snapshot && plan.unboundFile) {
+			await realizeLocaleBinding(ctx, {
+				localeId: plan.locale._id,
+				catalogPath: plan.catalogPath,
+				snapshotId: plan.snapshot._id,
+				projectId: plan.locale.projectId,
+				expectedCatalogPath: plan.locale.catalogPath,
+				unboundFileId: plan.unboundFile._id,
+			});
+		} else {
+			await ctx.runMutation(internal.locales.commitUnobservedBinding, {
+				localeId: args.localeId,
+				catalogPath: plan.catalogPath,
+				expectedCatalogPath: plan.locale.catalogPath,
+				expectedBaselineSnapshotId: plan.snapshot?._id,
+				expectedLocaleCode: plan.locale.code,
+			});
+		}
 		return null;
 	},
 });
@@ -283,6 +390,7 @@ export const correctSetupBinding = mutation({
 			});
 		}
 		await ctx.db.patch(locale._id, { code, label, catalogPath });
+		await advanceBindingRevision(ctx, locale.projectId);
 		return locale._id;
 	},
 });
@@ -304,6 +412,7 @@ export const archive = mutation({
 			});
 		}
 		await ctx.db.patch(args.localeId, { archivedAt: now() });
+		await advanceBindingRevision(ctx, locale.projectId);
 		return null;
 	},
 });

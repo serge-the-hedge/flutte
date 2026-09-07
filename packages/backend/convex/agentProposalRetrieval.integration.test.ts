@@ -15,9 +15,16 @@ async function setup(messageCount = 4) {
 	const t = createBackend();
 	const owner = await authenticatedBackend(t, "proposal-search-owner");
 	const projectId = await createProject(owner);
+	await owner.mutation(api.localeIntroductionTargets.save, {
+		projectId,
+		localeCode: "pt",
+		label: "Portuguese",
+		catalogPath: "intl_pt.arb",
+		runtimeLocale: "pt-BR",
+	});
 	const sourceLocale = (await owner.query(api.locales.list, { projectId }))[0];
 	if (!sourceLocale) throw new Error("Expected source Locale.");
-	await owner.mutation(api.locales.bind, {
+	await owner.action(api.locales.bind, {
 		localeId: sourceLocale._id,
 		catalogPath: "en.arb",
 	});

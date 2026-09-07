@@ -33,8 +33,8 @@ import {
 	sameStringsWindowMessageIds,
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
-
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
+import { useCatalogWindow } from "@/lib/use-catalog-window";
 
 type StringsSearch = {
 	q?: string;
@@ -124,10 +124,7 @@ function StringsRoute() {
 					messageIds: windowMessageIds,
 				}
 			: ("skip" as const);
-	const windowResult = useQuery(
-		api.catalogWorkspaceNavigation.window,
-		windowArgs,
-	);
+	const windowResult = useCatalogWindow(windowArgs);
 	const windowCards = useMemo<StringsWindowCards | undefined>(() => {
 		if (windowResult === undefined) return undefined;
 		const cards = new Map<string, StringsCatalogKey>();

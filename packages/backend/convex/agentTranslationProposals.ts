@@ -1,6 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, type Infer, v } from "convex/values";
-
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -30,6 +29,7 @@ import {
 	MAX_WORKING_CATALOG_KEYS,
 } from "./catalogProjection";
 import { applyAgentTargetValue } from "./catalogWorkspace";
+import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget as currentWorkspaceTarget } from "./catalogWorkspaceRead";
 import { assertTargetValueContract } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
@@ -592,6 +592,7 @@ async function createNewLocaleTaskForHuman(
 		projectId: Id<"projects">;
 		title: string;
 		userId: string;
+		localeCode: string;
 	},
 ) {
 	assertBoundedString(input.title, "title", MAX_TASK_TITLE_BYTES);
@@ -599,6 +600,7 @@ async function createNewLocaleTaskForHuman(
 		ctx,
 		input.projectId,
 		input.userId,
+		input.localeCode,
 	);
 	const localeProposal = await ctx.db.get(ensured.proposalId);
 	if (!localeProposal || localeProposal.projectId !== input.projectId) {
@@ -741,10 +743,7 @@ export const createTask = mutation({
 				actor: { kind: "user", id: userId },
 			});
 		}
-		if (
-			args.target.localeCode !== "pt" ||
-			args.scope.kind !== "completeCatalog"
-		) {
+		if (args.scope.kind !== "completeCatalog") {
 			throw new ConvexError({
 				code: "VALIDATION",
 				message: "The configured new Locale needs complete-catalog scope.",
@@ -754,6 +753,7 @@ export const createTask = mutation({
 			projectId: args.projectId,
 			title: args.title,
 			userId,
+			localeCode: args.target.localeCode,
 		});
 	},
 });
@@ -813,7 +813,8 @@ export const createContinuedNewLocaleTask = internalMutation({
 		}
 		const task = await createNewLocaleTaskForHuman(ctx, {
 			projectId: fromTask.projectId,
-			title: `pt · complete catalog · ${snapshot.commit.slice(0, 12)}`,
+			title: `${localeProposal.localeCode} · complete catalog · ${snapshot.commit.slice(0, 12)}`,
+			localeCode: localeProposal.localeCode,
 			userId: args.userId,
 		});
 		const created = await ctx.db.get(task.taskId);
@@ -2066,6 +2067,7 @@ export const listCandidates = internalQuery({
 export const listForReview = query({
 	args: {
 		projectId: v.id("projects"),
+		localeCode: v.optional(v.string()),
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, args) => {
@@ -2077,7 +2079,17 @@ export const listForReview = query({
 			)
 			.order("desc")
 			.paginate(args.paginationOpts);
-		return page;
+		return {
+			...page,
+			page:
+				args.localeCode === undefined
+					? page.page
+					: page.page.filter(
+							(task) =>
+								(task.taskScope?.localeCode ??
+									task.localeProposalTaskScope?.localeCode) === args.localeCode,
+						),
+		};
 	},
 });
 
@@ -2817,17 +2829,13 @@ async function contextForAgentReviewer(
 			revision.localeId,
 		);
 		const basis = catalogWorkspaceTaskBasis(current);
-		const targetDecision = await ctx.db
-			.query("catalogWorkspaceDecisionRecords")
-			.withIndex("by_value_identity", (q) =>
-				q
-					.eq("projectId", proposal.projectId)
-					.eq("messageId", revision.messageId)
-					.eq("localeId", localeId)
-					.eq("sourceFingerprint", current.source.sourceFingerprint)
-					.eq("valueFingerprint", current.valueFingerprint),
-			)
-			.unique();
+		const targetDecision = await decisionForIdentity(ctx, {
+			projectId: proposal.projectId,
+			messageId: revision.messageId,
+			localeId,
+			sourceFingerprint: current.source.sourceFingerprint,
+			valueFingerprint: current.valueFingerprint,
+		});
 		context = {
 			...common,
 			localeCode: current.target.localeCode,

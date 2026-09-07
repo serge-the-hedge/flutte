@@ -25,9 +25,24 @@ async function ingestSourceBaseline(
 		};
 	} = {},
 ) {
+	const configured = await user.query(api.localeIntroductionTargets.list, {
+		projectId,
+	});
+	const locales = await user.query(api.locales.list, { projectId });
+	if (
+		configured.length === 0 &&
+		!locales.some((locale) => locale.code === "pt")
+	)
+		await user.mutation(api.localeIntroductionTargets.save, {
+			projectId,
+			localeCode: "pt",
+			label: "Portuguese",
+			catalogPath: "intl_pt.arb",
+			runtimeLocale: "pt-BR",
+		});
 	const [sourceLocale] = await user.query(api.locales.list, { projectId });
 	if (!sourceLocale) throw new Error("Expected the source Locale.");
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: sourceLocale._id,
 		catalogPath: "intl_en.arb",
 	});
@@ -1824,10 +1839,10 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		);
 		expect(incomplete.status).toBe(400);
 		expect(await incomplete.json()).toMatchObject({
-			error: expect.stringContaining("Missing Portuguese value"),
+			error: expect.stringContaining("Missing Locale value"),
 			code: "VALIDATION",
 			diagnosticCount: 1,
-			diagnostics: [expect.stringContaining("Missing Portuguese value")],
+			diagnostics: [expect.stringContaining("Missing Locale value")],
 		});
 		const reviewed = await successfulJson<AgentProposal>(
 			await agentRequest(
@@ -1838,7 +1853,7 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		);
 		expect(reviewed.diagnostics).toEqual({
 			count: 1,
-			messages: [expect.stringContaining("Missing Portuguese value")],
+			messages: [expect.stringContaining("Missing Locale value")],
 		});
 		const { token: artifactToken } = await proposalToken(user, projectId);
 		const unavailableArtifact = await agentRequest(
@@ -1860,7 +1875,7 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 			code: "fr",
 			label: "French",
 		});
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: frenchLocaleId,
 			catalogPath: "intl_fr.arb",
 		});
@@ -1928,7 +1943,7 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		);
 		expect(response.status).toBe(400);
 		expect(await response.json()).toMatchObject({
-			error: expect.stringContaining("Portuguese Locale Proposal not found"),
+			error: expect.stringContaining("Locale Proposal not found"),
 			code: "NOT_FOUND",
 		});
 	});

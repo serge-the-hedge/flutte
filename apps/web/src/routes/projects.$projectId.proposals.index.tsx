@@ -16,11 +16,11 @@ import {
 	useNavigate,
 	useParams,
 } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { ArrowRight, Bot, KeyRound, Languages, PenLine } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-
+import { LocaleSelector } from "@/components/localization/locale-selector";
 import {
 	PageHeader,
 	ProjectShell,
@@ -38,18 +38,46 @@ function ProposalsIndexRoute() {
 	const createTask = useMutation(api.agentTranslationProposals.createTask);
 	const navigate = useNavigate();
 	const [isStartingLocale, setIsStartingLocale] = useState(false);
-	const page = useQuery(api.agentTranslationProposals.listForReview, {
+	const targets = useQuery(api.localeIntroductionTargets.list, {
 		projectId: convexProjectId,
-		paginationOpts: { numItems: 50, cursor: null },
 	});
-	const preparePortuguese = async () => {
-		if (isStartingLocale) return;
+	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const [localeCode, setLocaleCode] = useState<string | null>(null);
+	const [filterCode, setFilterCode] = useState<string | null>(null);
+	const page = usePaginatedQuery(
+		api.agentTranslationProposals.listForReview,
+		{
+			projectId: convexProjectId,
+			...(filterCode ? { localeCode: filterCode } : {}),
+		},
+		{ initialNumItems: 25 },
+	);
+	const availableTargets = (targets ?? []).filter(
+		(target) =>
+			!(locales ?? []).some(
+				(locale) =>
+					locale.code === target.localeCode && locale.archivedAt === undefined,
+			),
+	);
+	const filterLocales = new Map(
+		(locales ?? []).map((locale) => [
+			locale.code,
+			{ code: locale.code, label: locale.label },
+		]),
+	);
+	for (const target of targets ?? [])
+		filterLocales.set(target.localeCode, {
+			code: target.localeCode,
+			label: target.label,
+		});
+	const prepareLocale = async () => {
+		if (isStartingLocale || !localeCode) return;
 		setIsStartingLocale(true);
 		try {
 			const task = await createTask({
 				projectId: convexProjectId,
-				title: "pt · complete catalog",
-				target: { kind: "newLocale", localeCode: "pt" },
+				title: `${localeCode} · complete catalog`,
+				target: { kind: "newLocale", localeCode },
 				scope: { kind: "completeCatalog" },
 			});
 			await navigate({
@@ -60,7 +88,7 @@ function ProposalsIndexRoute() {
 			toast.error(
 				cause instanceof Error
 					? cause.message
-					: "Could not prepare the Portuguese task.",
+					: "Could not prepare the translation task.",
 			);
 		} finally {
 			setIsStartingLocale(false);
@@ -74,8 +102,8 @@ function ProposalsIndexRoute() {
 				description="One review queue for manual work, agent candidates, and the next Locale."
 				action={
 					<Badge variant="secondary">
-						{page?.page.length ?? 0} recent task
-						{page?.page.length === 1 ? "" : "s"}
+						{page.results.length} loaded task
+						{page.results.length === 1 ? "" : "s"}
 					</Badge>
 				}
 			/>
@@ -103,13 +131,37 @@ function ProposalsIndexRoute() {
 							<PenLine data-icon="inline-start" />
 							Select current values
 						</Button>
+						<LocaleSelector
+							locales={availableTargets.map((target) => ({
+								code: target.localeCode,
+								label: target.label,
+							}))}
+							value={localeCode}
+							onChange={setLocaleCode}
+							disabled={isStartingLocale}
+						/>
+						<Button
+							nativeButton={false}
+							size="sm"
+							variant="outline"
+							render={
+								<Link
+									to="/projects/$projectId/settings/languages"
+									params={{ projectId }}
+								/>
+							}
+						>
+							Configure languages
+						</Button>
 						<Button
 							size="sm"
-							onClick={() => void preparePortuguese()}
-							disabled={isStartingLocale}
+							onClick={() => void prepareLocale()}
+							disabled={
+								isStartingLocale || !localeCode || project?.role === "viewer"
+							}
 						>
 							<Languages data-icon="inline-start" />
-							{isStartingLocale ? "Preparing…" : "Prepare Portuguese"}
+							{isStartingLocale ? "Preparing…" : "Prepare language"}
 						</Button>
 						<Button
 							nativeButton={false}
@@ -127,7 +179,13 @@ function ProposalsIndexRoute() {
 					</div>
 				</CardContent>
 			</Card>
-			{page === undefined ? (
+			<LocaleSelector
+				locales={[...filterLocales.values()]}
+				value={filterCode}
+				onChange={setFilterCode}
+				placeholder="Filter tasks by language"
+			/>
+			{page.status === "LoadingFirstPage" ? (
 				<div
 					className="flex flex-col gap-3"
 					role="status"
@@ -136,13 +194,17 @@ function ProposalsIndexRoute() {
 					<Skeleton className="h-24 w-full" />
 					<Skeleton className="h-24 w-full" />
 				</div>
-			) : page.page.length === 0 ? (
+			) : page.results.length === 0 ? (
 				<Empty className="border">
 					<EmptyHeader>
 						<EmptyMedia variant="icon">
 							<Bot />
 						</EmptyMedia>
-						<EmptyTitle>No Translation Tasks yet</EmptyTitle>
+						<EmptyTitle>
+							{filterCode
+								? "No matching tasks in the loaded history"
+								: "No Translation Tasks yet"}
+						</EmptyTitle>
 						<EmptyDescription>
 							Select keys in Strings, choose one Locale, then let an agent
 							prepare reviewable candidates.
@@ -167,7 +229,7 @@ function ProposalsIndexRoute() {
 			) : (
 				<Card size="sm">
 					<CardContent className="divide-y">
-						{page.page.map((proposal) => (
+						{page.results.map((proposal) => (
 							<div
 								key={proposal._id}
 								className="grid grid-cols-[auto_1fr_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
@@ -219,6 +281,15 @@ function ProposalsIndexRoute() {
 					</CardContent>
 				</Card>
 			)}
+			{page.status === "CanLoadMore" || page.status === "LoadingMore" ? (
+				<Button
+					variant="outline"
+					disabled={page.status === "LoadingMore"}
+					onClick={() => page.loadMore(25)}
+				>
+					{page.status === "LoadingMore" ? "Loading…" : "Load more tasks"}
+				</Button>
+			) : null}
 		</ProjectShell>
 	);
 }

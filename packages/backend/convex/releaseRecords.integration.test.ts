@@ -40,11 +40,11 @@ async function createCatalog(
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});
@@ -82,15 +82,15 @@ async function createThreeLocaleCatalog(
 	const [germanId, frenchId] = targetIds;
 	if (!germanId || !frenchId) throw new Error("Expected target Locales.");
 	await Promise.all([
-		user.mutation(api.locales.bind, {
+		user.action(api.locales.bind, {
 			localeId: source._id,
 			catalogPath: "en.arb",
 		}),
-		user.mutation(api.locales.bind, {
+		user.action(api.locales.bind, {
 			localeId: germanId,
 			catalogPath: "de.arb",
 		}),
-		user.mutation(api.locales.bind, {
+		user.action(api.locales.bind, {
 			localeId: frenchId,
 			catalogPath: "fr.arb",
 		}),

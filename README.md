@@ -79,7 +79,7 @@ test recipients.
    Review agent candidates before delivery.
 5. Prepare and build a Ready **Release Record**. Run the displayed `blabla
    deliver` command from the integration checkout; include `--locale-proposal`
-   when combining a ready Portuguese task with existing-Locale work.
+   when combining a ready new-Locale task with existing-Locale work.
 6. Inspect the local review branch, then run the printed push/PR commands yourself.
 
 For an unpublished CLI, run repository-local commands from this repository root:
@@ -119,3 +119,5 @@ from the default fixture-based suite.
 
 Change shared design tokens in `packages/ui/src/styles/globals.css`. Add shared
 components with `bunx --bun shadcn@latest add <component> -c packages/ui`.
+
+For new languages, follow [Adding a language](docs/adding-languages.md).

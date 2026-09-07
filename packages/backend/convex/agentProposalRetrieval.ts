@@ -67,6 +67,7 @@ function decodeCursor(raw: string | undefined, basis: string): string | null {
 function validExample(
 	value: Doc<"localeProposalValues">,
 	source: Doc<"catalogProjectionMessages">,
+	localeCode: string,
 ) {
 	if (
 		value.sourceFingerprint !== source.sourceFingerprint ||
@@ -78,7 +79,7 @@ function validExample(
 	try {
 		assertTargetValueContract({
 			messageId: value.messageId,
-			localeCode: "pt",
+			localeCode,
 			value: value.value,
 			source,
 		});
@@ -214,7 +215,7 @@ export const search = internalQuery({
 			scanned += 1;
 			readBytes += encodedSize(value) + encodedSize(source);
 			const fields =
-				source && validExample(value, source)
+				source && validExample(value, source, proposal.localeCode)
 					? matchedFields(options, {
 							key: value.messageId,
 							source: source.value,

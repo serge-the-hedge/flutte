@@ -22,11 +22,11 @@ async function bindEnglishAndGerman(
 		projectId,
 		code: "de",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: source._id,
 		catalogPath: "en.arb",
 	});
-	await user.mutation(api.locales.bind, {
+	await user.action(api.locales.bind, {
 		localeId: targetId,
 		catalogPath: "de.arb",
 	});

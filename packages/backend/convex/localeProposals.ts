@@ -27,6 +27,10 @@ import {
 	sourceContractsMatch,
 } from "./contractTransforms";
 import { DEFAULT_INTEGRATION_BRANCH, now, sha256Hex } from "./lib";
+import {
+	assertIntroductionCatalogPath,
+	introductionTargetFor,
+} from "./localeIntroductionTargets";
 import { declaredPlaceholderNames, messageFacts } from "./messageFacts";
 import { requireEditor, requireViewer } from "./permissions";
 
@@ -34,6 +38,25 @@ export const PORTUGUESE_LOCALE_CODE = "pt";
 export const PORTUGUESE_LOCALE_LABEL = "Portuguese";
 export const PORTUGUESE_RUNTIME_LOCALE = "pt-BR";
 export const PORTUGUESE_CATALOG_FILE_NAME = "intl_pt.arb";
+
+/** Old Portuguese proposals predate pinned labels and paths. Their evidence remains readable. */
+export function proposalDeliveryIdentity(proposal: Doc<"localeProposals">) {
+	if (
+		proposal.localeCode !== "pt" &&
+		(!proposal.catalogPath || !proposal.localeLabel)
+	)
+		integrityError("Locale Proposal is missing its pinned delivery identity.");
+	const catalogPath =
+		proposal.catalogPath ??
+		`${proposal.sourceCatalogPath.slice(0, proposal.sourceCatalogPath.lastIndexOf("/") + 1)}${PORTUGUESE_CATALOG_FILE_NAME}`;
+	return {
+		localeCode: proposal.localeCode,
+		label: proposal.localeLabel ?? PORTUGUESE_LOCALE_LABEL,
+		runtimeLocale: proposal.runtimeLocale,
+		catalogPath,
+		fileName: catalogPath.slice(catalogPath.lastIndexOf("/") + 1),
+	};
+}
 
 export const MAX_LOCALE_PROPOSAL_MESSAGES = MAX_WORKING_CATALOG_KEYS;
 export const MAX_LOCALE_PROPOSAL_DOCUMENT_BYTES = 4 * 1024 * 1024;
@@ -139,9 +162,9 @@ type LocaleProposalSummary = {
 		manifestHash: string;
 	};
 	locale: {
-		code: typeof PORTUGUESE_LOCALE_CODE;
-		label: typeof PORTUGUESE_LOCALE_LABEL;
-		runtimeLocale: typeof PORTUGUESE_RUNTIME_LOCALE;
+		code: string;
+		label: string;
+		runtimeLocale: string;
 	};
 	status: "draft" | "ready";
 	deliveryStatus: "draft" | "ready" | "stale";
@@ -162,12 +185,13 @@ type LocaleProposalArtifact = {
 		catalogPath: string;
 	};
 	locale: {
-		code: typeof PORTUGUESE_LOCALE_CODE;
-		label: typeof PORTUGUESE_LOCALE_LABEL;
-		runtimeLocale: typeof PORTUGUESE_RUNTIME_LOCALE;
+		code: string;
+		label: string;
+		runtimeLocale: string;
 	};
 	catalog: {
-		fileName: typeof PORTUGUESE_CATALOG_FILE_NAME;
+		fileName: string;
+		catalogPath?: string;
 		content: string;
 		contentHash: string;
 	};
@@ -221,7 +245,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredString(record: Record<string, unknown>, key: string): string {
 	const value = record[key];
 	if (typeof value !== "string") {
-		integrityError("Portuguese delivery artifact has an invalid shape.");
+		integrityError("Locale delivery artifact has an invalid shape.");
 	}
 	return value;
 }
@@ -233,7 +257,7 @@ function optionalString(
 	const value = record[key];
 	if (value === undefined) return undefined;
 	if (typeof value !== "string") {
-		integrityError("Portuguese delivery artifact has an invalid shape.");
+		integrityError("Locale delivery artifact has an invalid shape.");
 	}
 	return value;
 }
@@ -244,7 +268,7 @@ function requiredRecord(
 ): Record<string, unknown> {
 	const value = record[key];
 	if (!isRecord(value)) {
-		integrityError("Portuguese delivery artifact has an invalid shape.");
+		integrityError("Locale delivery artifact has an invalid shape.");
 	}
 	return value;
 }
@@ -252,27 +276,30 @@ function requiredRecord(
 function parseArtifact(
 	text: string,
 	expectedProposalId: Id<"localeProposals">,
+	expected: ReturnType<typeof proposalDeliveryIdentity>,
 ): LocaleProposalArtifact {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
 	} catch {
-		integrityError("Portuguese delivery artifact is not valid JSON.");
+		integrityError("Locale delivery artifact is not valid JSON.");
 	}
 	if (!isRecord(parsed) || parsed.version !== 1) {
-		integrityError("Portuguese delivery artifact has an invalid shape.");
+		integrityError("Locale delivery artifact has an invalid shape.");
 	}
 	const sourceSnapshot = requiredRecord(parsed, "sourceSnapshot");
 	const locale = requiredRecord(parsed, "locale");
 	const catalog = requiredRecord(parsed, "catalog");
 	if (
 		requiredString(parsed, "proposalId") !== expectedProposalId ||
-		requiredString(locale, "code") !== PORTUGUESE_LOCALE_CODE ||
-		requiredString(locale, "label") !== PORTUGUESE_LOCALE_LABEL ||
-		requiredString(locale, "runtimeLocale") !== PORTUGUESE_RUNTIME_LOCALE ||
-		requiredString(catalog, "fileName") !== PORTUGUESE_CATALOG_FILE_NAME
+		requiredString(locale, "code") !== expected.localeCode ||
+		requiredString(locale, "label") !== expected.label ||
+		requiredString(locale, "runtimeLocale") !== expected.runtimeLocale ||
+		requiredString(catalog, "fileName") !== expected.fileName ||
+		(optionalString(catalog, "catalogPath") ?? expected.catalogPath) !==
+			expected.catalogPath
 	) {
-		integrityError("Portuguese delivery artifact has an unexpected identity.");
+		integrityError("Locale delivery artifact has an unexpected identity.");
 	}
 	return {
 		version: 1,
@@ -288,12 +315,15 @@ function parseArtifact(
 			catalogPath: requiredString(sourceSnapshot, "catalogPath"),
 		},
 		locale: {
-			code: PORTUGUESE_LOCALE_CODE,
-			label: PORTUGUESE_LOCALE_LABEL,
-			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
+			code: expected.localeCode,
+			label: expected.label,
+			runtimeLocale: expected.runtimeLocale,
 		},
 		catalog: {
-			fileName: PORTUGUESE_CATALOG_FILE_NAME,
+			fileName: expected.fileName,
+			...(optionalString(catalog, "catalogPath")
+				? { catalogPath: expected.catalogPath }
+				: {}),
 			content: requiredString(catalog, "content"),
 			contentHash: requiredString(catalog, "contentHash"),
 		},
@@ -304,7 +334,7 @@ function sourceStaleError(): never {
 	throw new ConvexError({
 		code: "STALE_SOURCE",
 		message:
-			"This Portuguese Locale Proposal is pinned to a Source Snapshot that is no longer the Baseline Snapshot.",
+			"This Locale Proposal is pinned to a Source Snapshot that is no longer the Baseline Snapshot.",
 	});
 }
 
@@ -370,7 +400,7 @@ async function pinnedSourceEvidenceForProposal(
 	]);
 	if (!snapshot || snapshot.projectId !== project._id) {
 		integrityError(
-			"Portuguese Locale Proposal references missing source snapshot evidence.",
+			"Locale Proposal references missing source snapshot evidence.",
 		);
 	}
 	if (
@@ -381,7 +411,7 @@ async function pinnedSourceEvidenceForProposal(
 		source.storageId !== proposal.sourceStorageId
 	) {
 		integrityError(
-			"Portuguese Locale Proposal references altered source Catalog Document evidence.",
+			"Locale Proposal references altered source Catalog Document evidence.",
 		);
 	}
 	return {
@@ -415,12 +445,12 @@ function assertSourceDocument(
 ): void {
 	if (byteLength > MAX_LOCALE_PROPOSAL_DOCUMENT_BYTES) {
 		validationError(
-			"The source Catalog Document exceeds the Portuguese proposal envelope.",
+			"The source Catalog Document exceeds the Locale proposal envelope.",
 		);
 	}
 	if (document.messages.length > MAX_LOCALE_PROPOSAL_MESSAGES) {
 		validationError(
-			`A Portuguese Locale Proposal supports at most ${MAX_LOCALE_PROPOSAL_MESSAGES} source messages.`,
+			`A Locale Proposal supports at most ${MAX_LOCALE_PROPOSAL_MESSAGES} source messages.`,
 		);
 	}
 	const ids = new Set<string>();
@@ -441,7 +471,7 @@ function assertSourceDocument(
 			MAX_LOCALE_PROPOSAL_VALUE_BYTES
 		) {
 			validationError(
-				`The source value for "${message.id}" exceeds the Portuguese proposal envelope.`,
+				`The source value for "${message.id}" exceeds the Locale proposal envelope.`,
 			);
 		}
 	}
@@ -589,18 +619,19 @@ async function assertProposalItemsAgainstCurrentSource(
 function assertStageItems(
 	document: CatalogDocument,
 	items: readonly ProposalValueInput[],
+	localeCode: string,
 ): Promise<ProposalValueInput[]> {
 	return (async () => {
 		if (items.length === 0) {
-			validationError("Provide at least one Portuguese translation value.");
+			validationError("Provide at least one Locale translation value.");
 		}
 		if (items.length > MAX_LOCALE_PROPOSAL_STAGE_ITEMS) {
 			validationError(
-				`Portuguese proposal batches support at most ${MAX_LOCALE_PROPOSAL_STAGE_ITEMS} values.`,
+				`Locale proposal batches support at most ${MAX_LOCALE_PROPOSAL_STAGE_ITEMS} values.`,
 			);
 		}
 		if (encodedSize(items) > MAX_LOCALE_PROPOSAL_STAGE_BYTES) {
-			validationError("Portuguese proposal batch exceeds its byte envelope.");
+			validationError("Locale proposal batch exceeds its byte envelope.");
 		}
 		const sourceById = new Map(
 			document.messages.map((message) => [message.id, message] as const),
@@ -615,14 +646,14 @@ function assertStageItems(
 				seen.has(item.messageId)
 			) {
 				validationError(
-					"A Portuguese proposal batch repeats or omits a message identity.",
+					"A Locale proposal batch repeats or omits a message identity.",
 				);
 			}
 			seen.add(item.messageId);
 			const source = sourceById.get(item.messageId);
 			if (!source) {
 				validationError(
-					`Portuguese proposal value "${item.messageId}" is not in the pinned Source Snapshot.`,
+					`Locale proposal value "${item.messageId}" is not in the pinned Source Snapshot.`,
 				);
 			}
 			if (
@@ -630,20 +661,20 @@ function assertStageItems(
 				MAX_LOCALE_PROPOSAL_VALUE_BYTES
 			) {
 				validationError(
-					`Portuguese value "${item.messageId}" exceeds the proposal value envelope.`,
+					`Locale value "${item.messageId}" exceeds the proposal value envelope.`,
 				);
 			}
 			const expectedSourceFingerprint = await sourceFingerprint(source);
 			if (item.sourceFingerprint !== expectedSourceFingerprint) {
 				validationError(
-					`Portuguese value "${item.messageId}" answers an outdated Source Contract.`,
+					`Locale value "${item.messageId}" answers an outdated Source Contract.`,
 				);
 			}
 			const blankReason = item.intentionalBlankReason?.trim();
 			if (item.value.length === 0) {
 				if (!blankReason) {
 					validationError(
-						`Portuguese value "${item.messageId}" is empty; record an Intentional Blank reason instead.`,
+						`Locale value "${item.messageId}" is empty; record an Intentional Blank reason instead.`,
 					);
 				}
 				if (
@@ -657,17 +688,17 @@ function assertStageItems(
 			} else {
 				if (item.value.trim().length === 0) {
 					validationError(
-						`Portuguese value "${item.messageId}" must be meaningful text or an exact Intentional Blank.`,
+						`Locale value "${item.messageId}" must be meaningful text or an exact Intentional Blank.`,
 					);
 				}
 				if (blankReason) {
 					validationError(
-						`Portuguese value "${item.messageId}" has an Intentional Blank reason but is not blank.`,
+						`Locale value "${item.messageId}" has an Intentional Blank reason but is not blank.`,
 					);
 				}
 				assertTargetValueContract({
 					messageId: item.messageId,
-					localeCode: PORTUGUESE_LOCALE_CODE,
+					localeCode,
 					value: item.value,
 					source: sourceContract(source),
 				});
@@ -704,9 +735,7 @@ function assertProposalEnvelope(proposal: Doc<"localeProposals">): void {
 		proposal.diagnosticCount < 0 ||
 		proposal.diagnosticCount > MAX_LOCALE_PROPOSAL_MESSAGES
 	) {
-		integrityError(
-			"Portuguese Locale Proposal does not match its bounded envelope.",
-		);
+		integrityError("Locale Proposal does not match its bounded envelope.");
 	}
 }
 
@@ -729,9 +758,9 @@ function proposalSummary(
 			manifestHash: snapshot.manifestHash,
 		},
 		locale: {
-			code: PORTUGUESE_LOCALE_CODE,
-			label: PORTUGUESE_LOCALE_LABEL,
-			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
+			code: proposal.localeCode,
+			label: proposalDeliveryIdentity(proposal).label,
+			runtimeLocale: proposal.runtimeLocale,
 		},
 		status: proposal.status,
 		deliveryStatus:
@@ -773,16 +802,14 @@ async function currentDiagnosticsForProposal(
 		)
 		.take(MAX_LOCALE_PROPOSAL_DIAGNOSTICS + 1);
 	if (diagnostics.length > MAX_LOCALE_PROPOSAL_DIAGNOSTICS) {
-		integrityError(
-			"Portuguese Locale Proposal exceeds its diagnostics sample envelope.",
-		);
+		integrityError("Locale Proposal exceeds its diagnostics sample envelope.");
 	}
 	if (
 		diagnostics.length !==
 		Math.min(proposal.diagnosticCount, MAX_LOCALE_PROPOSAL_DIAGNOSTICS)
 	) {
 		integrityError(
-			"Portuguese Locale Proposal diagnostics do not match the recorded validation result.",
+			"Locale Proposal diagnostics do not match the recorded validation result.",
 		);
 	}
 	return diagnostics.map((diagnostic) => diagnostic.message);
@@ -795,8 +822,7 @@ export const currentSourceFor = internalQuery({
 		if (!project.baselineSnapshotId) {
 			throw new ConvexError({
 				code: "VALIDATION",
-				message:
-					"A Portuguese Locale Proposal needs an accepted Baseline Snapshot.",
+				message: "A Locale Proposal needs an accepted Baseline Snapshot.",
 			});
 		}
 		return await currentSourceEvidenceForSnapshot(
@@ -817,7 +843,7 @@ export const sourceForProposal = internalQuery({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		const project = await projectFor(ctx, args.projectId);
@@ -887,14 +913,13 @@ export const sourceMessageForProposal = internalQuery({
 /** Find the resumable proposal before consulting current Locale setup. Once a
  * proposal exists, its Source Catalog Document must stay immutable evidence. */
 export const currentProposalFor = internalQuery({
-	args: { projectId: v.id("projects") },
+	args: { projectId: v.id("projects"), localeCode: v.optional(v.string()) },
 	handler: async (ctx, args): Promise<Id<"localeProposals"> | null> => {
 		const project = await projectFor(ctx, args.projectId);
 		if (!project.baselineSnapshotId) {
 			throw new ConvexError({
 				code: "VALIDATION",
-				message:
-					"A Portuguese Locale Proposal needs an accepted Baseline Snapshot.",
+				message: "A Locale Proposal needs an accepted Baseline Snapshot.",
 			});
 		}
 		const baselineSnapshotId = project.baselineSnapshotId;
@@ -904,7 +929,7 @@ export const currentProposalFor = internalQuery({
 				q
 					.eq("projectId", args.projectId)
 					.eq("sourceSnapshotId", baselineSnapshotId)
-					.eq("localeCode", PORTUGUESE_LOCALE_CODE),
+					.eq("localeCode", args.localeCode ?? PORTUGUESE_LOCALE_CODE),
 			)
 			.unique();
 		return proposal?._id ?? null;
@@ -914,6 +939,7 @@ export const currentProposalFor = internalQuery({
 export const begin = internalMutation({
 	args: {
 		projectId: v.id("projects"),
+		localeCode: v.optional(v.string()),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		sourceSnapshotFileId: v.id("sourceSnapshotFiles"),
 		sourceCatalogPath: v.string(),
@@ -925,26 +951,55 @@ export const begin = internalMutation({
 		const project = await projectFor(ctx, args.projectId);
 		if (project.baselineSnapshotId !== args.sourceSnapshotId)
 			sourceStaleError();
+		const localeCode = args.localeCode ?? PORTUGUESE_LOCALE_CODE;
+		const configured = await introductionTargetFor(
+			ctx,
+			args.projectId,
+			localeCode,
+		);
+		if (args.localeCode !== undefined && !configured)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: `New Locale ${localeCode} is not configured for this project.`,
+			});
+		const identity = configured ?? {
+			label: PORTUGUESE_LOCALE_LABEL,
+			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
+			catalogPath: `${args.sourceCatalogPath.slice(0, args.sourceCatalogPath.lastIndexOf("/") + 1)}${PORTUGUESE_CATALOG_FILE_NAME}`,
+		};
+		assertIntroductionCatalogPath(identity.catalogPath, args.sourceCatalogPath);
 		const existingLocale = await ctx.db
 			.query("locales")
 			.withIndex("by_project_code", (q) =>
-				q.eq("projectId", args.projectId).eq("code", PORTUGUESE_LOCALE_CODE),
+				q.eq("projectId", args.projectId).eq("code", localeCode),
 			)
 			.unique();
 		if (existingLocale && existingLocale.archivedAt === undefined) {
 			throw new ConvexError({
 				code: "CONFLICT",
-				message:
-					"Portuguese is already a project Locale, not a Locale Proposal.",
+				message: "Locale is already a project Locale, not a Locale Proposal.",
 			});
 		}
+		const pathClaim = await ctx.db
+			.query("locales")
+			.withIndex("by_project_catalogPath", (q) =>
+				q
+					.eq("projectId", args.projectId)
+					.eq("catalogPath", identity.catalogPath),
+			)
+			.unique();
+		if (pathClaim && pathClaim.code !== localeCode)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "The configured catalog path is now bound to another Locale.",
+			});
 		const existing = await ctx.db
 			.query("localeProposals")
 			.withIndex("by_project_and_sourceSnapshotId_and_localeCode", (q) =>
 				q
 					.eq("projectId", args.projectId)
 					.eq("sourceSnapshotId", args.sourceSnapshotId)
-					.eq("localeCode", PORTUGUESE_LOCALE_CODE),
+					.eq("localeCode", localeCode),
 			)
 			.unique();
 		if (existing) return existing._id;
@@ -954,7 +1009,7 @@ export const begin = internalMutation({
 			args.sourceMessageCount > MAX_LOCALE_PROPOSAL_MESSAGES ||
 			args.sourceCatalogPath.length === 0
 		) {
-			validationError("Portuguese Locale Proposal source evidence is invalid.");
+			validationError("Locale Proposal source evidence is invalid.");
 		}
 		const source = await ctx.db.get(args.sourceSnapshotFileId);
 		if (
@@ -964,9 +1019,20 @@ export const begin = internalMutation({
 			source.catalogPath !== args.sourceCatalogPath ||
 			source.storageId !== args.sourceStorageId
 		) {
-			validationError("Portuguese Locale Proposal source evidence is invalid.");
+			validationError("Locale Proposal source evidence is invalid.");
 		}
 		const timestamp = now();
+		if (!configured)
+			await ctx.db.insert("localeIntroductionTargets", {
+				projectId: args.projectId,
+				localeCode,
+				label: identity.label,
+				catalogPath: identity.catalogPath,
+				runtimeLocale: identity.runtimeLocale,
+				createdAt: timestamp,
+				updatedAt: timestamp,
+				updatedBy: args.createdBy.id,
+			});
 		return await ctx.db.insert("localeProposals", {
 			projectId: args.projectId,
 			sourceSnapshotId: args.sourceSnapshotId,
@@ -974,8 +1040,10 @@ export const begin = internalMutation({
 			sourceCatalogPath: args.sourceCatalogPath,
 			sourceStorageId: args.sourceStorageId,
 			sourceMessageCount: args.sourceMessageCount,
-			localeCode: PORTUGUESE_LOCALE_CODE,
-			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
+			localeCode,
+			runtimeLocale: identity.runtimeLocale,
+			localeLabel: identity.label,
+			catalogPath: identity.catalogPath,
 			status: "draft",
 			stagedValueCount: 0,
 			stagedValueByteLength: 0,
@@ -1000,6 +1068,7 @@ export async function ensureLocaleProposalForReview(
 	ctx: MutationCtx,
 	projectId: Id<"projects">,
 	userId: string,
+	localeCode?: string,
 ): Promise<{ proposalId: Id<"localeProposals"> }> {
 	const project = await projectFor(ctx, projectId);
 	if (!project.baselineSnapshotId) {
@@ -1017,7 +1086,7 @@ export async function ensureLocaleProposalForReview(
 					"sourceSnapshotId",
 					project.baselineSnapshotId as Id<"sourceSnapshots">,
 				)
-				.eq("localeCode", PORTUGUESE_LOCALE_CODE),
+				.eq("localeCode", localeCode ?? PORTUGUESE_LOCALE_CODE),
 		)
 		.unique();
 	if (existing) return { proposalId: existing._id };
@@ -1038,6 +1107,7 @@ export async function ensureLocaleProposalForReview(
 		internal.localeProposals.begin,
 		{
 			projectId,
+			localeCode,
 			sourceSnapshotId: source.snapshotId,
 			sourceSnapshotFileId: source.sourceSnapshotFileId,
 			sourceCatalogPath: source.sourceCatalogPath,
@@ -1052,13 +1122,18 @@ export async function ensureLocaleProposalForReview(
 /** Start the first configured Locale Proposal from the human workbench. This
  * is deliberately the same pinned-evidence path as the agent adapter. */
 export const ensureForReview = mutation({
-	args: { projectId: v.id("projects") },
+	args: { projectId: v.id("projects"), localeCode: v.optional(v.string()) },
 	handler: async (
 		ctx,
 		args,
 	): Promise<{ proposalId: Id<"localeProposals"> }> => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		return await ensureLocaleProposalForReview(ctx, args.projectId, userId);
+		return await ensureLocaleProposalForReview(
+			ctx,
+			args.projectId,
+			userId,
+			args.localeCode,
+		);
 	},
 });
 
@@ -1066,13 +1141,28 @@ export const ensureForCarryForward = internalMutation({
 	args: {
 		projectId: v.id("projects"),
 		userId: v.string(),
+		fromProposalId: v.id("localeProposals"),
 	},
-	handler: async (ctx, args) =>
-		await ensureLocaleProposalForReview(ctx, args.projectId, args.userId),
+	handler: async (ctx, args) => {
+		const from = await ctx.db.get(args.fromProposalId);
+		if (!from || from.projectId !== args.projectId)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale Proposal not found.",
+			});
+		return await ensureLocaleProposalForReview(
+			ctx,
+			args.projectId,
+			args.userId,
+			from.localeCode === "pt" && !from.localeLabel
+				? undefined
+				: from.localeCode,
+		);
+	},
 });
 
 export const currentForReview = query({
-	args: { projectId: v.id("projects") },
+	args: { projectId: v.id("projects"), localeCode: v.optional(v.string()) },
 	handler: async (ctx, args): Promise<Id<"localeProposals"> | null> => {
 		await requireViewer(ctx, args.projectId);
 		const project = await projectFor(ctx, args.projectId);
@@ -1086,7 +1176,7 @@ export const currentForReview = query({
 						"sourceSnapshotId",
 						project.baselineSnapshotId as Id<"sourceSnapshots">,
 					)
-					.eq("localeCode", PORTUGUESE_LOCALE_CODE),
+					.eq("localeCode", args.localeCode ?? PORTUGUESE_LOCALE_CODE),
 			)
 			.unique();
 		return proposal?._id ?? null;
@@ -1103,7 +1193,7 @@ export const read = internalQuery({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		const [project, snapshot, diagnostics] = await Promise.all([
@@ -1112,9 +1202,7 @@ export const read = internalQuery({
 			currentDiagnosticsForProposal(ctx, proposal),
 		]);
 		if (!snapshot || snapshot.projectId !== args.projectId) {
-			integrityError(
-				"Portuguese Locale Proposal references missing source evidence.",
-			);
+			integrityError("Locale Proposal references missing source evidence.");
 		}
 		await pinnedSourceEvidenceForProposal(ctx, project, proposal);
 		return proposalSummary(
@@ -1137,7 +1225,7 @@ export const valuesForFinalization = internalQuery({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		assertProposalEnvelope(proposal);
@@ -1146,16 +1234,16 @@ export const valuesForFinalization = internalQuery({
 			.withIndex("by_proposal", (q) => q.eq("proposalId", args.proposalId))
 			.take(MAX_LOCALE_PROPOSAL_MESSAGES + 1);
 		if (values.length > MAX_LOCALE_PROPOSAL_MESSAGES) {
-			integrityError("Portuguese Locale Proposal exceeds its value envelope.");
+			integrityError("Locale Proposal exceeds its value envelope.");
 		}
 		const byteLength = values.reduce((total, value) => {
 			if (value.projectId !== args.projectId) {
-				integrityError("Portuguese Locale Proposal has a cross-project value.");
+				integrityError("Locale Proposal has a cross-project value.");
 			}
 			const expected = valueByteLength(value);
 			if (value.byteLength !== expected) {
 				integrityError(
-					"Portuguese Locale Proposal value does not match its byte envelope.",
+					"Locale Proposal value does not match its byte envelope.",
 				);
 			}
 			return total + expected;
@@ -1164,9 +1252,7 @@ export const valuesForFinalization = internalQuery({
 			values.length !== proposal.stagedValueCount ||
 			byteLength !== proposal.stagedValueByteLength
 		) {
-			integrityError(
-				"Portuguese Locale Proposal does not match its staged values.",
-			);
+			integrityError("Locale Proposal does not match its staged values.");
 		}
 		return { proposal, values };
 	},
@@ -1214,7 +1300,7 @@ export const valuesForCarryForward = internalQuery({
 			.withIndex("by_proposal", (q) => q.eq("proposalId", fromProposal._id))
 			.take(MAX_LOCALE_PROPOSAL_MESSAGES + 1);
 		if (values.length > MAX_LOCALE_PROPOSAL_MESSAGES) {
-			integrityError("Portuguese Locale Proposal exceeds its value envelope.");
+			integrityError("Locale Proposal exceeds its value envelope.");
 		}
 		const [fromSource, source] = await Promise.all([
 			pinnedSourceEvidenceForProposal(ctx, project, fromProposal),
@@ -1359,9 +1445,7 @@ export const carryForwardBatch = internalMutation({
 			nextCount > toProposal.sourceMessageCount ||
 			nextByteLength > MAX_LOCALE_PROPOSAL_VALUE_TOTAL_BYTES
 		) {
-			validationError(
-				"Portuguese Locale Proposal exceeds its complete value envelope.",
-			);
+			validationError("Locale Proposal exceeds its complete value envelope.");
 		}
 		if (carriedValueCount > 0) {
 			await ctx.db.patch(toProposal._id, {
@@ -1414,7 +1498,11 @@ export async function carryForwardLocaleProposal(
 ): Promise<LocaleProposalCarryForwardResult> {
 	const ensured: { proposalId: Id<"localeProposals"> } = await ctx.runMutation(
 		internal.localeProposals.ensureForCarryForward,
-		{ projectId: args.projectId, userId: args.userId },
+		{
+			projectId: args.projectId,
+			userId: args.userId,
+			fromProposalId: args.fromProposalId,
+		},
 	);
 	const toProposalId = ensured.proposalId;
 	if (toProposalId === args.fromProposalId) {
@@ -1533,7 +1621,7 @@ export const stagedValuesForTemplate = internalQuery({
 	> => {
 		if (args.messageIds.length > MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS) {
 			validationError(
-				"Portuguese proposal template page exceeds its item envelope.",
+				"Locale proposal template page exceeds its item envelope.",
 			);
 		}
 		const messageIds = new Set<string>();
@@ -1545,7 +1633,7 @@ export const stagedValuesForTemplate = internalQuery({
 				messageIds.has(messageId)
 			) {
 				validationError(
-					"Portuguese proposal template page has invalid message identities.",
+					"Locale proposal template page has invalid message identities.",
 				);
 			}
 			messageIds.add(messageId);
@@ -1554,7 +1642,7 @@ export const stagedValuesForTemplate = internalQuery({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		const staged: Array<{
@@ -1573,11 +1661,11 @@ export const stagedValuesForTemplate = internalQuery({
 				.unique();
 			if (!value) continue;
 			if (value.projectId !== args.projectId) {
-				integrityError("Portuguese Locale Proposal has a cross-project value.");
+				integrityError("Locale Proposal has a cross-project value.");
 			}
 			if (value.byteLength !== valueByteLength(value)) {
 				integrityError(
-					"Portuguese Locale Proposal value does not match its byte envelope.",
+					"Locale Proposal value does not match its byte envelope.",
 				);
 			}
 			staged.push({
@@ -1627,11 +1715,11 @@ export const stageBatch = internalMutation({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		if (proposal.status !== "draft") {
-			validationError("A finalized Portuguese Locale Proposal is immutable.");
+			validationError("A finalized Locale Proposal is immutable.");
 		}
 		if (
 			proposal.sourceSnapshotId !== args.sourceSnapshotId ||
@@ -1645,9 +1733,7 @@ export const stageBatch = internalMutation({
 			args.items.length > MAX_LOCALE_PROPOSAL_STAGE_ITEMS ||
 			encodedSize(args.items) > MAX_LOCALE_PROPOSAL_STAGE_BYTES
 		) {
-			validationError(
-				"Portuguese proposal batch exceeds its bounded envelope.",
-			);
+			validationError("Locale proposal batch exceeds its bounded envelope.");
 		}
 		const seen = new Set<string>();
 		let nextCount = proposal.stagedValueCount;
@@ -1656,16 +1742,14 @@ export const stageBatch = internalMutation({
 		for (const item of args.items) {
 			if (seen.has(item.messageId)) {
 				validationError(
-					"Portuguese proposal batches cannot repeat a message identity.",
+					"Locale proposal batches cannot repeat a message identity.",
 				);
 			}
 			seen.add(item.messageId);
 			const nextValue = { ...item };
 			const byteLength = valueByteLength(nextValue);
 			if (byteLength > MAX_LOCALE_PROPOSAL_STAGE_BYTES) {
-				validationError(
-					"Portuguese proposal value exceeds its bounded envelope.",
-				);
+				validationError("Locale proposal value exceeds its bounded envelope.");
 			}
 			const existing = await ctx.db
 				.query("localeProposalValues")
@@ -1675,9 +1759,7 @@ export const stageBatch = internalMutation({
 				.unique();
 			if (existing) {
 				if (existing.projectId !== args.projectId) {
-					integrityError(
-						"Portuguese Locale Proposal has a cross-project value.",
-					);
+					integrityError("Locale Proposal has a cross-project value.");
 				}
 				if (
 					existing.value === item.value &&
@@ -1748,9 +1830,7 @@ export const stageBatch = internalMutation({
 			nextCount > proposal.sourceMessageCount ||
 			nextByteLength > MAX_LOCALE_PROPOSAL_VALUE_TOTAL_BYTES
 		) {
-			validationError(
-				"Portuguese Locale Proposal exceeds its complete value envelope.",
-			);
+			validationError("Locale Proposal exceeds its complete value envelope.");
 		}
 		if (changed) {
 			await ctx.db.patch(args.proposalId, {
@@ -1788,20 +1868,19 @@ export const recordDiagnostics = internalMutation({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		assertProposalEnvelope(proposal);
 		if (proposal.status !== "draft") {
-			validationError("A finalized Portuguese Locale Proposal is immutable.");
+			validationError("A finalized Locale Proposal is immutable.");
 		}
 		if (project.baselineSnapshotId !== proposal.sourceSnapshotId)
 			sourceStaleError();
 		if (proposal.revision !== args.expectedRevision) {
 			throw new ConvexError({
 				code: "CONFLICT",
-				message:
-					"Portuguese Locale Proposal changed while its diagnostics were recorded.",
+				message: "Locale Proposal changed while its diagnostics were recorded.",
 			});
 		}
 		if (
@@ -1811,7 +1890,7 @@ export const recordDiagnostics = internalMutation({
 			args.messages.length !==
 				Math.min(args.count, MAX_LOCALE_PROPOSAL_DIAGNOSTICS)
 		) {
-			validationError("Portuguese proposal diagnostics exceed their envelope.");
+			validationError("Locale proposal diagnostics exceed their envelope.");
 		}
 		for (const message of args.messages) {
 			if (
@@ -1819,7 +1898,7 @@ export const recordDiagnostics = internalMutation({
 				MAX_LOCALE_PROPOSAL_DIAGNOSTIC_BYTES
 			) {
 				validationError(
-					"Portuguese proposal diagnostic exceeds its bounded envelope.",
+					"Locale proposal diagnostic exceeds its bounded envelope.",
 				);
 			}
 		}
@@ -1849,6 +1928,7 @@ export const finalize = internalMutation({
 		artifactStorageId: v.id("_storage"),
 		artifactHash: v.string(),
 		artifactByteLength: v.number(),
+		catalogContentHash: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ reused: boolean }> => {
 		const [project, proposal] = await Promise.all([
@@ -1858,7 +1938,7 @@ export const finalize = internalMutation({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		assertProposalEnvelope(proposal);
@@ -1868,9 +1948,7 @@ export const finalize = internalMutation({
 				proposal.artifactHash === undefined ||
 				proposal.artifactByteLength === undefined
 			) {
-				integrityError(
-					"A finalized Portuguese Locale Proposal is missing its artifact.",
-				);
+				integrityError("A finalized Locale Proposal is missing its artifact.");
 			}
 			return { reused: true };
 		}
@@ -1883,8 +1961,7 @@ export const finalize = internalMutation({
 		if (proposal.revision !== args.expectedRevision) {
 			throw new ConvexError({
 				code: "CONFLICT",
-				message:
-					"Portuguese Locale Proposal changed while it was being finalized.",
+				message: "Locale Proposal changed while it was being finalized.",
 			});
 		}
 		if (
@@ -1893,11 +1970,13 @@ export const finalize = internalMutation({
 			args.artifactByteLength > MAX_LOCALE_PROPOSAL_ARTIFACT_BYTES
 		) {
 			validationError(
-				"Portuguese Locale Proposal is incomplete or its artifact is invalid.",
+				"Locale Proposal is incomplete or its artifact is invalid.",
 			);
 		}
 		await ctx.db.patch(args.proposalId, {
 			status: "ready",
+			catalogPath: proposalDeliveryIdentity(proposal).catalogPath,
+			catalogContentHash: args.catalogContentHash,
 			artifactStorageId: args.artifactStorageId,
 			artifactHash: args.artifactHash,
 			artifactByteLength: args.artifactByteLength,
@@ -1918,7 +1997,7 @@ export const artifactFor = internalQuery({
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Portuguese Locale Proposal not found.",
+				message: "Locale Proposal not found.",
 			});
 		}
 		if (
@@ -1927,28 +2006,31 @@ export const artifactFor = internalQuery({
 			proposal.artifactHash === undefined ||
 			proposal.artifactByteLength === undefined
 		) {
-			validationError(
-				"Portuguese Locale Proposal has no finalized delivery artifact.",
-			);
+			validationError("Locale Proposal has no finalized delivery artifact.");
 		}
 		return {
 			storageId: proposal.artifactStorageId,
 			hash: proposal.artifactHash,
 			byteLength: proposal.artifactByteLength,
+			identity: proposalDeliveryIdentity(proposal),
+			needsDeliveryMetadata:
+				proposal.catalogPath === undefined ||
+				proposal.catalogContentHash === undefined,
 		};
 	},
 });
 
-/** Create a Portuguese proposal or return the proposal already pinned to the
+/** Create a Locale proposal or return the proposal already pinned to the
  * current Baseline Snapshot. HTTP authentication happens before this module's
  * small project-scoped capability is constructed. */
 export async function createOrResumeProposal(
 	ctx: ActionCtx,
 	actor: ProposalActor,
+	localeCode?: string,
 ): Promise<LocaleProposalSummary> {
 	const existingProposalId: Id<"localeProposals"> | null = await ctx.runQuery(
 		internal.localeProposals.currentProposalFor,
-		{ projectId: actor.projectId },
+		{ projectId: actor.projectId, localeCode },
 	);
 	if (existingProposalId) {
 		return await readProposal(ctx, actor, existingProposalId);
@@ -1968,6 +2050,7 @@ export async function createOrResumeProposal(
 		internal.localeProposals.begin,
 		{
 			projectId: actor.projectId,
+			localeCode,
 			sourceSnapshotId: source.snapshotId,
 			sourceSnapshotFileId: source.sourceSnapshotFileId,
 			sourceCatalogPath: source.sourceCatalogPath,
@@ -1999,7 +2082,7 @@ type ProposalPage = {
 function assertProposalPage(args: ProposalPage): void {
 	if (!Number.isInteger(args.cursor) || args.cursor < 0) {
 		validationError(
-			"Portuguese proposal template cursor must be a non-negative integer.",
+			"Locale proposal template cursor must be a non-negative integer.",
 		);
 	}
 	if (
@@ -2008,7 +2091,7 @@ function assertProposalPage(args: ProposalPage): void {
 		args.limit > MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS
 	) {
 		validationError(
-			`Portuguese proposal pages support 1 to ${MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS} messages.`,
+			`Locale proposal pages support 1 to ${MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS} messages.`,
 		);
 	}
 }
@@ -2054,7 +2137,7 @@ export async function templateProposal(
 		const itemBytes = encodedSize(item);
 		if (itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) {
 			validationError(
-				`Source message "${message.id}" exceeds the Portuguese template envelope.`,
+				`Source message "${message.id}" exceeds the Locale template envelope.`,
 			);
 		}
 		if (byteLength + itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) break;
@@ -2129,7 +2212,7 @@ export async function taskProposalPage(
 		const itemBytes = encodedSize(item);
 		if (itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) {
 			validationError(
-				`Source message "${message.id}" exceeds the Portuguese task envelope.`,
+				`Source message "${message.id}" exceeds the Locale task envelope.`,
 			);
 		}
 		if (pageBytes + itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) break;
@@ -2199,7 +2282,7 @@ export async function reviewProposalValues(
 		const itemBytes = encodedSize(item);
 		if (itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) {
 			integrityError(
-				"Portuguese proposal review value exceeds its bounded envelope.",
+				"Locale proposal review value exceeds its bounded envelope.",
 			);
 		}
 		if (byteLength + itemBytes > MAX_LOCALE_PROPOSAL_PAGE_CONTENT_BYTES) break;
@@ -2234,7 +2317,12 @@ export async function stageProposal(
 			message: "An API token is required to stage Locale Proposal values.",
 		});
 	}
-	const items = await assertStageItems(document, args.items);
+	const summary = await readProposal(ctx, actor, args.proposalId);
+	const items = await assertStageItems(
+		document,
+		args.items,
+		summary.locale.code,
+	);
 	await ctx.runMutation(internal.localeProposals.stageBatch, {
 		projectId: actor.projectId,
 		proposalId: args.proposalId,
@@ -3046,6 +3134,7 @@ export const artifactForReview = action({
 async function validationDiagnostics(
 	document: CatalogDocument,
 	values: readonly Doc<"localeProposalValues">[],
+	localeCode: string,
 ): Promise<{ count: number; messages: string[] }> {
 	const valuesByMessageId = new Map(
 		values.map((value) => [value.messageId, value] as const),
@@ -3061,20 +3150,18 @@ async function validationDiagnostics(
 	for (const source of document.messages) {
 		const value = valuesByMessageId.get(source.id);
 		if (!value) {
-			add(`Missing Portuguese value for "${source.id}".`);
+			add(`Missing Locale value for "${source.id}".`);
 			continue;
 		}
 		valuesByMessageId.delete(source.id);
 		if (value.sourceFingerprint !== (await sourceFingerprint(source))) {
-			add(
-				`Portuguese value "${source.id}" answers an outdated Source Contract.`,
-			);
+			add(`Locale value "${source.id}" answers an outdated Source Contract.`);
 			continue;
 		}
 		if (value.value.length === 0) {
 			if (!value.intentionalBlankReason?.trim()) {
 				add(
-					`Portuguese value "${source.id}" is empty without an Intentional Blank reason.`,
+					`Locale value "${source.id}" is empty without an Intentional Blank reason.`,
 				);
 			}
 			continue;
@@ -3082,7 +3169,7 @@ async function validationDiagnostics(
 		try {
 			assertTargetValueContract({
 				messageId: source.id,
-				localeCode: PORTUGUESE_LOCALE_CODE,
+				localeCode,
 				value: value.value,
 				source: sourceContract(source),
 			});
@@ -3091,27 +3178,25 @@ async function validationDiagnostics(
 		}
 	}
 	for (const messageId of valuesByMessageId.keys()) {
-		add(
-			`Portuguese value "${messageId}" is not in the pinned Source Snapshot.`,
-		);
+		add(`Locale value "${messageId}" is not in the pinned Source Snapshot.`);
 	}
 	return { count, messages };
 }
 
-function derivePortugueseDocument(
+function deriveLocaleDocument(
 	source: CatalogDocument,
 	values: ReadonlyMap<string, Doc<"localeProposalValues">>,
+	localeCode: string,
 ): CatalogDocument {
 	return {
 		globals: source.globals.map((global) =>
 			global.name === "@@locale"
-				? { ...global, value: PORTUGUESE_LOCALE_CODE }
+				? { ...global, value: localeCode }
 				: { ...global },
 		),
 		messages: source.messages.map((message) => {
 			const value = values.get(message.id);
-			if (!value)
-				integrityError(`Portuguese value "${message.id}" is missing.`);
+			if (!value) integrityError(`Locale value "${message.id}" is missing.`);
 			return { ...message, value: value.value };
 		}),
 		memberOrder: [...source.memberOrder],
@@ -3131,6 +3216,7 @@ export async function finalizeProposal(
 		proposalId,
 	});
 	if (staged.proposal.status === "ready") {
+		await readProposalArtifact(ctx, actor, proposalId);
 		return await readProposal(ctx, actor, proposalId);
 	}
 	const { source, document } = await proposalSourceDocument(
@@ -3141,7 +3227,7 @@ export async function finalizeProposal(
 	if (!source.isCurrentBaseline) sourceStaleError();
 	if (document.messages.length !== staged.proposal.sourceMessageCount) {
 		integrityError(
-			"Portuguese Locale Proposal does not match its source message envelope.",
+			"Locale Proposal does not match its source message envelope.",
 		);
 	}
 	const awaitingHumanReview = staged.values.filter(
@@ -3162,12 +3248,16 @@ export async function finalizeProposal(
 		throw new ConvexError({
 			code: "REVIEW_REQUIRED",
 			message:
-				"Every agent-submitted Portuguese value needs human or authorized independent-agent review.",
+				"Every agent-submitted Locale value needs human or authorized independent-agent review.",
 			diagnosticCount: awaitingHumanReview.length,
 			diagnostics: messages,
 		});
 	}
-	const diagnostics = await validationDiagnostics(document, staged.values);
+	const diagnostics = await validationDiagnostics(
+		document,
+		staged.values,
+		staged.proposal.localeCode,
+	);
 	if (diagnostics.count > 0) {
 		await ctx.runMutation(internal.localeProposals.recordDiagnostics, {
 			projectId: actor.projectId,
@@ -3178,18 +3268,20 @@ export async function finalizeProposal(
 		});
 		throw new ConvexError({
 			code: "VALIDATION",
-			message: `Portuguese Locale Proposal cannot finalize: ${diagnostics.messages[0] ?? "its staged values are invalid."}`,
+			message: `Locale Proposal cannot finalize: ${diagnostics.messages[0] ?? "its staged values are invalid."}`,
 			diagnosticCount: diagnostics.count,
 			diagnostics: diagnostics.messages,
 		});
 	}
 	const catalogContent = serialize(
-		derivePortugueseDocument(
+		deriveLocaleDocument(
 			document,
 			new Map(staged.values.map((value) => [value.messageId, value] as const)),
+			staged.proposal.localeCode,
 		),
 	);
 	const contentHash = await sha256Hex(catalogContent);
+	const identity = proposalDeliveryIdentity(staged.proposal);
 	const artifact: LocaleProposalArtifact = {
 		version: 1,
 		proposalId,
@@ -3202,12 +3294,13 @@ export async function finalizeProposal(
 			catalogPath: source.sourceCatalogPath,
 		},
 		locale: {
-			code: PORTUGUESE_LOCALE_CODE,
-			label: PORTUGUESE_LOCALE_LABEL,
-			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
+			code: identity.localeCode,
+			label: identity.label,
+			runtimeLocale: identity.runtimeLocale,
 		},
 		catalog: {
-			fileName: PORTUGUESE_CATALOG_FILE_NAME,
+			fileName: identity.fileName,
+			catalogPath: identity.catalogPath,
 			content: catalogContent,
 			contentHash,
 		},
@@ -3215,9 +3308,7 @@ export async function finalizeProposal(
 	const artifactText = JSON.stringify(artifact);
 	const artifactByteLength = new TextEncoder().encode(artifactText).byteLength;
 	if (artifactByteLength > MAX_LOCALE_PROPOSAL_ARTIFACT_BYTES) {
-		validationError(
-			"Portuguese delivery artifact exceeds its bounded envelope.",
-		);
+		validationError("Locale delivery artifact exceeds its bounded envelope.");
 	}
 	const artifactHash = await sha256Hex(artifactText);
 	let storageId: Id<"_storage"> | undefined;
@@ -3235,6 +3326,7 @@ export async function finalizeProposal(
 				artifactStorageId: storageId,
 				artifactHash,
 				artifactByteLength,
+				catalogContentHash: contentHash,
 			},
 		);
 		if (result.reused) {
@@ -3261,36 +3353,36 @@ export async function readProposalArtifact(
 		storageId: Id<"_storage">;
 		hash: string;
 		byteLength: number;
+		identity: ReturnType<typeof proposalDeliveryIdentity>;
+		needsDeliveryMetadata: boolean;
 	} = await ctx.runQuery(internal.localeProposals.artifactFor, {
 		projectId: actor.projectId,
 		proposalId,
 	});
 	if (artifact.byteLength > MAX_LOCALE_PROPOSAL_ARTIFACT_BYTES) {
-		integrityError(
-			"Portuguese delivery artifact exceeds its bounded envelope.",
-		);
+		integrityError("Locale delivery artifact exceeds its bounded envelope.");
 	}
 	const blob = await ctx.storage.get(artifact.storageId);
 	if (!blob) {
 		throw new ConvexError({
 			code: "NOT_FOUND",
-			message: "Portuguese delivery artifact is missing.",
+			message: "Locale delivery artifact is missing.",
 		});
 	}
 	const text = await blob.text();
 	if (new TextEncoder().encode(text).byteLength !== artifact.byteLength) {
 		integrityError(
-			"Portuguese delivery artifact does not match its byte envelope.",
+			"Locale delivery artifact does not match its byte envelope.",
 		);
 	}
 	if ((await sha256Hex(text)) !== artifact.hash) {
-		integrityError("Portuguese delivery artifact does not match its hash.");
+		integrityError("Locale delivery artifact does not match its hash.");
 	}
-	const parsed = parseArtifact(text, proposalId);
+	const parsed = parseArtifact(text, proposalId, artifact.identity);
 	if (
 		(await sha256Hex(parsed.catalog.content)) !== parsed.catalog.contentHash
 	) {
-		integrityError("Portuguese catalog does not match its artifact hash.");
+		integrityError("Locale catalog does not match its artifact hash.");
 	}
 	if (
 		parsed.sourceSnapshot.id !== source.snapshotId ||
@@ -3301,8 +3393,89 @@ export async function readProposalArtifact(
 		parsed.sourceSnapshot.catalogPath !== source.sourceCatalogPath
 	) {
 		integrityError(
-			"Portuguese delivery artifact does not match its pinned Source Snapshot.",
+			"Locale delivery artifact does not match its pinned Source Snapshot.",
 		);
 	}
+	if (artifact.needsDeliveryMetadata)
+		await ctx.runMutation(internal.localeProposals.recordDeliveryMetadata, {
+			projectId: actor.projectId,
+			proposalId,
+			artifactHash: artifact.hash,
+			catalogPath: artifact.identity.catalogPath,
+			catalogContentHash: parsed.catalog.contentHash,
+		});
 	return parsed;
+}
+
+/** Add indexed delivery metadata only after the immutable artifact has passed every hash and identity check. */
+export const recordDeliveryMetadata = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		proposalId: v.id("localeProposals"),
+		artifactHash: v.string(),
+		catalogPath: v.string(),
+		catalogContentHash: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const proposal = await ctx.db.get(args.proposalId);
+		if (
+			!proposal ||
+			proposal.projectId !== args.projectId ||
+			proposal.status !== "ready" ||
+			proposal.artifactHash !== args.artifactHash ||
+			proposalDeliveryIdentity(proposal).catalogPath !== args.catalogPath ||
+			(proposal.catalogContentHash !== undefined &&
+				proposal.catalogContentHash !== args.catalogContentHash)
+		)
+			integrityError(
+				"Locale Proposal delivery metadata conflicts with its artifact.",
+			);
+		await ctx.db.patch(proposal._id, {
+			catalogPath: args.catalogPath,
+			catalogContentHash: args.catalogContentHash,
+		});
+		return null;
+	},
+});
+
+export const legacyDeliveryCandidates = internalQuery({
+	args: { projectId: v.id("projects"), cursor: v.union(v.string(), v.null()) },
+	handler: async (ctx, args) => {
+		const page = await ctx.db
+			.query("localeProposals")
+			.withIndex("by_project_and_status_and_catalogContentHash", (q) =>
+				q
+					.eq("projectId", args.projectId)
+					.eq("status", "ready")
+					.eq("catalogContentHash", undefined),
+			)
+			.paginate({ numItems: 16, cursor: args.cursor });
+		return {
+			ids: page.page.map((proposal) => proposal._id),
+			isDone: page.isDone,
+			continueCursor: page.continueCursor,
+		};
+	},
+});
+
+/** Upgrade old ready artifacts lazily before delivery observation; bounded reads and per-artifact writes keep retries idempotent. */
+export async function backfillLegacyDeliveryMetadata(
+	ctx: ActionCtx,
+	projectId: Id<"projects">,
+): Promise<void> {
+	let cursor: string | null = null;
+	for (;;) {
+		const page: {
+			ids: Id<"localeProposals">[];
+			isDone: boolean;
+			continueCursor: string;
+		} = await ctx.runQuery(internal.localeProposals.legacyDeliveryCandidates, {
+			projectId,
+			cursor,
+		});
+		for (const proposalId of page.ids)
+			await readProposalArtifact(ctx, { projectId }, proposalId);
+		if (page.isDone) return;
+		cursor = page.continueCursor;
+	}
 }

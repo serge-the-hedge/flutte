@@ -28,7 +28,7 @@ async function setup(introduced = false) {
 		[sourceId, "en.arb"],
 		[targetId, "de.arb"],
 	] as const) {
-		await user.mutation(api.locales.bind, { localeId, catalogPath });
+		await user.action(api.locales.bind, { localeId, catalogPath });
 	}
 	await user.action(api.snapshots.ingest, {
 		projectId,

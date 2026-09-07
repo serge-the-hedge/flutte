@@ -67,7 +67,7 @@ describe("source snapshot ingestion", () => {
 			const localeId =
 				existing?._id ??
 				(await user.mutation(api.locales.create, { projectId, code }));
-			await user.mutation(api.locales.bind, {
+			await user.action(api.locales.bind, {
 				localeId,
 				catalogPath: pathFor(code),
 			});

@@ -57,6 +57,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
       ),
       catalog: ProposedCatalog(
         fileName: _requiredString(catalog, 'fileName'),
+        catalogPath: _optionalString(catalog, 'catalogPath'),
         content: _requiredString(catalog, 'content'),
         contentHash: _requiredString(catalog, 'contentHash'),
       ),
@@ -70,7 +71,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
         ? baseUrl.path.substring(0, baseUrl.path.length - 1)
         : baseUrl.path;
     return baseUrl.replace(
-      path: '$prefix/api/agent/v1/locale-proposals/pt$suffix',
+      path: '$prefix/api/agent/v1/locale-proposals$suffix',
       queryParameters: {'proposalId': proposalId},
     );
   }
@@ -86,7 +87,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
       final body = await utf8.decoder.bind(response).join();
       if (response.statusCode != HttpStatus.ok) {
         throw RepositoryAdapterException(
-          'Blabla rejected the Portuguese proposal request (${response.statusCode}). ${_errorMessage(body)}',
+          'Blabla rejected the Locale proposal request (${response.statusCode}). ${_errorMessage(body)}',
         );
       }
       _compatibility.check(response.headers, onWarning: onWarning);
@@ -94,12 +95,12 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
         return _object(jsonDecode(body));
       } on FormatException {
         throw RepositoryAdapterException(
-          'Blabla returned an invalid Portuguese proposal response.',
+          'Blabla returned an invalid Locale proposal response.',
         );
       }
     } on SocketException catch (error) {
       throw RepositoryAdapterException(
-        'Could not reach Blabla to read the Portuguese proposal: ${error.message}',
+        'Could not reach Blabla to read the Locale proposal: ${error.message}',
       );
     } finally {
       client.close(force: true);
@@ -138,7 +139,7 @@ Map<String, Object?> _requiredObject(Map<String, Object?> object, String key) {
     return _object(value);
   } on FormatException {
     throw RepositoryAdapterException(
-      'Blabla returned an invalid Portuguese proposal response.',
+      'Blabla returned an invalid Locale proposal response.',
     );
   }
 }
@@ -147,7 +148,7 @@ String _requiredString(Map<String, Object?> object, String key) {
   final value = object[key];
   if (value is! String) {
     throw RepositoryAdapterException(
-      'Blabla returned an invalid Portuguese proposal response.',
+      'Blabla returned an invalid Locale proposal response.',
     );
   }
   return value;
@@ -158,7 +159,7 @@ String? _optionalString(Map<String, Object?> object, String key) {
   if (value == null) return null;
   if (value is! String) {
     throw RepositoryAdapterException(
-      'Blabla returned an invalid Portuguese proposal response.',
+      'Blabla returned an invalid Locale proposal response.',
     );
   }
   return value;
@@ -168,7 +169,7 @@ int _requiredInt(Map<String, Object?> object, String key) {
   final value = object[key];
   if (value is! int) {
     throw RepositoryAdapterException(
-      'Blabla returned an invalid Portuguese proposal response.',
+      'Blabla returned an invalid Locale proposal response.',
     );
   }
   return value;

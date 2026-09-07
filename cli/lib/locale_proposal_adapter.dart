@@ -6,12 +6,12 @@ import 'package:crypto/crypto.dart';
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
 import 'repository_policy.dart';
+import 'runtime_locale_registration.dart';
 import 'staging_worktree.dart';
 
 export 'command_runner.dart';
 export 'flutter_toolchain.dart';
 
-const _catalogPath = 'packages/brickit_generated/lib/l10n/intl_pt.arb';
 const _l10nDirectory = 'packages/brickit_generated/lib/l10n';
 const _l10nConfigPath = 'packages/brickit_generated/l10n.yaml';
 const _sourceCatalogPath = 'packages/brickit_generated/lib/l10n/intl_en.arb';
@@ -19,8 +19,6 @@ const _runtimeConstantsPath =
     'packages/brickit/lib/constants/locale_const.dart';
 const _generatedLocalizationPath =
     'packages/brickit_generated/lib/l10n/app_localizations.dart';
-const _generatedPortuguesePath =
-    'packages/brickit_generated/lib/l10n/app_localizations_pt.dart';
 
 class SourceSnapshotIdentity {
   const SourceSnapshotIdentity({
@@ -57,15 +55,18 @@ class ProposedCatalog {
     required this.fileName,
     required this.content,
     required this.contentHash,
+    this.catalogPath,
   });
 
+  final String? catalogPath;
   final String fileName;
   final String content;
   final String contentHash;
 }
 
-/// The constrained, server-authored output the adapter understands. It is not
-/// a patch format: file paths and Flutter source edits remain adapter-owned.
+/// The constrained, server-authored output the adapter understands. Catalog
+/// paths stay inside the adapter's localization directory; executable Flutter
+/// source edits remain adapter-owned rather than arriving as arbitrary patches.
 class LocaleProposalArtifact {
   const LocaleProposalArtifact({
     required this.version,
@@ -104,12 +105,12 @@ abstract interface class LocaleProposalGateway {
   Future<LocaleProposalArtifact> readArtifact(String proposalId);
 }
 
-/// Owns the Portuguese artifact contract independently of Git orchestration.
+/// Owns the Locale artifact contract independently of Git orchestration.
 /// Both the compatibility command and combined Release delivery use this one
 /// boundary, so readiness, hashing, runtime registration, and generated-output
 /// checks cannot diverge between the two flows.
-class PortugueseLocaleDelivery {
-  const PortugueseLocaleDelivery();
+class LocaleDelivery {
+  const LocaleDelivery();
 
   Set<String> get relevantPaths => const {
     _l10nDirectory,
@@ -117,17 +118,20 @@ class PortugueseLocaleDelivery {
     _runtimeConstantsPath,
   };
 
-  Set<String> get expectedChangedPaths => const {
-    _catalogPath,
+  Set<String> expectedChangedPaths(LocaleProposalArtifact artifact) => {
+    catalogPath(artifact),
     _runtimeConstantsPath,
     _generatedLocalizationPath,
-    _generatedPortuguesePath,
+    generatedLocalePath(artifact),
   };
 
-  String get catalogPath => _catalogPath;
+  String catalogPath(LocaleProposalArtifact artifact) =>
+      artifact.catalog.catalogPath ??
+      '$_l10nDirectory/${artifact.catalog.fileName}';
   String get runtimeConstantsPath => _runtimeConstantsPath;
   String get generatedLocalizationPath => _generatedLocalizationPath;
-  String get generatedLocalePath => _generatedPortuguesePath;
+  String generatedLocalePath(LocaleProposalArtifact artifact) =>
+      '$_l10nDirectory/app_localizations_${artifact.locale.code}.dart';
 
   Future<LocaleProposalArtifact> prepare(
     LocaleProposalGateway gateway,
@@ -151,7 +155,7 @@ class PortugueseLocaleDelivery {
         (expectedSnapshotId != null &&
             summary.sourceSnapshotId != expectedSnapshotId)) {
       throw RepositoryAdapterException(
-        'The Portuguese Locale Proposal is not a current finalized delivery artifact.',
+        'The Locale Proposal is not a current finalized delivery artifact.',
       );
     }
   }
@@ -181,10 +185,11 @@ class PortugueseLocaleDelivery {
         current.locale.label != expected.locale.label ||
         current.locale.runtimeLocale != expected.locale.runtimeLocale ||
         current.catalog.fileName != expected.catalog.fileName ||
+        catalogPath(current) != catalogPath(expected) ||
         current.catalog.contentHash != expected.catalog.contentHash ||
         current.catalog.content != expected.catalog.content) {
       throw RepositoryAdapterException(
-        'The Portuguese Locale Proposal artifact changed while delivery was being prepared.',
+        'The Locale Proposal artifact changed while delivery was being prepared.',
       );
     }
   }
@@ -193,10 +198,18 @@ class PortugueseLocaleDelivery {
     if (artifact.version != 1 ||
         artifact.proposalId != proposalId ||
         !RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(artifact.proposalId) ||
-        artifact.locale.code != 'pt' ||
-        artifact.locale.label != 'Portuguese' ||
-        artifact.locale.runtimeLocale != 'pt-BR' ||
-        artifact.catalog.fileName != 'intl_pt.arb' ||
+        !_validLocaleCode(artifact.locale.code) ||
+        (artifact.catalog.catalogPath == null &&
+            (artifact.locale.code != 'pt' ||
+                artifact.catalog.fileName != 'intl_pt.arb')) ||
+        artifact.locale.label.trim().isEmpty ||
+        artifact.locale.label.length > 128 ||
+        !_validRuntimeLocale(artifact.locale.runtimeLocale) ||
+        !_runtimeMatchesCatalog(artifact.locale) ||
+        !RegExp(r'^[A-Za-z0-9_-]+\.arb$').hasMatch(artifact.catalog.fileName) ||
+        catalogPath(artifact) !=
+            '$_l10nDirectory/${artifact.catalog.fileName}' ||
+        catalogPath(artifact) == _sourceCatalogPath ||
         artifact.sourceSnapshot.catalogPath != _sourceCatalogPath ||
         !_isValidIntegrationBranch(artifact.sourceSnapshot.integrationBranch) ||
         !RegExp(
@@ -214,17 +227,43 @@ class PortugueseLocaleDelivery {
         sha256.convert(utf8.encode(artifact.catalog.content)).toString() !=
             artifact.catalog.contentHash) {
       throw RepositoryAdapterException(
-        'The delivery artifact is not the recognized Portuguese proposal format.',
+        'The delivery artifact is not the recognized Locale proposal format.',
       );
     }
     try {
       final document = jsonDecode(artifact.catalog.content);
-      if (document is! Map || document['@@locale'] != 'pt') {
+      if (document is! Map || document['@@locale'] != artifact.locale.code) {
         throw const FormatException();
       }
     } on FormatException {
       throw RepositoryAdapterException(
-        'The delivery artifact does not contain a valid Portuguese Catalog Document.',
+        'The delivery artifact does not contain a valid Catalog Document.',
+      );
+    }
+  }
+
+  Future<void> ensureSourceCatalogUnchanged(
+    Directory checkout,
+    LocaleProposalArtifact artifact,
+    String checkoutCommit,
+    CommandRunner runner,
+  ) async {
+    final sourceDiff = await runner.run('git', [
+      'diff',
+      '--quiet',
+      artifact.sourceSnapshot.commit,
+      checkoutCommit,
+      '--',
+      artifact.sourceSnapshot.catalogPath,
+    ], workingDirectory: checkout.path);
+    if (sourceDiff.exitCode == 1) {
+      throw RepositoryAdapterException(
+        'The checkout Source Catalog changed since this Locale Proposal. Sync the current commit and prepare a current proposal before delivery.',
+      );
+    }
+    if (sourceDiff.exitCode != 0) {
+      throw RepositoryAdapterException(
+        'Could not verify the proposal Source Catalog against this checkout.',
       );
     }
   }
@@ -241,10 +280,10 @@ class PortugueseLocaleDelivery {
     Directory checkout,
     LocaleProposalArtifact artifact,
   ) async {
-    final catalog = _fileAt(checkout, _catalogPath);
+    final catalog = _fileAt(checkout, catalogPath(artifact));
     if (await catalog.exists()) {
       throw RepositoryAdapterException(
-        'Brickit already has intl_pt.arb. Refusing to replace a Portuguese Catalog Document.',
+        'Brickit already has ${artifact.catalog.fileName}. Refusing to replace a Catalog Document.',
       );
     }
     await catalog.parent.create(recursive: true);
@@ -256,7 +295,10 @@ class PortugueseLocaleDelivery {
       );
     }
     await runtimeConstants.writeAsString(
-      _addPortugueseRuntimeMapping(await runtimeConstants.readAsString()),
+      addRuntimeLocaleMapping(
+        await runtimeConstants.readAsString(),
+        artifact.locale.runtimeLocale,
+      ),
       flush: true,
     );
   }
@@ -266,26 +308,28 @@ class PortugueseLocaleDelivery {
     LocaleProposalArtifact artifact,
     ResolvedFlutter flutter,
   ) async {
-    final catalog = _fileAt(staging, _catalogPath);
+    final catalog = _fileAt(staging, catalogPath(artifact));
     if (!await catalog.exists() ||
         sha256.convert(await catalog.readAsBytes()).toString() !=
             artifact.catalog.contentHash) {
       throw RepositoryAdapterException(
-        'The staged Portuguese Catalog Document no longer matches the proposal artifact.',
+        'The staged Catalog Document no longer matches the proposal artifact.',
       );
     }
     final generated = await _fileAt(
       staging,
       _generatedLocalizationPath,
     ).readAsString();
-    if (!generated.contains("case 'pt':") ||
-        !generated.contains('AppLocalizationsPt') ||
-        await _fileAt(
-          staging,
-          'packages/brickit_generated/lib/l10n/intl_pt_BR.arb',
-        ).exists()) {
+    final language = artifact.locale.code;
+    final generatedLocale = _fileAt(staging, generatedLocalePath(artifact));
+    final className =
+        'AppLocalizations${language[0].toUpperCase()}${language.substring(1)}';
+    if (!generated.contains("case '$language':") ||
+        !generated.contains(className) ||
+        !await generatedLocale.exists() ||
+        !(await generatedLocale.readAsString()).contains('class $className')) {
       throw RepositoryAdapterException(
-        'Flutter generation did not add Portuguese by language code with the required single Catalog Document. ${flutter.description}',
+        'Flutter generation did not add the proposed Locale. ${flutter.description}',
       );
     }
   }
@@ -328,16 +372,15 @@ class RepositoryAdapter {
     : _runner = runner;
 
   final CommandRunner _runner;
-  static const _portuguese = PortugueseLocaleDelivery();
+  static const _localeDelivery = LocaleDelivery();
 
   Future<DeliveryResult> deliver(DeliveryRequest request) async {
-    final artifact = await _portuguese.prepare(
+    final artifact = await _localeDelivery.prepare(
       request.gateway,
       request.proposalId,
     );
 
     final checkout = await _repositoryRoot(request.checkout);
-    await _ensureArtifactMatchesCheckout(checkout, artifact);
     final currentBranch = await _currentBranch(checkout);
     if (currentBranch != artifact.sourceSnapshot.integrationBranch) {
       throw RepositoryAdapterException(
@@ -345,6 +388,7 @@ class RepositoryAdapter {
       );
     }
     final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
+    await _ensureArtifactMatchesCheckout(checkout, artifact, appliedOnto);
     await _ensureRelevantPathsAreClean(checkout);
     await _ensureIndexIsClean(checkout);
     await _ensureCommitIdentity(checkout);
@@ -361,11 +405,11 @@ class RepositoryAdapter {
       await _runGenerator(staging.root, request.flutter);
       if ((await _changedPaths(staging.root)).isNotEmpty) {
         throw RepositoryAdapterException(
-          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering Portuguese. ${request.flutter.description}',
+          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this Locale. ${request.flutter.description}',
         );
       }
 
-      await _portuguese.apply(staging.root, artifact);
+      await _localeDelivery.apply(staging.root, artifact);
       await _runGenerator(staging.root, request.flutter);
       final changedPaths = await _verifiedCandidatePaths(
         staging.root,
@@ -377,7 +421,7 @@ class RepositoryAdapter {
         changedPaths,
       );
 
-      await _portuguese.ensureUnchanged(request.gateway, artifact);
+      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
       await _ensureRelevantPathsAreClean(checkout);
       await _ensureIndexIsClean(checkout);
       await staging.ensureCheckoutUnchanged(currentBranch);
@@ -391,17 +435,17 @@ class RepositoryAdapter {
       ]);
       if (!_sameSet(stagedPaths.toSet(), changedPaths.toSet())) {
         throw RepositoryAdapterException(
-          'The local Git index changed while Portuguese was being prepared. No commit was created.',
+          'The local Git index changed while this Locale was being prepared. No commit was created.',
         );
       }
       await _git(checkout, [
         'commit',
         '-m',
-        'feat(l10n): add Portuguese\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}',
+        'feat(l10n): add ${artifact.locale.code}\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}',
       ]);
 
       final pullRequestCommand =
-          'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add Portuguese"';
+          'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
       request.write('Created local branch $branchName.');
       request.write('Review it, then run: git push -u origin $branchName');
       request.write(pullRequestCommand);
@@ -426,6 +470,7 @@ class RepositoryAdapter {
   Future<void> _ensureArtifactMatchesCheckout(
     Directory checkout,
     LocaleProposalArtifact artifact,
+    String checkoutCommit,
   ) async {
     final remote = await _git(checkout, [
       'remote',
@@ -455,6 +500,12 @@ class RepositoryAdapter {
         'The proposal source commit $commit is not available in this checkout. Run `git fetch origin $commit` and retry.',
       );
     }
+    await _localeDelivery.ensureSourceCatalogUnchanged(
+      checkout,
+      artifact,
+      checkoutCommit,
+      _runner,
+    );
   }
 
   String _normalizeRepository(String value) {
@@ -487,7 +538,7 @@ class RepositoryAdapter {
     if (result.exitCode == 0) return;
     if (result.exitCode == 1) {
       throw RepositoryAdapterException(
-        'Brickit has staged changes. Commit or unstage them before creating a Portuguese review branch.',
+        'Brickit has staged changes. Commit or unstage them before creating a Locale review branch.',
       );
     }
     throw _commandFailure('git diff --cached --quiet', result);
@@ -498,7 +549,7 @@ class RepositoryAdapter {
       final result = await _run(checkout, 'git', ['config', '--get', key]);
       if (result.exitCode != 0 || result.stdout.trim().isEmpty) {
         throw RepositoryAdapterException(
-          'Git $key must be configured before creating a Portuguese review branch.',
+          'Git $key must be configured before creating a Locale review branch.',
         );
       }
     }
@@ -571,13 +622,13 @@ class RepositoryAdapter {
     ResolvedFlutter flutter,
   ) async {
     final changed = await _changedPaths(staging);
-    final expected = _portuguese.expectedChangedPaths;
+    final expected = _localeDelivery.expectedChangedPaths(artifact);
     if (!_sameSet(changed.toSet(), expected)) {
       throw RepositoryAdapterException(
         'Flutter generation changed an unexpected surface. Refusing to write the checkout. ${flutter.description}',
       );
     }
-    await _portuguese.verifyGenerated(staging, artifact, flutter);
+    await _localeDelivery.verifyGenerated(staging, artifact, flutter);
     return changed.toList()..sort();
   }
 
@@ -600,7 +651,7 @@ class RepositoryAdapter {
       final file = _file(checkout, path);
       if (!await file.exists()) {
         throw RepositoryAdapterException(
-          'Staged Portuguese delivery is missing $path.',
+          'Staged Locale delivery is missing $path.',
         );
       }
       files[path] = await file.readAsBytes();
@@ -665,37 +716,6 @@ File _fileAt(Directory root, String relativePath) => File(
   '${root.path}${Platform.pathSeparator}${relativePath.replaceAll('/', Platform.pathSeparator)}',
 );
 
-String _addPortugueseRuntimeMapping(String source) {
-  if (source.contains('ptLocale') || RegExp(r"Locale\('pt'").hasMatch(source)) {
-    throw RepositoryAdapterException(
-      'Brickit already declares Portuguese runtime support. Refusing to add a second Portuguese Locale.',
-    );
-  }
-  return _replaceExactlyOnce(
-    _replaceExactlyOnce(
-      _replaceExactlyOnce(
-        source,
-        "  static const Locale frLocale = Locale('fr', 'FR');",
-        "  static const Locale frLocale = Locale('fr', 'FR');\n  static const Locale ptLocale = Locale('pt', 'BR');",
-      ),
-      '    frLocale,\n  ];',
-      '    frLocale,\n    ptLocale,\n  ];',
-    ),
-    '    frLocale.languageCode,\n  ];',
-    '    frLocale.languageCode,\n    ptLocale.languageCode,\n  ];',
-  );
-}
-
-String _replaceExactlyOnce(String source, String needle, String replacement) {
-  final matches = RegExp(RegExp.escape(needle)).allMatches(source).length;
-  if (matches != 1) {
-    throw RepositoryAdapterException(
-      'Brickit runtime locale registration has drifted from the supported adapter shape.',
-    );
-  }
-  return source.replaceFirst(needle, replacement);
-}
-
 bool _isValidIntegrationBranch(String branch) {
   return branch.length <= 128 &&
       RegExp(r'^[A-Za-z0-9][A-Za-z0-9._/-]*$').hasMatch(branch) &&
@@ -707,3 +727,14 @@ bool _isValidIntegrationBranch(String branch) {
       !branch.endsWith('.') &&
       !branch.endsWith('.lock');
 }
+
+// This adapter registers one language catalog; regional and script selection
+// belongs to the explicit runtime mapping, not ARB metadata aliases.
+bool _validLocaleCode(String code) => RegExp(r'^[a-z]{2,3}$').hasMatch(code);
+
+bool _validRuntimeLocale(String code) => RegExp(
+  r'^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$',
+).hasMatch(code);
+
+bool _runtimeMatchesCatalog(ProposedLocale locale) =>
+    locale.runtimeLocale.split('-').first == locale.code;

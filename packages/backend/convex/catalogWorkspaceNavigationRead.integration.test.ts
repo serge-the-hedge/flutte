@@ -49,7 +49,7 @@ describe("Catalog Workspace Navigation read", () => {
 		const locales = await user.query(api.locales.list, { projectId });
 		const source = locales.find((locale) => locale.code === "en");
 		if (!source) throw new Error("Expected the source Locale.");
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: source._id,
 			catalogPath: "en.arb",
 		});
@@ -57,7 +57,7 @@ describe("Catalog Workspace Navigation read", () => {
 			projectId,
 			code: "de",
 		});
-		await user.mutation(api.locales.bind, {
+		await user.action(api.locales.bind, {
 			localeId: de,
 			catalogPath: "de.arb",
 		});

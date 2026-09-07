@@ -16,6 +16,13 @@ async function setup() {
 	const t = createBackend();
 	const owner = await authenticatedBackend(t, "guidance-owner");
 	const projectId = await createProject(owner);
+	await owner.mutation(api.localeIntroductionTargets.save, {
+		projectId,
+		localeCode: "pt",
+		label: "Portuguese",
+		catalogPath: "intl_pt.arb",
+		runtimeLocale: "pt-BR",
+	});
 	const localeId = await owner.mutation(api.locales.create, {
 		projectId,
 		code: "de",
@@ -634,11 +641,11 @@ describe("authored translation guidance", () => {
 			(locale) => locale.isSource,
 		);
 		if (!source) throw new Error("Expected source Locale.");
-		await owner.mutation(api.locales.bind, {
+		await owner.action(api.locales.bind, {
 			localeId: source._id,
 			catalogPath: "en.arb",
 		});
-		await owner.mutation(api.locales.bind, { localeId, catalogPath: "de.arb" });
+		await owner.action(api.locales.bind, { localeId, catalogPath: "de.arb" });
 		const pt = await owner.mutation(api.locales.create, {
 			projectId,
 			code: "pt",

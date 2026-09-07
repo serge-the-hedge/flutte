@@ -23,8 +23,10 @@ export type AuthenticatedBackend = Awaited<
  * A backend with the components these tests touch already registered. Every
  * suite wants this in a `beforeEach`, since convexTest state is per instance.
  */
-export function createBackend(): Backend {
-	const t = convexTest(schema, modules);
+export function createBackend(
+	options: { transactionLimits?: boolean } = {},
+): Backend {
+	const t = convexTest({ schema, modules, ...options });
 	betterAuthTest.register(t);
 	rateLimiterTest.register(t);
 	return t;

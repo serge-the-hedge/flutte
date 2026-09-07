@@ -3,10 +3,7 @@ import 'dart:io';
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
 import 'locale_proposal_adapter.dart'
-    show
-        LocaleProposalArtifact,
-        LocaleProposalGateway,
-        PortugueseLocaleDelivery;
+    show LocaleProposalArtifact, LocaleProposalGateway, LocaleDelivery;
 import 'staging_worktree.dart';
 
 export 'command_runner.dart';
@@ -163,7 +160,7 @@ class ReleaseRepositoryAdapter {
     : _runner = runner;
 
   final CommandRunner _runner;
-  static const _portuguese = PortugueseLocaleDelivery();
+  static const _localeDelivery = LocaleDelivery();
 
   Future<ReleaseDeliveryResult> deliver(ReleaseDeliveryRequest request) async {
     final summary = await request.gateway.readRelease(request.recordId);
@@ -171,7 +168,7 @@ class ReleaseRepositoryAdapter {
     final localeInput = request.localeProposal;
     final localeArtifact = localeInput == null
         ? null
-        : await _portuguese.prepare(
+        : await _localeDelivery.prepare(
             localeInput.gateway,
             localeInput.proposalId,
           );
@@ -180,7 +177,7 @@ class ReleaseRepositoryAdapter {
     }
     final localeValueCount = localeArtifact == null
         ? 0
-        : _portuguese.catalogValueCount(localeArtifact);
+        : _localeDelivery.catalogValueCount(localeArtifact);
 
     final checkout = await _repositoryRoot(request.checkout);
     await _ensureReleaseMatchesCheckout(checkout, summary);
@@ -195,11 +192,19 @@ class ReleaseRepositoryAdapter {
       summary.catalogs,
       additionalPaths: localeArtifact == null
           ? const {}
-          : _portuguese.relevantPaths,
+          : _localeDelivery.relevantPaths,
     );
     if (localeArtifact != null) await _ensureCheckoutIsClean(checkout);
     await _ensureCommitIdentity(checkout);
     final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
+    if (localeArtifact != null) {
+      await _localeDelivery.ensureSourceCatalogUnchanged(
+        checkout,
+        localeArtifact,
+        appliedOnto,
+        _runner,
+      );
+    }
     final commitDistance = await _git(checkout, [
       'rev-list',
       '--left-right',
@@ -219,7 +224,7 @@ class ReleaseRepositoryAdapter {
       generatedBefore,
       additionalPaths: localeArtifact == null
           ? const {}
-          : {_portuguese.runtimeConstantsPath},
+          : {_localeDelivery.runtimeConstantsPath},
     );
 
     final staging = await StagingWorktree.create(
@@ -235,7 +240,7 @@ class ReleaseRepositoryAdapter {
         generatedBefore,
         additionalPaths: localeArtifact == null
             ? const {}
-            : {_portuguese.runtimeConstantsPath},
+            : {_localeDelivery.runtimeConstantsPath},
       );
       await _runGenerator(staging.root, request.flutter);
       if ((await _changedPaths(staging.root)).isNotEmpty) {
@@ -266,7 +271,7 @@ class ReleaseRepositoryAdapter {
 
       await _writeDeliveryTree(staging.root, delivery.files);
       if (localeArtifact != null) {
-        await _portuguese.apply(staging.root, localeArtifact);
+        await _localeDelivery.apply(staging.root, localeArtifact);
       }
       await _runGenerator(staging.root, request.flutter);
       final signaturesAfter = await _generatedInterfaceSignatures(staging.root);
@@ -294,7 +299,10 @@ class ReleaseRepositoryAdapter {
       final current = await request.gateway.readRelease(request.recordId);
       _validateSameRelease(summary, current);
       if (localeArtifact != null) {
-        await _portuguese.ensureUnchanged(localeInput!.gateway, localeArtifact);
+        await _localeDelivery.ensureUnchanged(
+          localeInput!.gateway,
+          localeArtifact,
+        );
       }
 
       await _ensureRelevantPathsAreClean(
@@ -302,7 +310,7 @@ class ReleaseRepositoryAdapter {
         summary.catalogs,
         additionalPaths: localeArtifact == null
             ? const {}
-            : _portuguese.relevantPaths,
+            : _localeDelivery.relevantPaths,
       );
       if (localeArtifact != null) await _ensureCheckoutIsClean(checkout);
       await _assertRegularLocalizationFiles(
@@ -311,7 +319,7 @@ class ReleaseRepositoryAdapter {
         generatedBefore,
         additionalPaths: localeArtifact == null
             ? const {}
-            : {_portuguese.runtimeConstantsPath},
+            : {_localeDelivery.runtimeConstantsPath},
       );
       await staging.ensureCheckoutUnchanged(currentBranch);
 
@@ -335,8 +343,8 @@ class ReleaseRepositoryAdapter {
                 ? 'fix(l10n): deliver reviewed localization'
                 : 'fix(l10n): deliver reviewed translations'
           : sourceChanged
-          ? 'feat(l10n): deliver reviewed localization and Portuguese'
-          : 'feat(l10n): deliver reviewed translations and Portuguese';
+          ? 'feat(l10n): deliver reviewed localization and ${localeArtifact.locale.code}'
+          : 'feat(l10n): deliver reviewed translations and ${localeArtifact.locale.code}';
       final localeTrailers = localeArtifact == null
           ? ''
           : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Locale-Values: $localeValueCount\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
@@ -371,7 +379,7 @@ class ReleaseRepositoryAdapter {
       request.write(
         localeArtifact == null
             ? 'Applied ${delivery.applied.length} reviewed key${delivery.applied.length == 1 ? '' : 's'}${sourceChanged ? ', including reviewed Source changes' : ''}; skipped ${delivery.skipped.length}.'
-            : 'Applied ${delivery.applied.length} reviewed key${delivery.applied.length == 1 ? '' : 's'}${sourceChanged ? ', including reviewed Source changes' : ''}; added Portuguese with $localeValueCount catalog value${localeValueCount == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
+            : 'Applied ${delivery.applied.length} reviewed key${delivery.applied.length == 1 ? '' : 's'}${sourceChanged ? ', including reviewed Source changes' : ''}; added ${localeArtifact.locale.code} with $localeValueCount catalog value${localeValueCount == 1 ? '' : 's'}; skipped ${delivery.skipped.length}.',
       );
       for (final skipped in delivery.skipped) {
         request.write('Skipped ${skipped.messageId}: ${skipped.reason}.');
@@ -473,7 +481,7 @@ class ReleaseRepositoryAdapter {
         record.integrationBranch != artifact.sourceSnapshot.integrationBranch ||
         sourceCatalog.catalogPath != artifact.sourceSnapshot.catalogPath) {
       throw RepositoryAdapterException(
-        'The Release Bundle and Portuguese Locale Proposal do not share the same repository, Baseline, Source Snapshot, and Integration Branch.',
+        'The Release Bundle and Locale Proposal do not share the same repository, Baseline, Source Snapshot, and Integration Branch.',
       );
     }
   }
@@ -712,8 +720,8 @@ class ReleaseRepositoryAdapter {
                 '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
               ))
                 '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
-            _portuguese.generatedLocalizationPath,
-            _portuguese.generatedLocalePath,
+            _localeDelivery.generatedLocalizationPath,
+            _localeDelivery.generatedLocalePath(localeArtifact),
           };
     final allowed = localeArtifact == null
         ? {...catalogPaths, ...generatedBefore}
@@ -721,8 +729,8 @@ class ReleaseRepositoryAdapter {
             ...changedCatalogPaths,
             ...(sourceChanged ? generatedBefore : const <String>{}),
             ...combinedGeneratedPaths,
-            _portuguese.catalogPath,
-            _portuguese.runtimeConstantsPath,
+            _localeDelivery.catalogPath(localeArtifact),
+            _localeDelivery.runtimeConstantsPath,
           };
     if (changed.isEmpty || !allowed.containsAll(changed)) {
       throw RepositoryAdapterException(
@@ -749,14 +757,14 @@ class ReleaseRepositoryAdapter {
       final required = {
         ...changedCatalogPaths,
         ...combinedGeneratedPaths,
-        ..._portuguese.expectedChangedPaths,
+        ..._localeDelivery.expectedChangedPaths(localeArtifact),
       };
       if (!changed.containsAll(required)) {
         throw RepositoryAdapterException(
-          'Combined delivery did not produce the complete Portuguese catalog, runtime mapping, and generated localization surface.',
+          'Combined delivery did not produce the complete proposed catalog, runtime mapping, and generated localization surface.',
         );
       }
-      await _portuguese.verifyGenerated(staging, localeArtifact, flutter);
+      await _localeDelivery.verifyGenerated(staging, localeArtifact, flutter);
     }
     return _VerifiedCandidate(
       paths: changed.toList()..sort(),
@@ -918,7 +926,7 @@ class ReleaseRepositoryAdapter {
 - Baseline: `${summary.releaseRecord.baselineCommit}`
 - Applied onto: `$appliedOnto`
 - Reviewed keys applied: ${delivery.applied.length}
-- Source catalog changed: ${sourceChanged ? 'yes' : 'no'}${localeArtifact == null ? '' : '\n- Portuguese catalog values added: $localeValueCount\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
+- Source catalog changed: ${sourceChanged ? 'yes' : 'no'}${localeArtifact == null ? '' : '\n- ${localeArtifact.locale.code} catalog values added: $localeValueCount\n- Locale Proposal: `${localeArtifact.proposalId}`\n- Source Snapshot: `${localeArtifact.sourceSnapshot.id}`'}
 
 Skipped keys
 

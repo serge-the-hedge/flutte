@@ -119,6 +119,13 @@ translatable content differs by script or region. It exists only when the
 Source Contract actually contains that separate catalog.
 _Avoid_: runtime fallback, compatibility alias
 
+**Locale Introduction Target**:
+A project-configured plan to introduce one target Locale, naming its canonical
+catalog code, display label, intended catalog path, and Runtime Locale Mapping.
+A Locale Proposal pins this plan; changing the plan never changes existing
+proposal evidence or activates a Locale.
+_Avoid_: active Locale, implicit Locale Binding
+
 **Locale Proposal**:
 A Blabla-authored candidate to add one target Locale and its complete Catalog
 Document, pinned to a Source Snapshot and carrying its Runtime Locale Mapping.
@@ -136,7 +143,8 @@ _Avoid_: new locale, invalid snapshot
 
 **Locale Delivery Observation**:
 A durable link between a ready Locale Proposal artifact and an exact matching
-Unbound Locale File in a later Source Snapshot. It proves only that delivery
+catalog file in a later Source Snapshot, whether deliberately bound already or
+still an Unbound Locale File. It proves only that delivery
 reached Source Snapshot evidence; it neither creates a Locale Binding nor
 makes a Locale active.
 _Avoid_: activation, merge status, delivery command receipt
