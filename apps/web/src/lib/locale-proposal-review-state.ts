@@ -18,7 +18,7 @@ export function localeProposalReviewState(input: {
 	status: "draft" | "ready";
 	isCurrentBaseline: boolean;
 	remaining: number;
-	pendingHumanReview: { count: number; hasMore: boolean };
+	pendingReview: { count: number; hasMore: boolean };
 }): LocaleProposalReviewState {
 	if (!input.isCurrentBaseline && input.status === "ready") {
 		return {
@@ -50,7 +50,7 @@ export function localeProposalReviewState(input: {
 			canFinalize: false,
 		};
 	}
-	if (input.remaining === 0 && input.pendingHumanReview.count === 0) {
+	if (input.remaining === 0 && input.pendingReview.count === 0) {
 		return {
 			phase: "readyToFinalize",
 			badgeLabel: "Ready to finalize",
@@ -60,13 +60,13 @@ export function localeProposalReviewState(input: {
 			canFinalize: true,
 		};
 	}
-	if (input.pendingHumanReview.count > 0) {
+	if (input.pendingReview.count > 0) {
 		return {
 			phase: "reviewing",
-			badgeLabel: `${input.pendingHumanReview.count}${input.pendingHumanReview.hasMore ? "+" : ""} to review`,
+			badgeLabel: `${input.pendingReview.count}${input.pendingReview.hasMore ? "+" : ""} to review`,
 			emptyTitle: "Review queue is loading",
 			emptyDescription:
-				"Agent-submitted values still need a human decision before this catalog can be finalized.",
+				"Agent-submitted values still need a human or authorized independent reviewer’s decision before this catalog can be finalized.",
 			canFinalize: false,
 		};
 	}

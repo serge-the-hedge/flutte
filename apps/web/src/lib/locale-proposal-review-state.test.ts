@@ -9,7 +9,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: true,
 				remaining: 0,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "readyToFinalize",
@@ -27,7 +27,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: true,
 				remaining: 0,
-				pendingHumanReview: { count: 3, hasMore: false },
+				pendingReview: { count: 3, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "reviewing",
@@ -42,7 +42,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: true,
 				remaining: 3,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({ phase: "reviewing", canFinalize: false });
 		expect(
@@ -50,7 +50,7 @@ describe("localeProposalReviewState", () => {
 				status: "draft",
 				isCurrentBaseline: false,
 				remaining: 0,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({ phase: "stale", canFinalize: false });
 		expect(
@@ -58,7 +58,7 @@ describe("localeProposalReviewState", () => {
 				status: "ready",
 				isCurrentBaseline: false,
 				remaining: 0,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "previousSource",
@@ -70,7 +70,7 @@ describe("localeProposalReviewState", () => {
 				status: "ready",
 				isCurrentBaseline: true,
 				remaining: 0,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 			}),
 		).toMatchObject({
 			phase: "finalized",

@@ -9,7 +9,7 @@ when a product decision changes.
 | Area | Implementation status |
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
-| Translation Tasks, immutable agent candidates, human review | Implemented |
+| Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
 | Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
@@ -964,7 +964,7 @@ and cutover](https://github.com/serge-the-hedge/flutte/issues/13)
 
 A later Git introduction is excluded from `ordinary-v1` while any Locale in its
 frozen First Review scope is pending, even when its targets look ordinary. Each
-Locale needs a deliberate human decision. After that scope is complete, later
+Locale needs a deliberate human decision or authorized independent agent acceptance. After that scope is complete, later
 Git values follow the ordinary confirmation/currency rules; introduction
 provenance remains permanent, but is not a permanent batch exclusion.
 
@@ -1043,7 +1043,8 @@ its `Unreviewed Translation` stay reserved in `CONTEXT.md` for a project that
 needs a separate reviewer, but nothing renders it: [Prototype the per-key
 translation editor](https://github.com/serge-the-hedge/flutte/issues/24) made
 confirming and saving the same gesture, the postures in §9.1 have no
-awaiting-review state, and the specified workflow is one translator throughout.
+awaiting-review state. This is separate from allowing a human-authorized agent
+to review a translation candidate before it becomes current.
 
 **3. A staged change set is not the translator's unit of work.** The editor's
 single commit gesture saves one value. The durable grouping devices that survive
@@ -1052,11 +1053,17 @@ and the tag — all of which are sets of keys rather than staged edits.
 
 **4. An agent submits a Candidate Value, not a current value.** The agent API
 appends immutable candidates inside Translation Tasks. Submission changes
-neither the Catalog Workspace nor human confirmation evidence. An authenticated
+neither the Catalog Workspace nor confirmation evidence. An authenticated
 editor accepts, edits, or rejects the candidate through the task's review
 workflow; accepting a value records its applied basis and Translator
 Confirmation. Imported text from Git remains a separate path and may derive as
-an Unconfirmed Import. See [Agent Translation Guide](../agent-api.md).
+an Unconfirmed Import. A separate Reviewer Agent may accept or reject exact
+candidate revisions when a project owner enables agent review or an editor
+delegates that revision to a named reviewer. The reviewer uses a credential
+that cannot translate and records its actual identity plus the human authority.
+Authorized acceptance may complete First Review and Translator Confirmation;
+submission alone never does. See [Agent Review](../agent-review.md) and the
+[Agent Translation Guide](../agent-api.md).
 
 **5. English is never an Unconfirmed Import.** Git authors it, and making
 English an editable peer Locale in the editor does not change who writes it in

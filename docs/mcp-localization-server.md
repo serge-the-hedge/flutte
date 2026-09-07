@@ -2,7 +2,7 @@
 
 Status: **not implemented**. The supported agent transport is the HTTP
 [Agent Translation Guide](agent-api.md). A future MCP adapter should call those
-endpoints and preserve their bounds, provenance, and human-review boundary.
+endpoints and preserve their bounds, provenance, and authorized-review boundary.
 
 | Proposed tool | HTTP endpoint under `/api/agent/v1` | Scope |
 | --- | --- | --- |
@@ -16,7 +16,9 @@ endpoints and preserve their bounds, provenance, and human-review boundary.
 | `localization_propose_candidates` | `POST /translation-tasks/:id/candidates` | `propose` |
 
 Pass opaque cursors and task identities through unchanged. Return candidates as
-proposed until human review succeeds; agent tools cannot accept or apply them.
+proposed until authorized review succeeds. Translation tools cannot accept or
+apply them; a future reviewer tool must use a separate reviewer credential and
+the exact-revision API in [Agent Review](agent-review.md).
 Mirror HTTP validation and rate-limit responses rather than inventing a second
 policy. Read the HTTP guide for each endpoint's complete scope checks.
 

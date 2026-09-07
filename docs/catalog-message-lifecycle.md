@@ -33,7 +33,7 @@ Do not compress a Target Value into one `status`. Blabla tracks:
 2. **Contract Validity** — valid syntax and Message Signature preservation.
 3. **Currency** — whether its Source Fingerprint answers the current Source
    Contract.
-4. **Human confirmation** — whether a Translator Confirmation matches this
+4. **Translator Confirmation** — whether a Translator Confirmation matches this
    exact value and Source Contract.
 5. **Provenance** — Git, a person, an agent candidate, restoration, or a Locale
    Proposal.
@@ -55,12 +55,12 @@ still pending.
 | Existing message, source and target unchanged | Exact Translator Confirmations and Intentional Blanks continue to apply. |
 | Existing target changed in Git | Git becomes visible and the Reconciliation Report records the change. An exact historical decision for the same value and Source Contract applies again; otherwise a non-empty replacement is an Unconfirmed Import and an empty replacement is Waiting. |
 | Existing source changed in Git | An unchanged target retains the Source Fingerprint it answered, so every source change makes it stale. Semantic change blocks; cosmetic change remains visible but non-blocking. A Contract Transform preserves validity, not confirmation or currency. |
-| Source and target changed together | The imported target may answer the new Source Contract. An exact historical decision for that pair applies again; otherwise it remains unconfirmed until a human affirms the pair. |
+| Source and target changed together | The imported target may answer the new Source Contract. An exact historical decision for that pair applies again; otherwise it remains unconfirmed until an authorized reviewer affirms the pair. |
 | Message first accepted after bootstrap | It becomes an Introduced Message permanently. Locales active at introduction form its frozen First Review scope. |
 | Source identifier or bound Locale absent | Its retained state is soft-archived. An unbound file is setup evidence, not an active Locale. |
 
 Bootstrap permits the initial broad confirmation. A later introduction must
-complete First Review through deliberate per-Locale human decisions before any
+complete First Review through deliberate per-Locale authorized decisions before any
 subsequent value can qualify for ordinary batch confirmation.
 
 For an Introduced Message:
@@ -69,7 +69,7 @@ For an Introduced Message:
 - absent or empty targets are Waiting;
 - imported text is starting material, not review evidence;
 - `ordinary-v1` excludes the entire message while First Review is pending;
-- each Locale completes First Review only through a deliberate human decision;
+- each Locale completes First Review only through a deliberate human decision or authorized independent agent acceptance;
 - **New from Git** includes the key while any Locale in the frozen scope still
   lacks First Review.
 
@@ -87,19 +87,25 @@ advance the Baseline, or establish delivery truth.
 
 ## Human and agent decisions
 
-| Gesture or route | Visible result | Human confirmation |
+| Gesture or route | Visible result | Translator Confirmation |
 |---|---|---|
 | Save a target edit in Strings | Updates the Catalog Workspace | Yes |
 | Approve an unchanged target | Keeps the value | Yes |
 | Record an Intentional Blank for an empty target | Keeps deliberate empty output and its reason | Deliberate equivalent |
 | Submit an Agent Translation Proposal | Candidate remains inert | No |
 | Accept an exact or edited candidate | Applies it to the target workflow | Yes, from the reviewing person |
+| Authorized independent agent accepts an exact candidate | Applies unchanged candidate bytes and any blank reason | Yes, with agent identity and human authorization |
 | Edit Source in Strings | Creates a Source Proposal for Git delivery | Not a target confirmation |
 | Review and finalize a Locale Proposal | Creates a complete candidate catalog artifact | Only for reviewed candidate applications |
 | Automatic restore or Contract Transform | Updates derived catalog state | No new confirmation |
 
-Agents may propose and revise content. Only authenticated human gestures create
-Translator Confirmations or complete First Review.
+Translation agents may propose and revise content. Human review is the default.
+An owner can enable independent agent review for the project, or an editor can
+authorize a named reviewer for an exact candidate revision. The Reviewer Agent
+must use a separate credential and cannot translate with it. Authorized exact
+acceptance can create a Translator Confirmation or complete First Review;
+submission and rejection cannot. See [Agent Review](agent-review.md) for the
+permission, concurrency, and evidence contract.
 
 ## Working presentation
 

@@ -3,7 +3,8 @@
 Blabla is Brickit's localization workspace. Developers sync committed Flutter
 ARB catalogs from Git, translators edit and review values in the web app, and a
 local CLI delivers reviewed output on a branch with matching generated Dart.
-Agents propose candidates; a human decides what becomes current. Blabla never
+Agents propose candidates; a human or an explicitly authorized independent
+Reviewer Agent decides what becomes current. Blabla never
 pushes to Git or opens a pull request on the developer's behalf.
 
 ## Start here
@@ -13,6 +14,8 @@ pushes to Git or opens a pull request on the developer's behalf.
 - [Product specification](docs/spec/localization-control-plane.md): accepted
   product rules, with an implementation-status table separating shipped and
   planned work.
+- [Agent review policy](docs/agent-review.md): human enablement and independent
+  reviewer credentials.
 - [Agent API](docs/agent-api.md): workspace discovery and Translation Tasks.
 - [CLI](cli/README.md): installation, sync, delivery, and real-Flutter checks.
 - [Hosted setup](docs/hosted-auth-setup.md): Vercel, Convex, and account email.

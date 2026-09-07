@@ -1,81 +1,19 @@
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	test,
-} from "bun:test";
-import { Window } from "happy-dom";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { act, type ComponentProps, StrictMode, useState } from "react";
-import type { Root } from "react-dom/client";
 import type {
 	CatalogWorkspaceCommit,
 	CatalogWorkspaceCommitReceipt,
 } from "@/lib/strings-catalog";
+import { createDomTest } from "@/test/dom";
 import type { StringsCatalogView as View } from "./strings-catalog-view";
 
 type Props = ComponentProps<typeof View>;
-const dom = new Window({ url: "http://localhost" });
-const globals = {
-	window: dom,
-	scrollTo: dom.scrollTo.bind(dom),
-	document: dom.document,
-	HTMLElement: dom.HTMLElement,
-	Event: dom.Event,
-	KeyboardEvent: dom.KeyboardEvent,
-	MouseEvent: dom.MouseEvent,
-	HTMLInputElement: dom.HTMLInputElement,
-	HTMLTextAreaElement: dom.HTMLTextAreaElement,
-	Element: dom.Element,
-	Node: dom.Node,
-	getComputedStyle: dom.getComputedStyle.bind(dom),
-	ResizeObserver: dom.ResizeObserver,
-	requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
-	cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
-	IS_REACT_ACT_ENVIRONMENT: true,
-};
-const previous = new Map<string, PropertyDescriptor | undefined>();
-let root: Root;
-let container: HTMLDivElement;
+const testDom = createDomTest();
+const dom = testDom.window;
 let StringsCatalogView: typeof View;
-let createRoot: typeof import("react-dom/client").createRoot;
 const noop = () => {};
-
 beforeAll(async () => {
-	for (const [name, value] of Object.entries(globals)) {
-		previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-		Object.defineProperty(globalThis, name, {
-			configurable: true,
-			writable: true,
-			value,
-		});
-	}
-	// Install the DOM before React initializes its event support.
-	({ createRoot } = await import("react-dom/client"));
 	({ StringsCatalogView } = await import("./strings-catalog-view"));
-});
-afterAll(() => {
-	for (const [name, descriptor] of previous) {
-		if (descriptor) Object.defineProperty(globalThis, name, descriptor);
-		else Reflect.deleteProperty(globalThis, name);
-	}
-	void dom.happyDOM.close();
-});
-beforeEach(() => {
-	container = document.createElement("div");
-	container.style.overflowY = "auto";
-	Object.defineProperties(container, {
-		offsetHeight: { value: 800 },
-		offsetWidth: { value: 1000 },
-	});
-	document.body.append(container);
-	root = createRoot(container);
-});
-afterEach(async () => {
-	await act(async () => root.unmount());
-	container.remove();
 });
 
 function props({
@@ -162,7 +100,7 @@ function props({
 }
 async function render(next: Props, project = "project-1") {
 	await act(async () => {
-		root.render(
+		testDom.root.render(
 			<StrictMode>
 				<StringsCatalogView key={project} {...next} />
 			</StrictMode>,
@@ -170,12 +108,12 @@ async function render(next: Props, project = "project-1") {
 	});
 }
 function field(messageId = "welcome") {
-	const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-		`[data-workspace-message-id="${messageId}"]`,
-	);
+	const input = testDom.container.querySelector<
+		HTMLInputElement | HTMLTextAreaElement
+	>(`[data-workspace-message-id="${messageId}"]`);
 	if (!input)
 		throw new Error(
-			`No editor for ${messageId}: ${container.innerHTML.slice(-1500)}`,
+			`No editor for ${messageId}: ${testDom.container.innerHTML.slice(-1500)}`,
 		);
 	return input;
 }
@@ -220,7 +158,7 @@ describe("Catalog editor draft lifecycle", () => {
 		expect(field().value).toBe("Mon brouillon");
 		await render(props({ query: "other", onCommitValue }));
 		expect(
-			container.querySelector('[data-workspace-message-id="welcome"]'),
+			testDom.container.querySelector('[data-workspace-message-id="welcome"]'),
 		).toBeNull();
 		await render(
 			props({
@@ -264,13 +202,13 @@ describe("Catalog editor draft lifecycle", () => {
 		);
 		expect(field().disabled).toBe(false);
 		expect(field().value).toBe("Keep this");
-		expect(container.textContent).toContain(
+		expect(testDom.container.textContent).toContain(
 			"Workspace changed; reload before saving.",
 		);
 		await render(props({ query: "other", onCommitValue }));
 		await render(props({ onCommitValue }));
 		expect(field().value).toBe("Keep this");
-		expect(container.textContent).toContain(
+		expect(testDom.container.textContent).toContain(
 			"Workspace changed; reload before saving.",
 		);
 	});
@@ -320,7 +258,7 @@ describe("Catalog editor draft lifecycle", () => {
 		};
 		await render(props({ onCommitValue }));
 		await type("");
-		const blankButton = [...container.querySelectorAll("button")].find(
+		const blankButton = [...testDom.container.querySelectorAll("button")].find(
 			(button) => button.textContent === "deliberately empty",
 		);
 		if (!blankButton) throw new Error("Missing deliberate blank action");
@@ -328,7 +266,7 @@ describe("Catalog editor draft lifecycle", () => {
 			blankButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
 		});
 		const reason = () => {
-			const input = container.querySelector<HTMLInputElement>(
+			const input = testDom.container.querySelector<HTMLInputElement>(
 				'input[placeholder="Why should this render nothing?"]',
 			);
 			if (!input) throw new Error("Missing blank reason editor");
@@ -351,7 +289,7 @@ describe("Catalog editor draft lifecycle", () => {
 		});
 		expect(reason().value).toBe("No label is needed here");
 		expect(field().value).toBe("");
-		expect(container.textContent).toContain("Workspace changed.");
+		expect(testDom.container.textContent).toContain("Workspace changed.");
 	});
 
 	test("revert releases a draft and removed-key discard removes its unload warning", async () => {
@@ -367,14 +305,14 @@ describe("Catalog editor draft lifecycle", () => {
 		expect(field().value).toBe("Refreshed");
 		await type("Removed draft");
 		await render(props({ messageIds: ["other"], projectionId: "baseline-2" }));
-		const discard = [...container.querySelectorAll("button")].find(
+		const discard = [...testDom.container.querySelectorAll("button")].find(
 			(button) => button.textContent === "Discard edit",
 		);
 		if (!discard) throw new Error("Missing discard action");
 		await act(async () => {
 			discard.click();
 		});
-		expect(container.textContent).not.toContain(
+		expect(testDom.container.textContent).not.toContain(
 			"Unsaved edits outside the current catalog",
 		);
 		const unload = new dom.Event("beforeunload", { cancelable: true });
@@ -391,13 +329,13 @@ describe("Catalog editor draft lifecycle", () => {
 			navigation: { ...next.navigation, kind: "ready", canEdit: false },
 		});
 		expect(
-			container.querySelector('[data-workspace-message-id="welcome"]'),
+			testDom.container.querySelector('[data-workspace-message-id="welcome"]'),
 		).toBeNull();
-		expect(container.textContent).toContain(
+		expect(testDom.container.textContent).toContain(
 			"Unsaved edits you can no longer save",
 		);
 		expect(
-			container.querySelector<HTMLTextAreaElement>(
+			testDom.container.querySelector<HTMLTextAreaElement>(
 				'[aria-label="Unsaved welcome fr"]',
 			)?.value,
 		).toBe("Before access changed");
@@ -451,7 +389,7 @@ describe("Catalog editor draft lifecycle", () => {
 			}),
 		});
 		await act(async () => {
-			root.render(<RouterProvider router={router} />);
+			testDom.root.render(<RouterProvider router={router} />);
 			await router.load();
 		});
 		await type("Stay with me");
@@ -498,7 +436,7 @@ describe("Catalog editor draft lifecycle", () => {
 				});
 			});
 			expect(confirmations).toHaveLength(2);
-			expect(container.textContent).toContain("Translation tasks");
+			expect(testDom.container.textContent).toContain("Translation tasks");
 		} finally {
 			window.confirm = originalConfirm;
 		}
@@ -511,17 +449,17 @@ describe("Catalog editor draft lifecycle", () => {
 		dom.dispatchEvent(unload);
 		expect(unload.defaultPrevented).toBe(true);
 		await render(props({ messageIds: ["other"], projectionId: "baseline-2" }));
-		expect(container.textContent).toContain(
+		expect(testDom.container.textContent).toContain(
 			"Unsaved edits outside the current catalog",
 		);
 		expect(
-			container.querySelector<HTMLTextAreaElement>(
+			testDom.container.querySelector<HTMLTextAreaElement>(
 				'[aria-label="Unsaved welcome fr"]',
 			)?.value,
 		).toBe("Rescue me");
 		await render(props(), "project-2");
 		expect(field().value).toBe("Bienvenue");
-		expect(container.textContent).not.toContain(
+		expect(testDom.container.textContent).not.toContain(
 			"Unsaved edits outside the current catalog",
 		);
 	});

@@ -17,3 +17,7 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 For localization changes, read `docs/catalog-message-lifecycle.md` and the
 implementation-status table in `docs/spec/localization-control-plane.md`. For
 agent integrations, use `docs/agent-api.md`; legacy catalog writes are retired.
+
+For translation review, read `docs/agent-review.md`. Agent review requires a
+project setting or explicit per-revision human delegation and a separate reviewer
+agent. Never give a translating agent the reviewer credential for its own work.

@@ -33,9 +33,9 @@ const featureItems = [
 	},
 	{
 		icon: GitPullRequestArrow,
-		title: "Human-reviewed proposals",
+		title: "Reviewed proposals",
 		description:
-			"Agents prepare candidate values; a human accepts, edits, or rejects every proposed change.",
+			"Agents prepare candidates. Humans review by default, with optional authorization for a separate reviewer agent.",
 	},
 	{
 		icon: GitBranch,

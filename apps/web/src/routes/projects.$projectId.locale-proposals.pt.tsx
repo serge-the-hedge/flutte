@@ -1,3 +1,4 @@
+import { env } from "@blabla/env/web";
 import {
 	Alert,
 	AlertDescription,
@@ -42,7 +43,11 @@ import {
 	X,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-
+import { AgentReviewEvidence } from "@/components/localization/agent-review-evidence";
+import {
+	CandidateReviewDelegation,
+	candidateReviewUrl,
+} from "@/components/localization/candidate-review-delegation";
 import {
 	PageHeader,
 	ProjectShell,
@@ -165,12 +170,22 @@ export function PortugueseLocaleProposalWorkbench({
 				: queriedDetail
 			: queriedDetail;
 	const queueIsLoading = queriedDetail === undefined || sparseQueueTransition;
+	const reviewerTokens = useQuery(
+		api.apiTokens.list,
+		detail?.messages.some(
+			(message) =>
+				(message.candidate?.review?.reviewer ?? message.review?.reviewer)
+					?.kind === "agent",
+		)
+			? { projectId: convexProjectId }
+			: "skip",
+	);
 	const reviewState = detail
 		? localeProposalReviewState({
 				status: detail.proposal.status,
 				isCurrentBaseline: detail.isCurrentBaseline,
 				remaining: detail.proposal.progress.remaining,
-				pendingHumanReview: detail.pendingHumanReview,
+				pendingReview: detail.pendingReview,
 			})
 		: null;
 	const proposalReadOnly =
@@ -245,7 +260,7 @@ export function PortugueseLocaleProposalWorkbench({
 			const currentValue =
 				message.candidate?.review?.finalValue ??
 				message.review?.finalValue ??
-				(message.facts.state === "humanDraft"
+				(message.facts.state === "reviewedDraft"
 					? message.value?.value
 					: (message.candidate?.value ?? message.value?.value)) ??
 				"";
@@ -773,13 +788,13 @@ export function PortugueseLocaleProposalWorkbench({
 					</AlertDescription>
 				</Alert>
 			) : null}
-			{taskId && detail && detail.pendingHumanReview.count > 0 ? (
+			{taskId && detail && detail.pendingReview.count > 0 ? (
 				<Alert className="mb-4">
 					<TriangleAlert aria-hidden className="size-4" />
 					<AlertTitle>
-						{detail.pendingHumanReview.count}
-						{detail.pendingHumanReview.hasMore ? "+" : ""} earlier agent value
-						{detail.pendingHumanReview.count === 1 ? " needs" : "s need"} review
+						{detail.pendingReview.count}
+						{detail.pendingReview.hasMore ? "+" : ""} earlier agent value
+						{detail.pendingReview.count === 1 ? " needs" : "s need"} review
 					</AlertTitle>
 					<AlertDescription>
 						They are now first in the review queue. Confirm or edit them before
@@ -823,8 +838,8 @@ export function PortugueseLocaleProposalWorkbench({
 								<CardTitle className="text-base">Portuguese · pt-BR</CardTitle>
 								<p className="mt-1 text-muted-foreground text-sm">
 									Pinned to {detail.proposal.sourceSnapshot.commit}. Agent work
-									stays inert until a person confirms exact candidate revisions
-									below.
+									stays inert until a person or authorized independent reviewer
+									confirms exact candidate revisions below.
 								</p>
 							</div>
 							{taskId ? null : (
@@ -960,7 +975,7 @@ export function PortugueseLocaleProposalWorkbench({
 							const savedValue =
 								message.candidate?.review?.finalValue ??
 								message.review?.finalValue ??
-								(message.facts.state === "humanDraft"
+								(message.facts.state === "reviewedDraft"
 									? message.value?.value
 									: candidateValue) ??
 								"";
@@ -1025,8 +1040,8 @@ export function PortugueseLocaleProposalWorkbench({
 													{message.messageId}
 												</code>
 												<Badge variant={reviewed ? "default" : "secondary"}>
-													{message.facts.state === "humanDraft"
-														? "human draft"
+													{message.facts.state === "reviewedDraft"
+														? "reviewed draft"
 														: message.facts.state === "needsEdit"
 															? "needs replacement"
 															: message.facts.state}
@@ -1153,6 +1168,37 @@ export function PortugueseLocaleProposalWorkbench({
 														<TranslationReviewEditor.RevertChanges />
 													</TranslationReviewEditor.Actions>
 												</TranslationReviewEditor.Provider>
+												<AgentReviewEvidence
+													reviewer={
+														message.candidate?.review?.reviewer ??
+														message.review?.reviewer
+													}
+													authorization={
+														message.candidate?.review?.reviewAuthorization ??
+														message.review?.reviewAuthorization
+													}
+													tokens={reviewerTokens}
+												/>
+												{message.candidate && !message.candidate.review ? (
+													<CandidateReviewDelegation
+														revisionId={message.candidate.revisionId}
+														reviewUrl={candidateReviewUrl(
+															env.VITE_CONVEX_SITE_URL,
+															message.candidate.revisionId,
+														)}
+														disabled={
+															proposalReadOnly ||
+															queueIsLoading ||
+															busy !== null ||
+															draft !== savedValue ||
+															(blankReasons[message.messageId] !== undefined &&
+																blankReasons[message.messageId] !==
+																	(message.candidate.intentionalBlankReason ??
+																		"")) ||
+															message.facts.staleSource
+														}
+													/>
+												) : null}
 												<div className="flex flex-col gap-2">
 													{canRecordIntentionalBlank(draft) ? (
 														<div className="flex flex-col gap-2 sm:flex-row">
