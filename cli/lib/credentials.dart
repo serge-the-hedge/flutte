@@ -72,8 +72,8 @@ class CredentialStore {
     }
     final credentialsFile = file;
     await credentialsFile.parent.create(recursive: true);
-    // createTemp uses a private directory on POSIX, before any token bytes exist.
-    // Keeping it beside the final file also makes the rename atomic.
+    // Dart's Linux createTemp respects umask rather than guaranteeing 0700.
+    // Protect the empty directory before writing; its location keeps rename atomic.
     final privateDirectory = await credentialsFile.parent.createTemp(
       '.credentials-',
     );
@@ -81,6 +81,15 @@ class CredentialStore {
       '${privateDirectory.path}${Platform.pathSeparator}credentials.json',
     );
     try {
+      final protectDirectory = await Process.run('chmod', [
+        '700',
+        privateDirectory.path,
+      ]);
+      if (protectDirectory.exitCode != 0) {
+        throw RepositoryAdapterException(
+          'Could not protect the Blabla credentials directory.',
+        );
+      }
       await temporary.writeAsString(
         '${jsonEncode({'server': credentials.server, 'token': credentials.token})}\n',
         flush: true,
