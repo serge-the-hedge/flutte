@@ -18,9 +18,11 @@ import {
 } from "./permissions";
 import {
 	dictionaryTermValidator,
+	type guidanceAuthorValidator,
 	type guidanceContentValidator,
 	type guidanceContextValidator,
 	guidanceListValidator,
+	projectVoiceGuideFields,
 	retainedGuidanceRevisionValidator,
 	voiceGuideFields,
 } from "./translationGuidanceModel";
@@ -31,14 +33,16 @@ export {
 } from "./translationGuidanceModel";
 
 export const MAX_DICTIONARY_TERMS = 256;
-export const MAX_VOICE_GUIDES = 32;
-export const MAX_DICTIONARY_TERM_BYTES = 4 * 1024;
+export const MAX_VOICE_GUIDES = 128;
+export const MAX_DICTIONARY_TERM_BYTES = 16 * 1024;
 export const MAX_VOICE_GUIDE_BYTES = 8 * 1024;
 export const MAX_GUIDANCE_BYTES = 512 * 1024;
 export const MAX_GUIDANCE_TEXTS = 50;
 export const MAX_GUIDANCE_LOCALES = 20;
+export const MAX_DICTIONARY_RENDERINGS = 128;
 
 type GuidanceContent = Infer<typeof guidanceContentValidator>;
+type GuidanceAuthor = Infer<typeof guidanceAuthorValidator>;
 type DictionaryTerm = Infer<typeof dictionaryTermValidator>;
 type ReadCtx = QueryCtx | MutationCtx;
 
@@ -76,8 +80,8 @@ async function validateLocales(
 	} = {},
 ) {
 	requireEnvelope(
-		localeCodes.length <= MAX_GUIDANCE_LOCALES,
-		"Guidance supports at most 20 Locales per request.",
+		localeCodes.length <= MAX_DICTIONARY_RENDERINGS,
+		"Guidance supports at most 128 authored Locales.",
 	);
 	const seen = new Set<string>();
 	for (const localeCode of localeCodes) {
@@ -144,10 +148,10 @@ async function currentGuidance(
 		ctx.db
 			.query("translationGuidanceEntries")
 			.withIndex("by_project_and_key", (q) => q.eq("projectId", projectId))
-			.take(MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 1),
+			.take(MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 2),
 	]);
 	if (
-		entries.length > MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES ||
+		entries.length > MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 1 ||
 		(!state && entries.length > 0)
 	) {
 		throw new ConvexError({
@@ -155,8 +159,19 @@ async function currentGuidance(
 			message: "Translation guidance has no valid current-state envelope.",
 		});
 	}
+	const projectGuide = entries.find(
+		(entry) => entry.content.kind === "projectVoiceGuide",
+	);
 	return {
 		revision: state?.revision ?? 0,
+		projectGuide:
+			projectGuide?.content.kind === "projectVoiceGuide"
+				? {
+						text: projectGuide.content.text,
+						examples: projectGuide.content.examples,
+						...citation(projectGuide),
+					}
+				: null,
 		terms: entries.flatMap((entry) =>
 			entry.content.kind === "term"
 				? [{ term: entry.content.term, ...citation(entry) }]
@@ -177,7 +192,7 @@ async function currentGuidance(
 	};
 }
 
-/** One revision per deliberate human change, with an immutable copy small
+/** One revision per deliberate authorized change, with an immutable copy small
  * enough to retrieve by citation. Unchanged writes do not grow history. */
 async function writeEntry(
 	ctx: MutationCtx,
@@ -186,7 +201,7 @@ async function writeEntry(
 		expectedRevision: number;
 		key: string;
 		content: GuidanceContent | null;
-		userId: string;
+		authoredBy: GuidanceAuthor;
 	},
 ) {
 	validateRevision(input.expectedRevision);
@@ -196,7 +211,7 @@ async function writeEntry(
 			encodedSize(input.content) <=
 				(dictionaryEntry ? MAX_DICTIONARY_TERM_BYTES : MAX_VOICE_GUIDE_BYTES),
 			dictionaryEntry
-				? "A Dictionary entry supports at most 4 KiB."
+				? "A Dictionary entry supports at most 16 KiB."
 				: "A voice guide supports at most 8 KiB.",
 		);
 	}
@@ -245,14 +260,14 @@ async function writeEntry(
 	);
 	requireEnvelope(
 		guideCount <= MAX_VOICE_GUIDES,
-		"A project supports at most 32 voice guides.",
+		"A project supports at most 128 Locale voice add-ons.",
 	);
 	// Keep room for citations and matched-text indexes in the bounded read.
 	requireEnvelope(
 		byteLength <= MAX_GUIDANCE_BYTES - 64 * 1024,
 		"Translation guidance exceeds its project byte envelope.",
 	);
-	const authoredBy = { kind: "user" as const, id: input.userId };
+	const authoredBy = input.authoredBy;
 	const authoredAt = Date.now();
 	const revisionId = await ctx.db.insert("translationGuidanceRevisions", {
 		projectId: input.projectId,
@@ -289,7 +304,7 @@ async function writeEntry(
 	return { revision, revisionId };
 }
 
-/** Carry current human guidance with a pre-Snapshot Locale code correction.
+/** Carry current authored guidance with a pre-Snapshot Locale code correction.
  * Called inside the setup mutation: conflicting destination content rolls back
  * the whole correction, and each changed entry retains its old citation. */
 export async function correctGuidanceLocaleCode(
@@ -385,16 +400,96 @@ export async function correctGuidanceLocaleCode(
 			...change,
 			projectId: input.projectId,
 			expectedRevision: revision,
-			userId: input.userId,
+			authoredBy: { kind: "user", id: input.userId },
 		});
 		revision = saved.revision;
 	}
 }
 
-const saveResultValidator = v.object({
+export const guidanceSaveResultValidator = v.object({
 	revision: v.number(),
 	revisionId: v.union(v.id("translationGuidanceRevisions"), v.null()),
 });
+
+/** The authenticated adapter supplies authorship; human and agent writes share
+ * normalization, Locale validation, revision checks, and immutable citations. */
+export async function saveDictionaryTerm(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		expectedRevision: number;
+		term: DictionaryTerm;
+		authoredBy: GuidanceAuthor;
+	},
+) {
+	requireNonblank(args.term.sourceTerm, "Source term");
+	requireNonblank(args.term.definition, "Term definition");
+	const sourceTerm = args.term.sourceTerm.trim();
+	requireEnvelope(
+		new TextEncoder().encode(sourceTerm).byteLength <= 256,
+		"A source term supports at most 256 UTF-8 bytes.",
+	);
+	let term: DictionaryTerm;
+	if (args.term.kind === "translated") {
+		if (args.term.renderings.length === 0)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A translated term needs at least one Locale rendering.",
+			});
+		const previous = await ctx.db
+			.query("translationGuidanceEntries")
+			.withIndex("by_project_and_key", (q) =>
+				q.eq("projectId", args.projectId).eq("key", termKey(sourceTerm)),
+			)
+			.unique();
+		const previousRenderings = new Map(
+			previous?.content.kind === "term" &&
+				previous.content.term.kind === "translated"
+				? previous.content.term.renderings.map((rendering) => [
+						rendering.localeCode,
+						rendering.value,
+					])
+				: [],
+		);
+		await validateLocales(
+			ctx,
+			args.projectId,
+			args.term.renderings.map((rendering) => rendering.localeCode),
+			{
+				preservedRenderingLocales: new Set(
+					args.term.renderings.flatMap((rendering) =>
+						previousRenderings.get(rendering.localeCode) === rendering.value
+							? [rendering.localeCode]
+							: [],
+					),
+				),
+			},
+		);
+		for (const rendering of args.term.renderings)
+			requireNonblank(rendering.value, "Term rendering");
+		term = {
+			...args.term,
+			sourceTerm,
+			definition: args.term.definition.trim(),
+			renderings: [...args.term.renderings].sort((left, right) =>
+				left.localeCode.localeCompare(right.localeCode),
+			),
+		};
+	} else {
+		term = {
+			...args.term,
+			sourceTerm,
+			definition: args.term.definition.trim(),
+		};
+	}
+	const content = { kind: "term" as const, term };
+	return await writeEntry(ctx, {
+		...args,
+		key: termKey(sourceTerm),
+		content,
+		authoredBy: args.authoredBy,
+	});
+}
 
 export const saveTerm = mutation({
 	args: {
@@ -402,78 +497,33 @@ export const saveTerm = mutation({
 		expectedRevision: v.number(),
 		term: dictionaryTermValidator,
 	},
-	returns: saveResultValidator,
+	returns: guidanceSaveResultValidator,
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		requireNonblank(args.term.sourceTerm, "Source term");
-		requireNonblank(args.term.definition, "Term definition");
-		const sourceTerm = args.term.sourceTerm.trim();
-		requireEnvelope(
-			new TextEncoder().encode(sourceTerm).byteLength <= 256,
-			"A source term supports at most 256 UTF-8 bytes.",
-		);
-		let term: DictionaryTerm;
-		if (args.term.kind === "translated") {
-			if (args.term.renderings.length === 0)
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "A translated term needs at least one Locale rendering.",
-				});
-			const previous = await ctx.db
-				.query("translationGuidanceEntries")
-				.withIndex("by_project_and_key", (q) =>
-					q.eq("projectId", args.projectId).eq("key", termKey(sourceTerm)),
-				)
-				.unique();
-			const previousRenderings = new Map(
-				previous?.content.kind === "term" &&
-					previous.content.term.kind === "translated"
-					? previous.content.term.renderings.map((rendering) => [
-							rendering.localeCode,
-							rendering.value,
-						])
-					: [],
-			);
-			await validateLocales(
-				ctx,
-				args.projectId,
-				args.term.renderings.map((rendering) => rendering.localeCode),
-				{
-					preservedRenderingLocales: new Set(
-						args.term.renderings.flatMap((rendering) =>
-							previousRenderings.get(rendering.localeCode) === rendering.value
-								? [rendering.localeCode]
-								: [],
-						),
-					),
-				},
-			);
-			for (const rendering of args.term.renderings)
-				requireNonblank(rendering.value, "Term rendering");
-			term = {
-				...args.term,
-				sourceTerm,
-				definition: args.term.definition.trim(),
-				renderings: [...args.term.renderings].sort((left, right) =>
-					left.localeCode.localeCompare(right.localeCode),
-				),
-			};
-		} else {
-			term = {
-				...args.term,
-				sourceTerm,
-				definition: args.term.definition.trim(),
-			};
-		}
-		const content = { kind: "term" as const, term };
-		return await writeEntry(ctx, {
+		return await saveDictionaryTerm(ctx, {
 			...args,
-			key: termKey(sourceTerm),
-			content,
-			userId,
+			authoredBy: { kind: "user", id: userId },
 		});
 	},
 });
+
+export async function removeDictionaryTerm(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		expectedRevision: number;
+		sourceTerm: string;
+		authoredBy: GuidanceAuthor;
+	},
+) {
+	requireNonblank(args.sourceTerm, "Source term");
+	return await writeEntry(ctx, {
+		...args,
+		key: termKey(args.sourceTerm.trim()),
+		content: null,
+		authoredBy: args.authoredBy,
+	});
+}
 
 export const removeTerm = mutation({
 	args: {
@@ -481,15 +531,53 @@ export const removeTerm = mutation({
 		expectedRevision: v.number(),
 		sourceTerm: v.string(),
 	},
-	returns: saveResultValidator,
+	returns: guidanceSaveResultValidator,
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		requireNonblank(args.sourceTerm, "Source term");
-		return await writeEntry(ctx, {
+		return await removeDictionaryTerm(ctx, {
 			...args,
-			key: termKey(args.sourceTerm.trim()),
-			content: null,
-			userId,
+			authoredBy: { kind: "user", id: userId },
+		});
+	},
+});
+
+function validateVoiceExamples(
+	examples: Infer<typeof projectVoiceGuideFields.examples>,
+) {
+	requireEnvelope(
+		examples.length <= 5,
+		"A voice guide supports at most five curated examples.",
+	);
+	for (const example of examples) {
+		requireNonblank(example.source, "Voice example source");
+		requireNonblank(example.target, "Voice example target");
+	}
+}
+
+export const saveProjectVoiceGuide = mutation({
+	args: {
+		projectId: v.id("projects"),
+		expectedRevision: v.number(),
+		...projectVoiceGuideFields,
+	},
+	returns: guidanceSaveResultValidator,
+	handler: async (ctx, args) => {
+		const { userId } = await requireEditor(ctx, args.projectId);
+		validateVoiceExamples(args.examples);
+		const removing =
+			args.text.trim().length === 0 && args.examples.length === 0;
+		return await writeEntry(ctx, {
+			projectId: args.projectId,
+			expectedRevision: args.expectedRevision,
+			key: "projectVoiceGuide",
+			content: removing
+				? null
+				: {
+						kind: "projectVoiceGuide",
+						text: args.text,
+						examples: args.examples,
+					},
+			authoredBy: { kind: "user", id: userId },
 		});
 	},
 });
@@ -500,7 +588,7 @@ export const saveVoiceGuide = mutation({
 		expectedRevision: v.number(),
 		...voiceGuideFields,
 	},
-	returns: saveResultValidator,
+	returns: guidanceSaveResultValidator,
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
 		const removing =
@@ -508,14 +596,7 @@ export const saveVoiceGuide = mutation({
 		await validateLocales(ctx, args.projectId, [args.localeCode], {
 			allowArchived: removing,
 		});
-		requireEnvelope(
-			args.examples.length <= 5,
-			"A voice guide supports at most five curated examples.",
-		);
-		for (const example of args.examples) {
-			requireNonblank(example.source, "Voice example source");
-			requireNonblank(example.target, "Voice example target");
-		}
+		validateVoiceExamples(args.examples);
 		const content = removing
 			? null
 			: {
@@ -528,7 +609,7 @@ export const saveVoiceGuide = mutation({
 			...args,
 			key: guideKey(args.localeCode),
 			content,
-			userId,
+			authoredBy: { kind: "user", id: userId },
 		});
 	},
 });
@@ -602,12 +683,17 @@ export async function readGuidance(
 		encodedSize(input.texts) <= MAX_GUIDANCE_BYTES,
 		"Guidance source texts exceed the 512 KiB envelope.",
 	);
+	requireEnvelope(
+		input.localeCodes.length <= MAX_GUIDANCE_LOCALES,
+		"Guidance context supports at most 20 Locales per request.",
+	);
 	await validateLocales(ctx, projectId, input.localeCodes);
 	const guidance = await currentGuidance(ctx, projectId);
 	const literalsByText = input.texts.map(messageLiteralParts);
 	const localeCodes = new Set(input.localeCodes);
 	const result = {
 		revision: guidance.revision,
+		projectGuide: guidance.projectGuide,
 		terms: guidance.terms.flatMap((entry) => {
 			const matchedTextIndexes = literalsByText.flatMap((literals, index) =>
 				literals.some((literal) =>

@@ -3,17 +3,8 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { isReviewOnlyToken } from "./agentReviewModel";
 import { requireUser } from "./auth";
-import { now, sha256Hex } from "./lib";
+import { now, sha256Hex, tokenScopeValidator } from "./lib";
 import { requireOwner, requireViewer } from "./permissions";
-
-const scopeValidator = v.union(
-	v.literal("read"),
-	v.literal("review"),
-	v.literal("search"),
-	v.literal("propose"),
-	v.literal("export"),
-	v.literal("snapshot-submission"),
-);
 
 /** Preserve existing token hashes while using the shared Web Crypto digest. */
 export async function hashToken(rawToken: string): Promise<string> {
@@ -42,7 +33,7 @@ export const create = mutation({
 	args: {
 		projectId: v.id("projects"),
 		name: v.string(),
-		scopes: v.array(scopeValidator),
+		scopes: v.array(tokenScopeValidator),
 	},
 	handler: async (ctx, args) => {
 		const user = await requireUser(ctx);

@@ -47,6 +47,7 @@ const internalApi = internal;
 
 type AgentScope = TokenScope;
 type AgentRateLimitName =
+	| "agentDictionaryWrite"
 	| "agentRead"
 	| "agentReview"
 	| "agentSearch"
@@ -1072,6 +1073,114 @@ http.route({
 				FORBIDDEN: 403,
 				STALE_BASIS: 409,
 			});
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/dictionary",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const params = new URL(request.url).searchParams;
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"read",
+					"agentRead",
+					async (token) =>
+						await ctx.runQuery(internalApi.agentDictionary.list, {
+							token,
+							q: params.get("q") ?? undefined,
+							sourceTerm: params.get("sourceTerm") ?? undefined,
+							limit: Number(params.get("limit") ?? 16),
+							cursor: params.get("cursor") ?? undefined,
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { STALE_BASIS: 409, NOT_FOUND: 404 });
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/dictionary/terms",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			if (!Array.isArray(body.terms))
+				throw new Error("terms must be an array.");
+			const terms = body.terms.map((term: unknown) => {
+				if (!isRecord(term)) throw new Error("Each term must be an object.");
+				const fields = {
+					sourceTerm: requiredJsonString(term, "sourceTerm"),
+					definition: requiredJsonString(term, "definition"),
+				};
+				if (term.kind === "untranslatable")
+					return { ...fields, kind: "untranslatable" as const };
+				if (term.kind !== "translated" || !Array.isArray(term.renderings))
+					throw new Error("A translated term must include renderings.");
+				return {
+					...fields,
+					kind: "translated" as const,
+					renderings: term.renderings.map((rendering: unknown) => {
+						if (!isRecord(rendering))
+							throw new Error("Each rendering must be an object.");
+						return {
+							localeCode: requiredJsonString(rendering, "localeCode"),
+							value: requiredJsonString(rendering, "value"),
+						};
+					}),
+				};
+			});
+			const expectedRevision = requiredJsonNumber(body, "expectedRevision");
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"dictionary-write",
+					"agentDictionaryWrite",
+					async (token) =>
+						await ctx.runMutation(internalApi.agentDictionary.save, {
+							token,
+							expectedRevision,
+							terms,
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { STALE_BASIS: 409, NOT_FOUND: 404 });
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/dictionary/terms",
+	method: "DELETE",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			const expectedRevision = requiredJsonNumber(body, "expectedRevision");
+			const sourceTerm = requiredJsonString(body, "sourceTerm");
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"dictionary-write",
+					"agentDictionaryWrite",
+					async (token) =>
+						await ctx.runMutation(internalApi.agentDictionary.remove, {
+							token,
+							expectedRevision,
+							sourceTerm,
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { STALE_BASIS: 409, NOT_FOUND: 404 });
 		}
 	}),
 });

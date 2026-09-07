@@ -21,7 +21,13 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@blabla/ui/components/empty";
-import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
+import {
+	Field,
+	FieldContent,
+	FieldDescription,
+	FieldGroup,
+	FieldLabel,
+} from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { cn } from "@blabla/ui/lib/utils";
@@ -89,6 +95,16 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 	const [rawToken, setRawToken] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
 	const [revokingId, setRevokingId] = useState<string>();
+
+	function toggleScope(scope: TokenScope, checked: boolean) {
+		if (isCreating) return;
+		setRawToken("");
+		setSelectedScopes((current) =>
+			checked
+				? [...new Set([...current, scope])]
+				: current.filter((item) => item !== scope),
+		);
+	}
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
@@ -202,6 +218,28 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											deliver changes.
 										</p>
 									) : null}
+									{!isReviewer ? (
+										<Field orientation="horizontal">
+											<Checkbox
+												id="dictionary-write-token"
+												checked={selectedScopes.includes("dictionary-write")}
+												disabled={isCreating}
+												onCheckedChange={(checked) =>
+													toggleScope("dictionary-write", checked === true)
+												}
+											/>
+											<FieldContent>
+												<FieldLabel htmlFor="dictionary-write-token">
+													Allow Dictionary editing
+												</FieldLabel>
+												<FieldDescription>
+													Allows this agent to add, replace, and remove shared
+													Dictionary entries directly. Voice guidance remains
+													human-edited.
+												</FieldDescription>
+											</FieldContent>
+										</Field>
+									) : null}
 									<Field>
 										<FieldLabel htmlFor="token-name">Name</FieldLabel>
 										<Input
@@ -237,6 +275,7 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 													type="button"
 													size="xs"
 													variant="ghost"
+													disabled={isCreating}
 													onClick={() =>
 														setShowAdvancedScopes((value) => !value)
 													}
@@ -264,14 +303,9 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 															<Checkbox
 																id={id}
 																checked={checked}
+																disabled={isCreating}
 																onCheckedChange={(value) =>
-																	setSelectedScopes((current) =>
-																		value
-																			? [...current, scope]
-																			: current.filter(
-																					(item) => item !== scope,
-																				),
-																	)
+																	toggleScope(scope, value === true)
 																}
 															/>
 															<span className="capitalize">{scope}</span>
@@ -396,11 +430,13 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 						</div>
 						<Alert>
 							<KeyRound className="size-4" />
-							<AlertTitle>Reviewable changes only</AlertTitle>
+							<AlertTitle>Translation review and Dictionary access</AlertTitle>
 							<AlertDescription>
 								Translation credentials create inert candidates. A human decides
 								them, or authorizes a separate reviewer agent through the
-								project setting or an exact-revision delegation.
+								project setting or an exact-revision delegation. Optional
+								Dictionary editing applies directly to shared terminology and
+								does not grant translation review or voice-guide editing.
 							</AlertDescription>
 						</Alert>
 					</CardContent>

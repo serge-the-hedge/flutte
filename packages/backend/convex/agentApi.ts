@@ -7,27 +7,13 @@ import {
 } from "./_generated/server";
 import { isReviewOnlyToken } from "./agentReviewModel";
 import { hashToken } from "./apiTokens";
+import { type TokenScope, tokenScopeValidator } from "./lib";
 import { assertProjectExists } from "./permissions";
-
-const scopeValidator = v.union(
-	v.literal("read"),
-	v.literal("review"),
-	v.literal("search"),
-	v.literal("propose"),
-	v.literal("export"),
-	v.literal("snapshot-submission"),
-);
 
 export async function authenticateAgent(
 	ctx: QueryCtx | MutationCtx,
 	rawToken: string,
-	scope:
-		| "read"
-		| "search"
-		| "review"
-		| "propose"
-		| "export"
-		| "snapshot-submission",
+	scope: TokenScope,
 ) {
 	const tokenHash = await hashToken(rawToken);
 	const token = await ctx.db
@@ -50,7 +36,7 @@ export async function authenticateAgent(
 }
 
 export const authenticateToken = internalQuery({
-	args: { token: v.string(), scope: scopeValidator },
+	args: { token: v.string(), scope: tokenScopeValidator },
 	handler: async (ctx, args) =>
 		await authenticateAgent(ctx, args.token, args.scope),
 });
@@ -123,6 +109,11 @@ export const currentProject = internalQuery({
 					? []
 					: ["pt"],
 				reviewedProposalExamples: true,
+				dictionary: {
+					batchWrites: true,
+					writeScope: "dictionary-write",
+					canWrite: token.scopes.includes("dictionary-write"),
+				},
 			},
 		};
 	},

@@ -10,10 +10,10 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented |
+| Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented; new-Locale realization and capacity gaps remain ([readiness review](../../reports/locale-adding-review-2026-09-07.md)) |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
-| Dictionary and Locale voice guidance | Human authoring, immutable citations, and bounded agent reads implemented; Dictionary Conflict and explained Source Echo observations remain planned |
+| Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | MCP adapter | Planned; HTTP is the supported agent transport |
 
@@ -648,13 +648,21 @@ match **case-sensitively**. **It starts empty and nothing is seeded** — the
 eleven all-Locale-identical keys include `Start`, which is plainly untranslated
 in Russian, and auto-seeding would write that bug in as a permanent excuse.
 
-Editors maintain Dictionary entries and per-Locale **Voice Guides** in project
-settings. Both start empty and retain immutable authored revisions when changed
-or removed. A Voice Guide states audience, tone and editorial conventions with
-curated bilingual examples; catalog frequency never creates one automatically.
-Agents receive applicable rules once per bounded context request, with citations.
-Reviewer context binds its guidance revision so changed human guidance requires
-fresh assessment. These reads do not give agents authoring or release powers.
+Editors maintain one general **Voice Guide** for the project and optional
+Locale-specific add-ons. The general guide states the shared audience, tone and
+editorial conventions; add-ons supply local details. Both retain immutable
+authored revisions and start empty. Catalog frequency never creates policy.
+
+Editors or agents explicitly granted `dictionary-write` may fill and maintain the
+Dictionary. Agent writes update active entries directly, record the actual agent
+identity, and check the current guidance revision. Batch writes are atomic;
+read access and translator credentials alone do not authorize them. Reviewer
+credentials cannot also author the Dictionary. No credential can authorize an
+agent to create its own translation review evidence.
+
+Context includes the general guide once, applicable Locale add-ons, and matching
+terms with immutable citations. A changed guide or Dictionary revision requires
+fresh reviewer assessment. These entries never become release authority.
 
 A **Source Echo** is derived and never stored: recomputed whenever either value
 changes, never cleared by a human saving the value, and independent of how the

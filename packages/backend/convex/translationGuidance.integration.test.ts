@@ -6,7 +6,11 @@ import {
 	createProject,
 } from "../test/support";
 import { api } from "./_generated/api";
-import { readGuidance } from "./translationGuidance";
+import {
+	readGuidance,
+	removeDictionaryTerm,
+	saveDictionaryTerm,
+} from "./translationGuidance";
 
 async function setup() {
 	const t = createBackend();
@@ -25,12 +29,181 @@ const term = {
 	kind: "untranslatable" as const,
 };
 
-describe("human-maintained translation guidance", () => {
+describe("authored translation guidance", () => {
+	test("includes the general voice once in every context, alongside only requested Locale add-ons", async () => {
+		const { t, owner, projectId } = await setup();
+		const saved = await owner.mutation(
+			api.translationGuidance.saveProjectVoiceGuide,
+			{
+				projectId,
+				expectedRevision: 0,
+				text: "Be welcoming, concise, and specific.",
+				examples: [
+					{ source: "An error has occurred", target: "Try scanning again" },
+				],
+			},
+		);
+		await owner.mutation(api.translationGuidance.saveVoiceGuide, {
+			projectId,
+			expectedRevision: 1,
+			localeCode: "de",
+			text: "Use du.",
+			examples: [],
+		});
+		for (const localeCodes of [[], ["pt"], ["de", "pt"]]) {
+			const context = await t.run((ctx) =>
+				readGuidance(ctx, projectId, { texts: [], localeCodes }),
+			);
+			expect(context.projectGuide).toMatchObject({
+				text: "Be welcoming, concise, and specific.",
+				revisionId: saved.revisionId,
+			});
+			expect(context.guides.map((guide) => guide.localeCode)).toEqual(
+				localeCodes.includes("de") ? ["de"] : [],
+			);
+		}
+		expect(
+			await owner.query(api.translationGuidance.list, { projectId }),
+		).toMatchObject({
+			projectGuide: { revision: 1 },
+			guides: [{ localeCode: "de" }],
+		});
+		await owner.mutation(api.translationGuidance.saveProjectVoiceGuide, {
+			projectId,
+			expectedRevision: 2,
+			text: "",
+			examples: [],
+		});
+		expect(
+			(await owner.query(api.translationGuidance.list, { projectId }))
+				.projectGuide,
+		).toBeNull();
+		if (!saved.revisionId) throw new Error("Expected voice citation.");
+		expect(
+			await owner.query(api.translationGuidance.getRevision, {
+				projectId,
+				revisionId: saved.revisionId,
+			}),
+		).toMatchObject({
+			content: {
+				kind: "projectVoiceGuide",
+				text: "Be welcoming, concise, and specific.",
+			},
+		});
+	});
+
+	test("supports Dictionary renderings and optional voice add-ons for dozens of Locales with bounded context batches", async () => {
+		const { t, owner, projectId } = await setup();
+		const localeCodes = Array.from(
+			{ length: 64 },
+			(_, index) => `fr-${String(index + 1).padStart(3, "0")}`,
+		);
+		for (const code of localeCodes)
+			await owner.mutation(api.locales.create, { projectId, code });
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "Start",
+				definition: "Begin the chosen activity",
+				kind: "translated",
+				renderings: localeCodes.map((localeCode) => ({
+					localeCode,
+					value: "Commencer",
+				})),
+			},
+		});
+		for (const [index, localeCode] of localeCodes.entries()) {
+			await owner.mutation(api.translationGuidance.saveVoiceGuide, {
+				projectId,
+				expectedRevision: index + 1,
+				localeCode,
+				text: "Keep labels concise.",
+				examples: [],
+			});
+		}
+		await owner.mutation(api.translationGuidance.saveProjectVoiceGuide, {
+			projectId,
+			expectedRevision: 65,
+			text: "Be useful and clear.",
+			examples: [],
+		});
+		const all = await owner.query(api.translationGuidance.list, { projectId });
+		expect(all.guides).toHaveLength(64);
+		expect(all.terms[0]?.term).toMatchObject({ renderings: expect.any(Array) });
+		if (all.terms[0]?.term.kind !== "translated")
+			throw new Error("Expected translated term.");
+		expect(all.terms[0].term.renderings).toHaveLength(64);
+		const context = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["Start"],
+				localeCodes: localeCodes.slice(0, 20),
+			}),
+		);
+		expect(context.projectGuide?.text).toBe("Be useful and clear.");
+		expect(context.guides).toHaveLength(20);
+		if (context.terms[0]?.term.kind !== "translated")
+			throw new Error("Expected translated term.");
+		expect(context.terms[0].term.renderings).toHaveLength(20);
+		await expect(
+			t.run((ctx) =>
+				readGuidance(ctx, projectId, {
+					texts: ["Start"],
+					localeCodes: localeCodes.slice(0, 21),
+				}),
+			),
+		).rejects.toThrow("20 Locales");
+	});
+
+	test("retains agent authorship through Dictionary context, replacement, and removal", async () => {
+		const { t, owner, projectId } = await setup();
+		const authoredBy = { kind: "agent" as const, id: "dictionary-agent-token" };
+		const saved = await t.run((ctx) =>
+			saveDictionaryTerm(ctx, {
+				projectId,
+				expectedRevision: 0,
+				term,
+				authoredBy,
+			}),
+		);
+		expect(
+			await t.run((ctx) =>
+				readGuidance(ctx, projectId, {
+					texts: ["Brickit"],
+					localeCodes: ["de"],
+				}),
+			),
+		).toMatchObject({ terms: [{ authoredBy, revisionId: saved.revisionId }] });
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 1,
+			term: { ...term, definition: "Preserve the product spelling." },
+		});
+		await t.run((ctx) =>
+			removeDictionaryTerm(ctx, {
+				projectId,
+				expectedRevision: 2,
+				sourceTerm: term.sourceTerm,
+				authoredBy,
+			}),
+		);
+		if (!saved.revisionId) throw new Error("Expected term citation.");
+		expect(
+			await owner.query(api.translationGuidance.getRevision, {
+				projectId,
+				revisionId: saved.revisionId,
+			}),
+		).toMatchObject({ authoredBy, content: { term } });
+		expect(
+			(await owner.query(api.translationGuidance.list, { projectId })).terms,
+		).toEqual([]);
+	});
+
 	test("starts empty and does not infer a Dictionary or voice from the catalog", async () => {
 		const { t, owner, projectId } = await setup();
 		expect(
 			await owner.query(api.translationGuidance.list, { projectId }),
-		).toEqual({ revision: 0, terms: [], guides: [] });
+		).toEqual({ revision: 0, terms: [], guides: [], projectGuide: null });
 		expect(
 			await t.run((ctx) =>
 				readGuidance(ctx, projectId, {
@@ -38,7 +211,7 @@ describe("human-maintained translation guidance", () => {
 					localeCodes: ["de", "pt"],
 				}),
 			),
-		).toEqual({ revision: 0, terms: [], guides: [] });
+		).toEqual({ revision: 0, terms: [], guides: [], projectGuide: null });
 	});
 
 	test("matches case-sensitive literal terms once per batch, excluding ICU syntax", async () => {
@@ -123,7 +296,7 @@ describe("human-maintained translation guidance", () => {
 		if (!removed.revisionId) throw new Error("Expected removal revision.");
 		expect(
 			await owner.query(api.translationGuidance.list, { projectId }),
-		).toEqual({ revision: 3, terms: [], guides: [] });
+		).toEqual({ revision: 3, terms: [], guides: [], projectGuide: null });
 		expect(
 			await owner.query(api.translationGuidance.getRevision, {
 				projectId,
@@ -350,9 +523,9 @@ describe("human-maintained translation guidance", () => {
 			owner.mutation(api.translationGuidance.saveTerm, {
 				projectId,
 				expectedRevision: 0,
-				term: { ...term, definition: "x".repeat(4096) },
+				term: { ...term, definition: "x".repeat(16 * 1024) },
 			}),
-		).rejects.toThrow("4 KiB");
+		).rejects.toThrow("16 KiB");
 		await expect(
 			owner.mutation(api.translationGuidance.saveVoiceGuide, {
 				projectId,
