@@ -16,28 +16,22 @@ import {
 import { Input } from "@blabla/ui/components/input";
 import { useForm } from "@tanstack/react-form";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import z from "zod";
 
 import { BrandWordmark } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
-import { api } from "@/lib/convex-api";
 
 export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
 	const navigate = useNavigate();
-	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
 
 	async function finishSignUp() {
-		const result = await acceptPendingInvites().catch(() => ({ accepted: 0 }));
 		await navigate({
 			href: redirectTo,
 			replace: true,
 		});
-		toast.success(
-			result.accepted > 0 ? "Invitation accepted" : "Account created",
-		);
+		toast.success("Account created");
 	}
 
 	const form = useForm({

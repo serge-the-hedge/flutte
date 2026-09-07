@@ -1,8 +1,15 @@
 import { cn } from "@blabla/ui/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Authenticated, Unauthenticated, useMutation } from "convex/react";
+import {
+	Authenticated,
+	Unauthenticated,
+	useMutation,
+	useQuery,
+} from "convex/react";
 import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { BrandWordmark } from "@/components/brand";
+import EmailVerificationNotice from "@/components/email-verification-notice";
 import { ModeToggle } from "@/components/mode-toggle";
 import UserMenu from "@/components/user-menu";
 import { api } from "@/lib/convex-api";
@@ -15,21 +22,29 @@ const links = [
 
 function PendingInviteActivator() {
 	const acceptPendingInvites = useMutation(api.projects.acceptPendingInvites);
-	const hasRun = useRef(false);
+	const user = useQuery(api.auth.getCurrentUser);
+	const activatedUser = useRef<string | null>(null);
+	const verifiedUserId = user?.emailVerified ? user._id : null;
 
 	useEffect(() => {
-		if (hasRun.current) {
+		if (!verifiedUserId || activatedUser.current === verifiedUserId) {
 			return;
 		}
-		hasRun.current = true;
-		acceptPendingInvites().catch((error) => {
-			if (import.meta.env.DEV) {
-				console.warn("Failed to accept pending invites", error);
-			}
-		});
-	}, [acceptPendingInvites]);
+		activatedUser.current = verifiedUserId;
+		acceptPendingInvites()
+			.then(({ accepted }) => {
+				if (accepted > 0) toast.success("Project invitations accepted");
+			})
+			.catch(() => {
+				toast.error(
+					"Could not accept project invitations. Reload to try again.",
+				);
+			});
+	}, [acceptPendingInvites, verifiedUserId]);
 
-	return null;
+	return user && !user.emailVerified ? (
+		<EmailVerificationNotice key={user._id} email={user.email} />
+	) : null;
 }
 
 export default function Header() {
@@ -76,7 +91,6 @@ export default function Header() {
 				<div className="flex items-center gap-2">
 					<ModeToggle />
 					<Authenticated>
-						<PendingInviteActivator />
 						<UserMenu />
 					</Authenticated>
 					<Unauthenticated>
@@ -90,6 +104,9 @@ export default function Header() {
 					</Unauthenticated>
 				</div>
 			</div>
+			<Authenticated>
+				<PendingInviteActivator />
+			</Authenticated>
 		</header>
 	);
 }
