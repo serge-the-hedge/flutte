@@ -2669,7 +2669,7 @@ export const getForReview = query({
 				? await ctx.db
 						.query("localeProposalValues")
 						.withIndex(
-							"by_proposal_and_updatedByKind_and_reviewAuthorization_and_messageId",
+							"by_proposal_and_author_and_reviewer_and_messageId",
 							(q) =>
 								q
 									.eq("proposalId", proposal._id)
@@ -2683,7 +2683,7 @@ export const getForReview = query({
 				? await ctx.db
 						.query("localeProposalValues")
 						.withIndex(
-							"by_proposal_and_updatedByKind_and_reviewAuthorization_and_messageId",
+							"by_proposal_and_author_and_reviewer_and_messageId",
 							(q) =>
 								q
 									.eq("proposalId", proposal._id)
