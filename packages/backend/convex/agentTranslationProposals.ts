@@ -1,5 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, type Infer, v } from "convex/values";
 
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -12,6 +12,19 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import {
+	type AgentReviewAuthorization,
+	agentReviewAuthorizationValidator,
+	agentReviewDecisionValidator,
+	isReviewOnlyToken,
+} from "./agentReviewModel";
+import {
+	authorizeCandidateReview,
+	candidateAuthorizationValidator,
+	grantCandidateReview as grantReview,
+	readCandidateAuthorization,
+	revokeCandidateReviewGrant as revokeReview,
+} from "./agentReviews";
 import { hashToken } from "./apiTokens";
 import {
 	activeProjectionFor,
@@ -383,7 +396,8 @@ async function authenticate(
 	if (
 		!token ||
 		token.revokedAt !== undefined ||
-		!token.scopes.includes(scope)
+		!token.scopes.includes(scope) ||
+		(token.scopes.includes("review") && !isReviewOnlyToken(token.scopes))
 	) {
 		throw new ConvexError({
 			code: "UNAUTHORIZED",
@@ -3054,161 +3068,526 @@ export const acceptTaskCandidates = mutation({
 	},
 });
 
+const candidateReviewResultValidator = v.object({
+	reviewId: v.id("agentTranslationCandidateReviews"),
+	workspaceRevision: v.optional(v.number()),
+	decision: reviewDecisionValidator,
+});
+
+/** Both human and independently authorized agent review use the same exact
+ * revision application; only human review exposes editing or Source rebasing. */
+async function applyCandidateReview(
+	ctx: MutationCtx,
+	args: {
+		candidateRevisionId: Id<"agentTranslationCandidateRevisions">;
+		decision: TranslationTaskReviewDecision;
+	},
+	reviewer: {
+		actor: { kind: "user" | "agent"; id: string };
+		reviewAuthorization?: AgentReviewAuthorization;
+	},
+) {
+	const revision = await ctx.db.get(args.candidateRevisionId);
+	if (!revision) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Candidate revision not found.",
+		});
+	}
+	const proposal = await ctx.db.get(revision.proposalId);
+	if (!proposal) {
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Translation proposal not found.",
+		});
+	}
+	const candidate = await ctx.db.get(revision.candidateId);
+	if (!candidate || candidate.latestRevisionId !== revision._id) {
+		throw new ConvexError({
+			code: "STALE_BASIS",
+			message: "Only the current candidate revision can be reviewed.",
+		});
+	}
+	const existingReview = await latestCandidateReview(ctx, revision._id);
+	if (existingReview) {
+		const status = await completedProposalStatus(ctx, proposal._id);
+		if (status !== proposal.status) {
+			await ctx.db.patch(proposal._id, { status, updatedAt: now() });
+		}
+		return {
+			reviewId: existingReview._id,
+			workspaceRevision: undefined,
+			decision: existingReview.decision,
+		};
+	}
+	const actor = reviewer.actor;
+	let finalValue: string | undefined;
+	let finalValueFingerprint: string | undefined;
+	let workspaceRevision: number | undefined;
+	let appliedBasis: CandidateRevisionInput["basis"] | undefined;
+	if (args.decision.kind === "reject") {
+		// Rejection is deliberately evidence-only.
+	} else if (proposal.target.kind === "catalogWorkspace") {
+		if (
+			revision.localeId === undefined ||
+			revision.basis.kind !== "catalogWorkspace"
+		) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Catalog Workspace candidate evidence is incomplete.",
+			});
+		}
+		const value =
+			args.decision.kind === "intentionalBlank"
+				? ""
+				: args.decision.kind === "accept" ||
+						args.decision.kind === "keepForCurrentSource"
+					? revision.value
+					: args.decision.value;
+		const intentionalBlankReason =
+			args.decision.kind === "intentionalBlank"
+				? args.decision.reason
+				: undefined;
+		finalValue = value;
+		finalValueFingerprint = await sha256Hex(value);
+		const basis =
+			args.decision.kind === "keepForCurrentSource"
+				? catalogWorkspaceTaskBasis(
+						await currentWorkspaceTarget(
+							ctx,
+							proposal.projectId,
+							revision.messageId,
+							revision.localeId,
+						),
+					)
+				: revision.basis;
+		const applied = await applyAgentTargetValue(ctx, {
+			projectId: proposal.projectId,
+			messageId: revision.messageId,
+			localeId: revision.localeId,
+			value,
+			expectedProjectionId: basis.projectionId,
+			expectedSnapshotId: basis.snapshotId,
+			expectedGitValueFingerprint: basis.gitValueFingerprint,
+			expectedGitValueRevision: basis.gitValueRevision,
+			expectedWorkspaceRevision: basis.workspaceRevision,
+			expectedSourceFingerprint: basis.sourceFingerprint,
+			actor,
+			reviewAuthorization: reviewer.reviewAuthorization,
+			...(intentionalBlankReason === undefined
+				? {}
+				: { intentionalBlankReason }),
+		});
+		workspaceRevision = applied.workspaceRevision;
+		appliedBasis = {
+			...basis,
+			workspaceRevision: applied.workspaceRevision,
+		};
+	} else {
+		if (args.decision.kind === "keepForCurrentSource") {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Keeping a candidate for the current source is only available for existing-Locale tasks.",
+			});
+		}
+		if (
+			revision.localeProposalId !== proposal.target.localeProposalId ||
+			revision.basis.kind !== "localeProposal"
+		) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Locale Proposal candidate evidence is incomplete.",
+			});
+		}
+		const value =
+			args.decision.kind === "intentionalBlank"
+				? ""
+				: args.decision.kind === "accept"
+					? revision.value
+					: args.decision.value;
+		finalValue = value;
+		finalValueFingerprint = await sha256Hex(value);
+		appliedBasis = revision.basis;
+		await ctx.runMutation(internal.localeProposals.applyReviewedValue, {
+			projectId: proposal.projectId,
+			proposalId: proposal.target.localeProposalId,
+			messageId: revision.messageId,
+			sourceSnapshotId: revision.basis.snapshotId,
+			sourceFingerprint: revision.basis.sourceFingerprint,
+			candidateValueFingerprint: revision.valueFingerprint,
+			acceptedValue: revision.value,
+			decision: args.decision,
+			reviewer: actor,
+			reviewAuthorization: reviewer.reviewAuthorization,
+		});
+	}
+	const reviewId = await ctx.db.insert("agentTranslationCandidateReviews", {
+		projectId: proposal.projectId,
+		proposalId: proposal._id,
+		candidateId: candidate._id,
+		revisionId: revision._id,
+		decision: args.decision,
+		reviewer: actor,
+		reviewAuthorization: reviewer.reviewAuthorization,
+		...(finalValue === undefined ? {} : { finalValue }),
+		...(finalValueFingerprint === undefined ? {} : { finalValueFingerprint }),
+		...(appliedBasis === undefined ? {} : { appliedBasis }),
+		createdAt: now(),
+	});
+	const status = await completedProposalStatus(ctx, proposal._id);
+	await ctx.db.patch(proposal._id, { status, updatedAt: now() });
+	return { reviewId, workspaceRevision, decision: args.decision };
+}
+
 export const reviewCandidate = mutation({
 	args: {
 		candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
 		decision: reviewDecisionValidator,
 	},
+	returns: candidateReviewResultValidator,
 	handler: async (ctx, args) => {
 		const revision = await ctx.db.get(args.candidateRevisionId);
-		if (!revision) {
+		if (!revision)
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: "Candidate revision not found.",
 			});
-		}
-		const proposal = await ctx.db.get(revision.proposalId);
-		if (!proposal) {
+		const { userId } = await requireEditor(ctx, revision.projectId);
+		return await applyCandidateReview(ctx, args, {
+			actor: { kind: "user", id: userId },
+		});
+	},
+});
+
+export const candidateReviewAuthorization = query({
+	args: { candidateRevisionId: v.id("agentTranslationCandidateRevisions") },
+	returns: candidateAuthorizationValidator,
+	handler: async (ctx, args) =>
+		await readCandidateAuthorization(ctx, args.candidateRevisionId),
+});
+
+export const grantCandidateReview = mutation({
+	args: {
+		candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+		reviewerTokenId: v.id("apiTokens"),
+	},
+	returns: v.id("agentReviewGrants"),
+	handler: async (ctx, args) =>
+		await grantReview(ctx, args.candidateRevisionId, args.reviewerTokenId),
+});
+
+export const revokeCandidateReviewGrant = mutation({
+	args: { grantId: v.id("agentReviewGrants") },
+	returns: v.null(),
+	handler: async (ctx, args) => await revokeReview(ctx, args.grantId),
+});
+
+const reviewSummaryValidator = v.object({
+	reviewId: v.id("agentTranslationCandidateReviews"),
+	decision: v.object({
+		kind: v.union(
+			v.literal("accept"),
+			v.literal("reject"),
+			v.literal("acceptWithEdits"),
+			v.literal("keepForCurrentSource"),
+			v.literal("intentionalBlank"),
+		),
+		reason: v.optional(v.string()),
+	}),
+	reviewer: v.object({
+		kind: v.union(
+			v.literal("user"),
+			v.literal("agent"),
+			v.literal("system"),
+			v.literal("repositoryAdapter"),
+		),
+		id: v.string(),
+	}),
+	reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
+	finalValueFingerprint: v.optional(v.string()),
+	createdAt: v.number(),
+});
+
+const agentReviewContextValidator = v.object({
+	kind: v.literal("candidate"),
+	proposalId: v.id("agentTranslationProposals"),
+	candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+	messageId: v.string(),
+	localeCode: v.string(),
+	source: v.object({
+		value: v.string(),
+		icuType: v.union(v.literal("plain"), v.literal("icu")),
+		argumentNames: v.array(v.string()),
+		argumentNamesComplete: v.boolean(),
+		declaredPlaceholderNames: v.array(v.string()),
+		declaredPlaceholderNamesComplete: v.boolean(),
+	}),
+	target: v.object({
+		value: v.string(),
+		catalogPath: v.string(),
+		intentionalBlankReason: v.optional(v.string()),
+	}),
+	candidate: v.object({
+		value: v.string(),
+		intentionalBlankReason: v.optional(v.string()),
+		createdBy: v.object({
+			kind: v.union(
+				v.literal("user"),
+				v.literal("agent"),
+				v.literal("system"),
+				v.literal("repositoryAdapter"),
+			),
+			id: v.string(),
+		}),
+	}),
+	basisIsCurrent: v.boolean(),
+	alreadyReviewed: v.boolean(),
+	latestReview: v.union(v.null(), reviewSummaryValidator),
+	reviewAuthorization: agentReviewAuthorizationValidator,
+	reviewToken: v.string(),
+});
+
+const recordedReviewValidator = v.object({
+	kind: v.literal("recordedReview"),
+	candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+	alreadyReviewed: v.literal(true),
+	latestReview: reviewSummaryValidator,
+	reviewAuthorization: agentReviewAuthorizationValidator,
+});
+
+function reviewSummary(review: Doc<"agentTranslationCandidateReviews">) {
+	const reason =
+		"reason" in review.decision ? review.decision.reason : undefined;
+	return {
+		reviewId: review._id,
+		decision: {
+			kind: review.decision.kind,
+			...(reason === undefined
+				? {}
+				: {
+						reason: reason.length > 1024 ? `${reason.slice(0, 1024)}…` : reason,
+					}),
+		},
+		reviewer: review.reviewer,
+		reviewAuthorization: review.reviewAuthorization,
+		finalValueFingerprint: review.finalValueFingerprint,
+		createdAt: review.createdAt,
+	};
+}
+
+/** The read token binds the exact visible facts to the reviewer credential and
+ * current authorization. Staged new-Locale edits are included separately from
+ * Source basis because candidate submission does not own that mutable value. */
+async function contextForAgentReviewer(
+	ctx: QueryCtx | MutationCtx,
+	authorized: Awaited<ReturnType<typeof authorizeCandidateReview>>,
+) {
+	const { revision, proposal, authorization } = authorized;
+	const review = await latestCandidateReview(ctx, revision._id);
+	const common = {
+		kind: "candidate" as const,
+		proposalId: proposal._id,
+		candidateRevisionId: revision._id,
+		messageId: revision.messageId,
+		candidate: {
+			value: revision.value,
+			intentionalBlankReason: revision.intentionalBlankReason,
+			createdBy: revision.createdBy,
+		},
+		alreadyReviewed: review !== null,
+		latestReview: review ? reviewSummary(review) : null,
+		reviewAuthorization: authorization,
+	};
+	let context: Omit<Infer<typeof agentReviewContextValidator>, "reviewToken">;
+	let mutableBasis: unknown;
+	if (proposal.target.kind === "catalogWorkspace") {
+		if (!revision.localeId || revision.basis.kind !== "catalogWorkspace")
 			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Translation proposal not found.",
+				code: "INTEGRITY",
+				message: "Candidate target is incomplete.",
 			});
-		}
-		const { userId } = await requireEditor(ctx, proposal.projectId);
-		const candidate = await ctx.db.get(revision.candidateId);
-		if (!candidate || candidate.latestRevisionId !== revision._id) {
+		const localeId = revision.localeId;
+		const current = await currentWorkspaceTarget(
+			ctx,
+			proposal.projectId,
+			revision.messageId,
+			revision.localeId,
+		);
+		const basis = catalogWorkspaceTaskBasis(current);
+		const targetDecision = await ctx.db
+			.query("catalogWorkspaceDecisionRecords")
+			.withIndex("by_value_identity", (q) =>
+				q
+					.eq("projectId", proposal.projectId)
+					.eq("messageId", revision.messageId)
+					.eq("localeId", localeId)
+					.eq("sourceFingerprint", current.source.sourceFingerprint)
+					.eq("valueFingerprint", current.valueFingerprint),
+			)
+			.unique();
+		context = {
+			...common,
+			localeCode: current.target.localeCode,
+			source: {
+				value: current.source.value,
+				icuType: current.source.icuType,
+				argumentNames: current.source.argumentNames,
+				argumentNamesComplete: current.source.argumentNamesComplete,
+				declaredPlaceholderNames: current.source.declaredPlaceholderNames ?? [],
+				declaredPlaceholderNamesComplete:
+					current.source.declaredPlaceholderNamesComplete ?? true,
+			},
+			target: {
+				value: current.value,
+				catalogPath: current.target.catalogPath,
+				...(targetDecision?.kind === "intentionalBlank"
+					? { intentionalBlankReason: targetDecision.reason }
+					: {}),
+			},
+			basisIsCurrent: sameCatalogWorkspaceTaskBasis(revision.basis, basis),
+		};
+		mutableBasis = basis;
+	} else {
+		if (revision.basis.kind !== "localeProposal")
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Candidate target is incomplete.",
+			});
+		const current = await currentLocaleProposalTarget(
+			ctx,
+			proposal,
+			revision.messageId,
+		);
+		const value = await ctx.db
+			.query("localeProposalValues")
+			.withIndex("by_proposal_and_messageId", (q) =>
+				q
+					.eq("proposalId", current.localeProposal._id)
+					.eq("messageId", revision.messageId),
+			)
+			.unique();
+		const basis = {
+			kind: "localeProposal" as const,
+			localeProposalId: current.localeProposal._id,
+			snapshotId: current.source.sourceSnapshotId,
+			sourceFingerprint: current.source.sourceFingerprint,
+		};
+		context = {
+			...common,
+			localeCode: current.localeProposal.runtimeLocale,
+			source: { value: current.source.sourceValue, ...current.source.source },
+			target: {
+				value: value?.value ?? "",
+				intentionalBlankReason: value?.intentionalBlankReason,
+				catalogPath: `${current.localeProposal.sourceCatalogPath.slice(0, current.localeProposal.sourceCatalogPath.lastIndexOf("/") + 1)}intl_pt.arb`,
+			},
+			basisIsCurrent: sameLocaleProposalTaskBasis(revision.basis, basis),
+		};
+		mutableBasis = {
+			...basis,
+			proposalRevision: current.localeProposal.revision,
+			stagedValue: value,
+		};
+	}
+	if (byteLength(context) > 900 * 1024)
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "One reviewer context exceeds its bounded byte envelope.",
+		});
+	const reviewToken = await sha256Hex(
+		JSON.stringify({
+			context,
+			mutableBasis,
+			latestReviewId: review?._id ?? null,
+			policyRevision: authorized.policyRevision,
+		}),
+	);
+	return { ...context, reviewToken };
+}
+
+export const contextForAgentReview = internalQuery({
+	args: {
+		token: v.string(),
+		candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+	},
+	returns: v.union(agentReviewContextValidator, recordedReviewValidator),
+	handler: async (ctx, args) => {
+		const authorized = await authorizeCandidateReview(
+			ctx,
+			args.token,
+			args.candidateRevisionId,
+			false,
+		);
+		const review = await latestCandidateReview(ctx, args.candidateRevisionId);
+		if (review)
+			return {
+				kind: "recordedReview" as const,
+				candidateRevisionId: args.candidateRevisionId,
+				alreadyReviewed: true as const,
+				latestReview: reviewSummary(review),
+				reviewAuthorization: authorized.authorization,
+			};
+		if (authorized.candidate.latestRevisionId !== args.candidateRevisionId)
 			throw new ConvexError({
 				code: "STALE_BASIS",
-				message: "Only the current candidate revision can be reviewed.",
+				message:
+					"Only the latest unreviewed candidate revision can be assessed.",
 			});
-		}
-		const existingReview = await latestCandidateReview(ctx, revision._id);
-		if (existingReview) {
-			const status = await completedProposalStatus(ctx, proposal._id);
-			if (status !== proposal.status) {
-				await ctx.db.patch(proposal._id, { status, updatedAt: now() });
-			}
-			return {
-				reviewId: existingReview._id,
-				workspaceRevision: undefined,
-				decision: existingReview.decision,
-			};
-		}
-		const actor = { kind: "user" as const, id: userId };
-		let finalValue: string | undefined;
-		let finalValueFingerprint: string | undefined;
-		let workspaceRevision: number | undefined;
-		let appliedBasis: CandidateRevisionInput["basis"] | undefined;
-		if (args.decision.kind === "reject") {
-			// Rejection is deliberately evidence-only.
-		} else if (proposal.target.kind === "catalogWorkspace") {
-			if (
-				revision.localeId === undefined ||
-				revision.basis.kind !== "catalogWorkspace"
-			) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Catalog Workspace candidate evidence is incomplete.",
-				});
-			}
-			const value =
-				args.decision.kind === "intentionalBlank"
-					? ""
-					: args.decision.kind === "accept" ||
-							args.decision.kind === "keepForCurrentSource"
-						? revision.value
-						: args.decision.value;
-			const intentionalBlankReason =
-				args.decision.kind === "intentionalBlank"
-					? args.decision.reason
-					: undefined;
-			finalValue = value;
-			finalValueFingerprint = await sha256Hex(value);
-			const basis =
-				args.decision.kind === "keepForCurrentSource"
-					? catalogWorkspaceTaskBasis(
-							await currentWorkspaceTarget(
-								ctx,
-								proposal.projectId,
-								revision.messageId,
-								revision.localeId,
-							),
-						)
-					: revision.basis;
-			const applied = await applyAgentTargetValue(ctx, {
-				projectId: proposal.projectId,
-				messageId: revision.messageId,
-				localeId: revision.localeId,
-				value,
-				expectedProjectionId: basis.projectionId,
-				expectedSnapshotId: basis.snapshotId,
-				expectedGitValueFingerprint: basis.gitValueFingerprint,
-				expectedGitValueRevision: basis.gitValueRevision,
-				expectedWorkspaceRevision: basis.workspaceRevision,
-				expectedSourceFingerprint: basis.sourceFingerprint,
-				actor: { kind: "user", id: userId },
-				...(intentionalBlankReason === undefined
-					? {}
-					: { intentionalBlankReason }),
+		return await contextForAgentReviewer(ctx, authorized);
+	},
+});
+
+export const reviewCandidateForAgent = internalMutation({
+	args: {
+		token: v.string(),
+		candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+		reviewToken: v.string(),
+		decision: agentReviewDecisionValidator,
+	},
+	returns: candidateReviewResultValidator,
+	handler: async (ctx, args) => {
+		const authorized = await authorizeCandidateReview(
+			ctx,
+			args.token,
+			args.candidateRevisionId,
+		);
+		const context = await contextForAgentReviewer(ctx, authorized);
+		if (args.reviewToken !== context.reviewToken)
+			throw new ConvexError({
+				code: "STALE_BASIS",
+				message:
+					"Review context or authorization changed. Read and assess the candidate again.",
 			});
-			workspaceRevision = applied.workspaceRevision;
-			appliedBasis = {
-				...basis,
-				workspaceRevision: applied.workspaceRevision,
-			};
-		} else {
-			if (args.decision.kind === "keepForCurrentSource") {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message:
-						"Keeping a candidate for the current source is only available for existing-Locale tasks.",
-				});
-			}
-			if (
-				revision.localeProposalId !== proposal.target.localeProposalId ||
-				revision.basis.kind !== "localeProposal"
-			) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Locale Proposal candidate evidence is incomplete.",
-				});
-			}
-			const value =
-				args.decision.kind === "intentionalBlank"
-					? ""
-					: args.decision.kind === "accept"
-						? revision.value
-						: args.decision.value;
-			finalValue = value;
-			finalValueFingerprint = await sha256Hex(value);
-			appliedBasis = revision.basis;
-			await ctx.runMutation(internal.localeProposals.applyReviewedValue, {
-				projectId: proposal.projectId,
-				proposalId: proposal.target.localeProposalId,
-				messageId: revision.messageId,
-				sourceSnapshotId: revision.basis.snapshotId,
-				sourceFingerprint: revision.basis.sourceFingerprint,
-				candidateValueFingerprint: revision.valueFingerprint,
-				acceptedValue: revision.value,
-				decision: args.decision,
-				reviewer: actor,
+		if (context.alreadyReviewed)
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "This candidate revision already has a review.",
 			});
-		}
-		const reviewId = await ctx.db.insert("agentTranslationCandidateReviews", {
-			projectId: proposal.projectId,
-			proposalId: proposal._id,
-			candidateId: candidate._id,
-			revisionId: revision._id,
-			decision: args.decision,
-			reviewer: actor,
-			...(finalValue === undefined ? {} : { finalValue }),
-			...(finalValueFingerprint === undefined ? {} : { finalValueFingerprint }),
-			...(appliedBasis === undefined ? {} : { appliedBasis }),
-			createdAt: now(),
-		});
-		const status = await completedProposalStatus(ctx, proposal._id);
-		await ctx.db.patch(proposal._id, { status, updatedAt: now() });
-		return { reviewId, workspaceRevision, decision: args.decision };
+		if (
+			args.decision.kind === "reject" &&
+			byteLength(args.decision.reason ?? "") > 4096
+		)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "Review reason exceeds its byte envelope.",
+			});
+		const decision =
+			args.decision.kind === "accept" &&
+			authorized.revision.intentionalBlankReason !== undefined
+				? {
+						kind: "intentionalBlank" as const,
+						reason: authorized.revision.intentionalBlankReason,
+					}
+				: args.decision;
+		return await applyCandidateReview(
+			ctx,
+			{ candidateRevisionId: args.candidateRevisionId, decision },
+			{
+				actor: { kind: "agent", id: authorized.token._id },
+				reviewAuthorization: authorized.authorization,
+			},
+		);
 	},
 });
 

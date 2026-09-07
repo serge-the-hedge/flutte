@@ -10,6 +10,8 @@
 
 import type * as accessControl from "../accessControl.js";
 import type * as agentApi from "../agentApi.js";
+import type * as agentReviewModel from "../agentReviewModel.js";
+import type * as agentReviews from "../agentReviews.js";
 import type * as agentTranslationProposals from "../agentTranslationProposals.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as archiveReconciliation from "../archiveReconciliation.js";
@@ -57,6 +59,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   accessControl: typeof accessControl;
   agentApi: typeof agentApi;
+  agentReviewModel: typeof agentReviewModel;
+  agentReviews: typeof agentReviews;
   agentTranslationProposals: typeof agentTranslationProposals;
   apiTokens: typeof apiTokens;
   archiveReconciliation: typeof archiveReconciliation;

@@ -1,4 +1,8 @@
 import type { Id } from "./_generated/dataModel";
+import {
+	type AgentReviewAuthorization,
+	isHumanOrAuthorizedReview,
+} from "./agentReviewModel";
 
 type IntroductionSource = {
 	introducedAt?: number;
@@ -8,10 +12,14 @@ type IntroductionSource = {
 type IntroductionDecision = {
 	localeId: Id<"locales">;
 	recordedAt: number;
-	recordedBy: { kind: "user" | "agent" | "system" | "repositoryAdapter" };
+	recordedBy: {
+		kind: "user" | "agent" | "system" | "repositoryAdapter";
+		id?: string;
+	};
+	reviewAuthorization?: AgentReviewAuthorization;
 };
 
-/** First Review is deliberately content-independent: once a person has
+/** First Review is deliberately content-independent: once a person or authorized reviewer has
  * examined one introduction Locale, later target changes use ordinary
  * confirmation and currency rules rather than pretending the key is new
  * again. Inactive Locales pause their requirement until they return. */
@@ -28,7 +36,10 @@ export function pendingIntroductionLocaleIds(input: {
 	}
 	const reviewed = new Set(
 		input.decisions.flatMap((decision) =>
-			decision.recordedBy.kind === "user" &&
+			isHumanOrAuthorizedReview(
+				decision.recordedBy,
+				decision.reviewAuthorization,
+			) &&
 			decision.recordedAt >=
 				(input.source.introducedAt ?? Number.POSITIVE_INFINITY)
 				? [decision.localeId]

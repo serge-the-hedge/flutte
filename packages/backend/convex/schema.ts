@@ -1,6 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import {
+	agentReviewAuthorizationValidator,
+	agentReviewPolicyValidator,
+} from "./agentReviewModel";
 import { releaseAssessmentFields } from "./releaseRecordModel";
 
 const role = v.union(
@@ -44,6 +48,7 @@ const catalogWorkspaceDecisionRecordCommon = {
 	sourceFingerprint: v.string(),
 	valueFingerprint: v.string(),
 	recordedBy: actor,
+	reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 	recordedAt: v.number(),
 };
 const catalogWorkspaceDecisionRecord = v.union(
@@ -257,6 +262,7 @@ export default defineSchema({
 		// configuration. A version floor warns; a protocol floor can refuse.
 		minimumCliVersion: v.optional(v.string()),
 		minimumCliProtocol: v.optional(v.number()),
+		agentReviewPolicy: v.optional(agentReviewPolicyValidator),
 		// Incremented whenever the current Source Proposal set changes. A staging
 		// projection captures this revision and restages if a candidate races its
 		// accepted transition.
@@ -537,15 +543,20 @@ export default defineSchema({
 		intentionalBlankReason: v.optional(v.string()),
 		byteLength: v.number(),
 		updatedBy: actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		updatedAt: v.number(),
 	})
 		.index("by_proposal", ["proposalId"])
 		.index("by_proposal_and_messageId", ["proposalId", "messageId"])
-		.index("by_proposal_and_updatedByKind_and_messageId", [
-			"proposalId",
-			"updatedBy.kind",
-			"messageId",
-		]),
+		.index(
+			"by_proposal_and_updatedByKind_and_reviewAuthorization_and_messageId",
+			[
+				"proposalId",
+				"updatedBy.kind",
+				"reviewAuthorization.reviewerTokenId",
+				"messageId",
+			],
+		),
 
 	// Every validation attempt keeps a bounded, generation-stamped review
 	// sample. Staging a newer value generation makes old diagnostics inert
@@ -556,9 +567,8 @@ export default defineSchema({
 		message: v.string(),
 	}).index("by_proposal_and_generation", ["proposalId", "generation"]),
 
-	// Human review evidence for a submitted Locale Proposal value. The value
-	// fingerprint makes a review content-addressed: a later agent correction
-	// needs a new decision, while an exact reappearance can reuse the decision.
+	// Append-only review evidence for submitted Locale Proposal values. Later
+	// candidate revisions retain their own authorization even when bytes recur.
 	localeProposalValueReviews: defineTable({
 		projectId: v.id("projects"),
 		proposalId: v.id("localeProposals"),
@@ -566,6 +576,7 @@ export default defineSchema({
 		valueFingerprint: v.string(),
 		decision: agentTranslationCandidateReviewDecision,
 		reviewer: actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		finalValue: v.optional(v.string()),
 		finalValueFingerprint: v.optional(v.string()),
 		createdAt: v.number(),
@@ -806,6 +817,7 @@ export default defineSchema({
 		revision: v.number(),
 		reconciliationGeneration: v.number(),
 		updatedBy: actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		updatedAt: v.number(),
 	})
 		.index("by_project", ["projectId"])
@@ -1533,6 +1545,7 @@ export default defineSchema({
 		scopes: v.array(
 			v.union(
 				v.literal("read"),
+				v.literal("review"),
 				v.literal("search"),
 				v.literal("propose"),
 				v.literal("export"),
@@ -1548,9 +1561,25 @@ export default defineSchema({
 		.index("by_tokenHash", ["tokenHash"])
 		.index("by_revokedAt", ["revokedAt"]),
 
+	agentReviewGrants: defineTable({
+		revision: v.number(),
+		projectId: v.id("projects"),
+		candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
+		reviewerTokenId: v.id("apiTokens"),
+		grantedByUserId: v.string(),
+		createdAt: v.number(),
+		revokedAt: v.optional(v.number()),
+		revokedByUserId: v.optional(v.string()),
+	})
+		.index("by_revision", ["candidateRevisionId"])
+		.index("by_revision_and_reviewer", [
+			"candidateRevisionId",
+			"reviewerTokenId",
+		]),
+
 	// Agent Translation Proposals are immutable candidate evidence. They never
-	// become current Catalog Workspace values until an editor reviews one
-	// revision through the proposal module.
+	// become current values until a human or explicitly authorized independent
+	// reviewer accepts a revision through the proposal module.
 	agentTranslationProposals: defineTable({
 		projectId: v.id("projects"),
 		// Agent-created proposals retain their owning token. Human-created
@@ -1659,7 +1688,7 @@ export default defineSchema({
 		clientRevisionKey: v.string(),
 		value: v.string(),
 		// An agent may propose an Intentional Blank and explain why, but only a
-		// human review decision can apply it to either task adapter.
+		// human or authorized independent review can apply it to either task adapter.
 		intentionalBlankReason: v.optional(v.string()),
 		valueFingerprint: v.string(),
 		basis: agentTranslationCandidateBasis,
@@ -1680,6 +1709,7 @@ export default defineSchema({
 		revisionId: v.id("agentTranslationCandidateRevisions"),
 		decision: agentTranslationCandidateReviewDecision,
 		reviewer: actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		finalValue: v.optional(v.string()),
 		finalValueFingerprint: v.optional(v.string()),
 		// The candidate keeps its authored basis. This separate basis records what

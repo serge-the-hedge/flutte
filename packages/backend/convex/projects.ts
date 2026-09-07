@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
+import { agentReviewPolicyValidator } from "./agentReviewModel";
 import { getAnyUserByEmail, getAnyUserById, requireUser } from "./auth";
 import {
 	DEFAULT_INTEGRATION_BRANCH,
@@ -479,5 +480,26 @@ export const removeMember = mutation({
 		await assertCanChangeMemberRole(ctx, member, null);
 		await ctx.db.delete(args.memberId);
 		return null;
+	},
+});
+
+/** Project-wide delegation is opt-in and can only be changed by an owner. */
+export const setAgentReviewPolicy = mutation({
+	args: { projectId: v.id("projects"), enabled: v.boolean() },
+	returns: agentReviewPolicyValidator,
+	handler: async (ctx, args) => {
+		const { userId } = await requireOwner(ctx, args.projectId);
+		const project = await assertProjectExists(ctx, args.projectId);
+		const policy = {
+			enabled: args.enabled,
+			revision: (project.agentReviewPolicy?.revision ?? 0) + 1,
+			updatedByUserId: userId,
+			updatedAt: now(),
+		};
+		await ctx.db.patch(project._id, {
+			agentReviewPolicy: policy,
+			updatedAt: now(),
+		});
+		return policy;
 	},
 });

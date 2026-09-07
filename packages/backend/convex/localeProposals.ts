@@ -12,6 +12,11 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import {
+	type AgentReviewAuthorization,
+	agentReviewAuthorizationValidator,
+	isHumanOrAuthorizedReview,
+} from "./agentReviewModel";
 import { type CatalogDocument, parse, serialize } from "./catalogDocument";
 import {
 	activeProjectionFor,
@@ -82,7 +87,8 @@ type ProposalValueInput = {
 };
 
 type CarryForwardValueInput = ProposalValueInput & {
-	updatedBy: { kind: "user"; id: string };
+	updatedBy: { kind: "user" | "agent"; id: string };
+	reviewAuthorization?: AgentReviewAuthorization;
 };
 
 type TemplateMessage = {
@@ -113,7 +119,7 @@ type LocaleProposalReviewFocus =
 	| "missing";
 
 type LocaleProposalReviewFacts = {
-	state: "awaiting" | "needsEdit" | "reviewed" | "humanDraft" | "missing";
+	state: "awaiting" | "needsEdit" | "reviewed" | "reviewedDraft" | "missing";
 	sourceIdentical: boolean;
 	sourceEmpty: boolean;
 	blankCandidate: boolean;
@@ -1166,9 +1172,9 @@ export const valuesForFinalization = internalQuery({
 	},
 });
 
-/** Read only values whose human work may survive a source update. A finalized
+/** Read only reviewed values whose work may survive a source update. A finalized
  * proposal has already passed review as a whole; a draft contributes only
- * values authored or accepted by a person, never unreviewed agent output. */
+ * human-authored or explicitly reviewed values, never unreviewed agent output. */
 export const valuesForCarryForward = internalQuery({
 	args: {
 		projectId: v.id("projects"),
@@ -1222,14 +1228,21 @@ export const valuesForCarryForward = internalQuery({
 					(
 						value,
 					): value is typeof value & {
-						updatedBy: { kind: "user"; id: string };
-					} => value.updatedBy.kind === "user",
+						updatedBy: { kind: "user" | "agent"; id: string };
+					} =>
+						isHumanOrAuthorizedReview(
+							value.updatedBy,
+							value.reviewAuthorization,
+						),
 				)
 				.map((value) => ({
 					messageId: value.messageId,
 					value: value.value,
 					sourceFingerprint: value.sourceFingerprint,
 					updatedBy: value.updatedBy,
+					...(value.reviewAuthorization === undefined
+						? {}
+						: { reviewAuthorization: value.reviewAuthorization }),
 					...(value.intentionalBlankReason === undefined
 						? {}
 						: { intentionalBlankReason: value.intentionalBlankReason }),
@@ -1251,7 +1264,8 @@ export const carryForwardBatch = internalMutation({
 				messageId: v.string(),
 				value: v.string(),
 				sourceFingerprint: v.string(),
-				updatedBy: v.object({ kind: v.literal("user"), id: v.string() }),
+				updatedBy: actorValidator,
+				reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 				intentionalBlankReason: v.optional(v.string()),
 			}),
 		),
@@ -1297,6 +1311,13 @@ export const carryForwardBatch = internalMutation({
 		let nextByteLength = toProposal.stagedValueByteLength;
 		const seen = new Set<string>();
 		for (const item of args.items) {
+			if (
+				!isHumanOrAuthorizedReview(item.updatedBy, item.reviewAuthorization)
+			) {
+				validationError(
+					"Only reviewed Locale Proposal values can be carried forward.",
+				);
+			}
 			if (seen.has(item.messageId)) {
 				validationError(
 					"A Locale Proposal continuation repeats a message identity.",
@@ -1327,6 +1348,9 @@ export const carryForwardBatch = internalMutation({
 					: { intentionalBlankReason: item.intentionalBlankReason }),
 				byteLength,
 				updatedBy: item.updatedBy,
+				...(item.reviewAuthorization === undefined
+					? {}
+					: { reviewAuthorization: item.reviewAuthorization }),
 				updatedAt: now(),
 			});
 			carriedValueCount += 1;
@@ -1576,6 +1600,7 @@ export const stageBatch = internalMutation({
 		proposalId: v.id("localeProposals"),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		actor: actorValidator,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		items: v.array(
 			v.object({
 				messageId: v.string(),
@@ -1586,6 +1611,15 @@ export const stageBatch = internalMutation({
 		),
 	},
 	handler: async (ctx, args) => {
+		if (
+			args.reviewAuthorization &&
+			(args.actor.kind !== "agent" ||
+				!isHumanOrAuthorizedReview(args.actor, args.reviewAuthorization))
+		) {
+			validationError(
+				"Review authorization must identify the reviewing agent.",
+			);
+		}
 		const [project, proposal] = await Promise.all([
 			projectFor(ctx, args.projectId),
 			ctx.db.get(args.proposalId),
@@ -1650,12 +1684,27 @@ export const stageBatch = internalMutation({
 					existing.sourceFingerprint === item.sourceFingerprint &&
 					existing.intentionalBlankReason === item.intentionalBlankReason
 				) {
+					// A translator retry does not undo review of identical content. A
+					// real replacement below clears authorization and must be reviewed.
+					if (
+						args.actor.kind === "agent" &&
+						args.reviewAuthorization === undefined &&
+						isHumanOrAuthorizedReview(
+							existing.updatedBy,
+							existing.reviewAuthorization,
+						)
+					)
+						continue;
+
 					if (
 						existing.updatedBy.kind !== args.actor.kind ||
-						existing.updatedBy.id !== args.actor.id
+						existing.updatedBy.id !== args.actor.id ||
+						existing.reviewAuthorization?.candidateRevisionId !==
+							args.reviewAuthorization?.candidateRevisionId
 					) {
 						await ctx.db.patch(existing._id, {
 							updatedBy: args.actor,
+							reviewAuthorization: args.reviewAuthorization,
 							updatedAt: now(),
 						});
 						changed = true;
@@ -1671,6 +1720,7 @@ export const stageBatch = internalMutation({
 						: { intentionalBlankReason: item.intentionalBlankReason }),
 					byteLength,
 					updatedBy: args.actor,
+					reviewAuthorization: args.reviewAuthorization,
 					updatedAt: now(),
 				});
 				changed = true;
@@ -1689,6 +1739,7 @@ export const stageBatch = internalMutation({
 					: { intentionalBlankReason: item.intentionalBlankReason }),
 				byteLength,
 				updatedBy: args.actor,
+				reviewAuthorization: args.reviewAuthorization,
 				updatedAt: now(),
 			});
 			changed = true;
@@ -2310,9 +2361,8 @@ export async function applyTaskReviewedValue(
 	});
 }
 
-/** Apply one human decision to a Locale Proposal value. This internal seam is
- * shared by manual review and legacy Agent Translation Proposal review, so
- * both paths produce the same human-authored value and immutable evidence. */
+/** Apply one authorized review to a Locale Proposal value. Human and independent
+ * agent reviews share validation while retaining their actual actor and authority. */
 export const applyReviewedValue = internalMutation({
 	args: {
 		projectId: v.id("projects"),
@@ -2329,18 +2379,14 @@ export const applyReviewedValue = internalMutation({
 			v.object({ kind: v.literal("intentionalBlank"), reason: v.string() }),
 		),
 		reviewer: actorValidator,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 	},
 	handler: async (ctx, args) => {
-		const existing = await ctx.db
-			.query("localeProposalValueReviews")
-			.withIndex("by_proposal_and_messageId_and_valueFingerprint", (q) =>
-				q
-					.eq("proposalId", args.proposalId)
-					.eq("messageId", args.messageId)
-					.eq("valueFingerprint", args.candidateValueFingerprint),
-			)
-			.unique();
-		if (existing) return existing;
+		if (!isHumanOrAuthorizedReview(args.reviewer, args.reviewAuthorization)) {
+			validationError(
+				"A Locale Proposal review requires a human or an authorized reviewer.",
+			);
+		}
 		const proposal = await ctx.db.get(args.proposalId);
 		if (!proposal || proposal.projectId !== args.projectId) {
 			throw new ConvexError({
@@ -2417,6 +2463,9 @@ export const applyReviewedValue = internalMutation({
 				proposalId: args.proposalId,
 				sourceSnapshotId: source.snapshotId,
 				actor: args.reviewer,
+				...(args.reviewAuthorization === undefined
+					? {}
+					: { reviewAuthorization: args.reviewAuthorization }),
 				items: validated,
 			});
 			finalValue = resolvedValue;
@@ -2429,6 +2478,9 @@ export const applyReviewedValue = internalMutation({
 			valueFingerprint: args.candidateValueFingerprint,
 			decision: args.decision,
 			reviewer: args.reviewer,
+			...(args.reviewAuthorization === undefined
+				? {}
+				: { reviewAuthorization: args.reviewAuthorization }),
 			...(finalValue === undefined ? {} : { finalValue }),
 			...(finalValueFingerprint === undefined ? {} : { finalValueFingerprint }),
 			createdAt: now(),
@@ -2607,7 +2659,7 @@ export const getForReview = query({
 				continueCursor: null,
 				pendingQueueContinueCursor: null,
 				isDone: true,
-				pendingHumanReview: { count: 0, hasMore: false },
+				pendingReview: { count: 0, hasMore: false },
 				diagnostics,
 				isCurrentBaseline: source.isCurrentBaseline,
 			};
@@ -2616,8 +2668,13 @@ export const getForReview = query({
 			proposal.status === "draft"
 				? await ctx.db
 						.query("localeProposalValues")
-						.withIndex("by_proposal_and_updatedByKind_and_messageId", (q) =>
-							q.eq("proposalId", proposal._id).eq("updatedBy.kind", "agent"),
+						.withIndex(
+							"by_proposal_and_updatedByKind_and_reviewAuthorization_and_messageId",
+							(q) =>
+								q
+									.eq("proposalId", proposal._id)
+									.eq("updatedBy.kind", "agent")
+									.eq("reviewAuthorization.reviewerTokenId", undefined),
 						)
 						.take(limit + 1)
 				: [];
@@ -2625,11 +2682,14 @@ export const getForReview = query({
 			proposal.status === "draft" && args.pendingCursor !== undefined
 				? await ctx.db
 						.query("localeProposalValues")
-						.withIndex("by_proposal_and_updatedByKind_and_messageId", (q) =>
-							q
-								.eq("proposalId", proposal._id)
-								.eq("updatedBy.kind", "agent")
-								.gt("messageId", args.pendingCursor as string),
+						.withIndex(
+							"by_proposal_and_updatedByKind_and_reviewAuthorization_and_messageId",
+							(q) =>
+								q
+									.eq("proposalId", proposal._id)
+									.eq("updatedBy.kind", "agent")
+									.eq("reviewAuthorization.reviewerTokenId", undefined)
+									.gt("messageId", args.pendingCursor as string),
 						)
 						.take(limit + 1)
 				: pendingAgentValueSummaryWindow;
@@ -2641,7 +2701,7 @@ export const getForReview = query({
 				? pendingAgentValueSummaryWindow
 				: requestedPendingAgentValueWindow;
 		const pendingAgentValues = pendingAgentValueWindow.slice(0, limit);
-		const pendingHumanReview = {
+		const pendingReview = {
 			count: Math.min(limit, pendingAgentValueSummaryWindow.length),
 			hasMore: pendingAgentValueSummaryWindow.length > limit,
 		};
@@ -2652,7 +2712,7 @@ export const getForReview = query({
 		// Values submitted through the earlier Locale Proposal API are still valid
 		// review work after a Translation Task takes over. Surface them directly
 		// instead of walking the whole source Catalog to rediscover them.
-		const usePendingHumanReviewQueue =
+		const usePendingReviewQueue =
 			task !== null &&
 			focus === "awaiting" &&
 			search.length === 0 &&
@@ -2670,7 +2730,7 @@ export const getForReview = query({
 		const pendingValuesByMessageId = new Map(
 			pendingAgentValues.map((value) => [value.messageId, value] as const),
 		);
-		const queuedSourceMessages = usePendingHumanReviewQueue
+		const queuedSourceMessages = usePendingReviewQueue
 			? await Promise.all(
 					pendingAgentValues.map(async (value) => {
 						const message = await ctx.db
@@ -2697,7 +2757,7 @@ export const getForReview = query({
 				: left.catalogIndex - right.catalogIndex,
 		);
 		const sourceWindow =
-			usePendingHumanReviewQueue || completedReviewQueue
+			usePendingReviewQueue || completedReviewQueue
 				? queuedSourceMessages
 				: await ctx.db
 						.query("catalogProjectionMessages")
@@ -2708,7 +2768,7 @@ export const getForReview = query({
 								.gte("catalogIndex", cursor),
 						)
 						.take(scanLimit + 1);
-		const sourcePage = usePendingHumanReviewQueue
+		const sourcePage = usePendingReviewQueue
 			? sourceWindow
 			: sourceWindow.slice(0, scanLimit);
 		const hydratedMessages = await Promise.all(
@@ -2752,7 +2812,7 @@ export const getForReview = query({
 				const valueFingerprint = value
 					? await sha256Hex(value.value)
 					: undefined;
-				const review = value
+				const storedReview = value
 					? await ctx.db
 							.query("localeProposalValueReviews")
 							.withIndex(
@@ -2763,25 +2823,47 @@ export const getForReview = query({
 										.eq("messageId", message.messageId)
 										.eq("valueFingerprint", valueFingerprint as string),
 							)
-							.unique()
+							.order("desc")
+							.first()
 					: null;
+				const review =
+					storedReview &&
+					(storedReview.decision.kind === "reject" ||
+						(value &&
+							isHumanOrAuthorizedReview(
+								value.updatedBy,
+								value.reviewAuthorization,
+							)))
+						? storedReview
+						: null;
 				const candidateValue = candidateRevision
 					? candidateRevision.value
 					: value?.updatedBy.kind === "agent"
 						? value.value
 						: undefined;
 				const resolvedReview = candidateRevision ? candidateReview : review;
+				// A carried value retains its authorization even though its review lives
+				// on the earlier proposal. It cannot approve a different new candidate.
+				const authorizedValueReview =
+					value?.reviewAuthorization !== undefined &&
+					isHumanOrAuthorizedReview(
+						value.updatedBy,
+						value.reviewAuthorization,
+					) &&
+					(!candidateRevision ||
+						value.reviewAuthorization.candidateRevisionId ===
+							candidateRevision._id);
 				const state: LocaleProposalReviewFacts["state"] =
 					candidateValue !== undefined
 						? resolvedReview?.decision.kind === "reject"
 							? value?.updatedBy.kind === "user"
-								? "humanDraft"
+								? "reviewedDraft"
 								: "needsEdit"
-							: resolvedReview
+							: resolvedReview || authorizedValueReview
 								? "reviewed"
 								: "awaiting"
 						: value
-							? "humanDraft"
+							? "reviewedDraft"
 							: "missing";
 				const leadingWhitespace = (text: string) =>
 					text.match(/^\s*/u)?.[0] ?? "";
@@ -2825,6 +2907,7 @@ export const getForReview = query({
 								reviewToken: valueFingerprint as string,
 								sourceFingerprint: value.sourceFingerprint,
 								updatedBy: value.updatedBy,
+								reviewAuthorization: value.reviewAuthorization,
 								intentionalBlankReason: value.intentionalBlankReason,
 							}
 						: null,
@@ -2834,6 +2917,7 @@ export const getForReview = query({
 								decision: review.decision,
 								finalValue: review.finalValue,
 								reviewer: review.reviewer,
+								reviewAuthorization: review.reviewAuthorization,
 							}
 						: null,
 					candidate: candidateRevision
@@ -2846,6 +2930,8 @@ export const getForReview = query({
 								review: candidateReview
 									? {
 											decision: candidateReview.decision,
+											reviewer: candidateReview.reviewer,
+											reviewAuthorization: candidateReview.reviewAuthorization,
 											finalValue: candidateReview.finalValue,
 											reviewBasisIsCurrent,
 										}
@@ -2891,7 +2977,7 @@ export const getForReview = query({
 			if (messages.length >= limit) break;
 		}
 		const lastScanned = sourcePage[scannedCount - 1];
-		const hasMore = usePendingHumanReviewQueue
+		const hasMore = usePendingReviewQueue
 			? pendingQueueContinueCursor !== null
 			: !completedReviewQueue &&
 				lastScanned !== undefined &&
@@ -2913,12 +2999,10 @@ export const getForReview = query({
 			cursor,
 			windowEnd: lastScanned?.catalogIndex ?? cursor,
 			continueCursor:
-				!usePendingHumanReviewQueue && hasMore
-					? lastScanned.catalogIndex + 1
-					: null,
+				!usePendingReviewQueue && hasMore ? lastScanned.catalogIndex + 1 : null,
 			pendingQueueContinueCursor,
 			isDone: !hasMore,
-			pendingHumanReview,
+			pendingReview,
 			diagnostics,
 			isCurrentBaseline: source.isCurrentBaseline,
 		};
@@ -3061,12 +3145,13 @@ export async function finalizeProposal(
 		);
 	}
 	const awaitingHumanReview = staged.values.filter(
-		(value) => value.updatedBy.kind !== "user",
+		(value) =>
+			!isHumanOrAuthorizedReview(value.updatedBy, value.reviewAuthorization),
 	);
 	if (awaitingHumanReview.length > 0) {
 		const messages = awaitingHumanReview
 			.slice(0, MAX_LOCALE_PROPOSAL_DIAGNOSTICS)
-			.map((value) => `Value "${value.messageId}" is awaiting human review.`);
+			.map((value) => `Value "${value.messageId}" is awaiting review.`);
 		await ctx.runMutation(internal.localeProposals.recordDiagnostics, {
 			projectId: actor.projectId,
 			proposalId,
@@ -3076,7 +3161,8 @@ export async function finalizeProposal(
 		});
 		throw new ConvexError({
 			code: "REVIEW_REQUIRED",
-			message: "Every agent-submitted Portuguese value needs human review.",
+			message:
+				"Every agent-submitted Portuguese value needs human or authorized independent-agent review.",
 			diagnosticCount: awaitingHumanReview.length,
 			diagnostics: messages,
 		});

@@ -1,12 +1,14 @@
 import { ConvexError, v } from "convex/values";
 
 import { mutation, query } from "./_generated/server";
+import { isReviewOnlyToken } from "./agentReviewModel";
 import { requireUser } from "./auth";
 import { now, sha256Hex } from "./lib";
 import { requireOwner, requireViewer } from "./permissions";
 
 const scopeValidator = v.union(
 	v.literal("read"),
+	v.literal("review"),
 	v.literal("search"),
 	v.literal("propose"),
 	v.literal("export"),
@@ -45,6 +47,13 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const user = await requireUser(ctx);
 		await requireOwner(ctx, args.projectId);
+		if (args.scopes.includes("review") && !isReviewOnlyToken(args.scopes)) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"A reviewer token may have only read, search, and review scopes. Use a separate translator token.",
+			});
+		}
 		const rawToken = randomToken();
 		const tokenId = await ctx.db.insert("apiTokens", {
 			projectId: args.projectId,

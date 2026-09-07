@@ -4,6 +4,7 @@ export type Actor = {
 	id: string;
 };
 export type TokenScope =
+	| "review"
 	| "read"
 	| "search"
 	| "propose"
