@@ -178,6 +178,10 @@ export async function readCandidateAuthorization(
 			message: "Reviewer authorization exceeds the supported project envelope.",
 		});
 	}
+	const reviewers = tokens.filter((token) =>
+		separateReviewer(token, evidence.revision, evidence.proposal),
+	);
+	const activeReviewerIds = new Set(reviewers.map((token) => token._id));
 	return {
 		policy: {
 			enabled: project.agentReviewPolicy?.enabled ?? false,
@@ -187,18 +191,21 @@ export async function readCandidateAuthorization(
 			hasMinimumRole(member.role, "editor") &&
 			evidence.candidate.latestRevisionId === revisionId,
 		grants: grants
-			.filter((grant) => grant.revokedAt === undefined)
+			.filter(
+				(grant) =>
+					grant.revokedAt === undefined &&
+					activeReviewerIds.has(grant.reviewerTokenId),
+			)
 			.map((grant) => ({
 				grantId: grant._id,
 				reviewerTokenId: grant.reviewerTokenId,
 				grantedByUserId: grant.grantedByUserId,
 				createdAt: grant.createdAt,
 			})),
-		reviewers: tokens
-			.filter((token) =>
-				separateReviewer(token, evidence.revision, evidence.proposal),
-			)
-			.map((token) => ({ tokenId: token._id, name: token.name })),
+		reviewers: reviewers.map((token) => ({
+			tokenId: token._id,
+			name: token.name,
+		})),
 	};
 }
 

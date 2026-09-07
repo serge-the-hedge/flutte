@@ -175,6 +175,32 @@ async function context(
 }
 
 describe("independent agent review", () => {
+	test("does not present a revoked reviewer delegation as usable", async () => {
+		const f = await setup();
+		const grantId = await f.owner.mutation(
+			api.agentTranslationProposals.grantCandidateReview,
+			{
+				candidateRevisionId: f.revisionId,
+				reviewerTokenId: f.reviewer.tokenId,
+			},
+		);
+		const readAuthorization = () =>
+			f.owner.query(
+				api.agentTranslationProposals.candidateReviewAuthorization,
+				{ candidateRevisionId: f.revisionId },
+			);
+		expect((await readAuthorization()).grants).toHaveLength(1);
+		await f.owner.mutation(api.apiTokens.revoke, {
+			tokenId: f.reviewer.tokenId,
+		});
+		expect(await readAuthorization()).toMatchObject({
+			policy: { enabled: false },
+			grants: [],
+			reviewers: [],
+		});
+		expect(await f.t.run((ctx) => ctx.db.get(grantId))).not.toBeNull();
+	});
+
 	test("authorized exact acceptance completes First Review for a later introduction", async () => {
 		const f = await setup(true);
 		async function navigation() {
