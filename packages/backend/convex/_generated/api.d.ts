@@ -16,6 +16,7 @@ import type * as agentProposalRetrieval from "../agentProposalRetrieval.js";
 import type * as translationGuidance from "../translationGuidance.js";
 import type * as translationGuidanceModel from "../translationGuidanceModel.js";
 import type * as agentApi from "../agentApi.js";
+import type * as agentDictionary from "../agentDictionary.js";
 import type * as agentReviewModel from "../agentReviewModel.js";
 import type * as agentReviews from "../agentReviews.js";
 import type * as agentTranslationProposals from "../agentTranslationProposals.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   translationGuidance: typeof translationGuidance;
   translationGuidanceModel: typeof translationGuidanceModel;
   agentApi: typeof agentApi;
+  agentDictionary: typeof agentDictionary;
   agentReviewModel: typeof agentReviewModel;
   agentReviews: typeof agentReviews;
   agentTranslationProposals: typeof agentTranslationProposals;

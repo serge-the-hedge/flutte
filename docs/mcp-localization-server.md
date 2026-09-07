@@ -13,6 +13,9 @@ endpoints and preserve their bounds, provenance, and authorized-review boundary.
 | `localization_proposal_examples` | `POST /proposal-examples/search` | `read`, `search` |
 | `localization_guidance` | `POST /guidance/context` | `read` |
 | `localization_guidance_revision` | `GET /guidance/revisions/:id` | `read` |
+| `localization_dictionary` | `GET /dictionary` | `read` |
+| `localization_save_terms` | `POST /dictionary/terms` | `dictionary-write` |
+| `localization_remove_term` | `DELETE /dictionary/terms` | `dictionary-write` |
 | `localization_create_task` | `POST /translation-tasks` | `propose` |
 | `localization_list_tasks` | `GET /translation-tasks` | `read` |
 | `localization_read_task` | `GET /translation-tasks/:id` | `read` |

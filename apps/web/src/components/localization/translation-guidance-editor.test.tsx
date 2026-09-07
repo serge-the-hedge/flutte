@@ -14,6 +14,14 @@ beforeAll(async () => {
 type Props = ComponentProps<typeof Editor>;
 const saved: Props["guidance"] = {
 	revision: 2,
+	projectGuide: {
+		text: "Be clear, warm, and direct.",
+		examples: [],
+		revisionId: convexId<"translationGuidanceRevisions">("project-voice-1"),
+		revision: 2,
+		authoredBy: { kind: "user", id: "editor" },
+		authoredAt: 2,
+	},
 	terms: [
 		{
 			term: {
@@ -51,6 +59,7 @@ function props(overrides: Partial<Props> = {}): Props {
 		onSaveTerm: async () => {},
 		onRemoveTerm: async () => {},
 		onSaveVoiceGuide: async () => {},
+		onSaveProjectVoiceGuide: async () => {},
 		...overrides,
 	};
 }
@@ -88,14 +97,137 @@ async function type(id: string, value: string) {
 	});
 }
 
+async function chooseLocale(id: string, code: string) {
+	const trigger = dom.container.querySelector<HTMLButtonElement>(`#${id}`);
+	if (!trigger) throw new Error(`No locale picker: ${id}`);
+	await act(async () => {
+		trigger.click();
+	});
+	const option = [
+		...document.querySelectorAll<HTMLElement>('[role="option"]'),
+	].find(
+		(element) =>
+			element.getAttribute("data-value") === code ||
+			element.textContent?.includes(`(${code})`),
+	);
+	if (!option) throw new Error(`No locale option: ${code}`);
+	await act(async () => {
+		option.click();
+	});
+}
+
 describe("Translation guidance editing", () => {
+	test("keeps dozens of Locales compact and preserves renderings while switching the selected Locale", async () => {
+		const requests: Parameters<Props["onSaveTerm"]>[0][] = [];
+		const manyLocales = [
+			...props().locales,
+			...Array.from({ length: 48 }, (_, index) => ({
+				code: `locale-${index}`,
+				label: `Locale ${index}`,
+			})),
+		];
+		await dom.render(
+			<TranslationGuidanceEditor
+				{...props({
+					locales: manyLocales,
+					onSaveTerm: async (input) => {
+						requests.push(input);
+					},
+				})}
+			/>,
+		);
+		expect(dom.container.querySelector("details")?.open).toBe(false);
+		expect(dom.container.querySelectorAll("textarea").length).toBe(0);
+		expect(dom.container.querySelectorAll("article").length).toBe(1);
+		await click("Edit Build");
+		expect(dom.container.querySelectorAll('input[id^="term-"]').length).toBe(1);
+		await type("term-de", "Bauwerk");
+		await chooseLocale("term-locale", "pt");
+		await type("term-pt", "Modelo");
+		await chooseLocale("term-locale", "de");
+		expect(field("term-de").value).toBe("Bauwerk");
+		await click("Save term");
+		expect(requests[0]?.term).toMatchObject({
+			renderings: [
+				{ localeCode: "de", value: "Bauwerk" },
+				{ localeCode: "pt", value: "Modelo" },
+			],
+		});
+	});
+
+	test("edits the project voice and a separate Locale add-on without losing stale project drafts", async () => {
+		const globalRequests: Parameters<Props["onSaveProjectVoiceGuide"]>[0][] =
+			[];
+		const localeRequests: Parameters<Props["onSaveVoiceGuide"]>[0][] = [];
+		const handlers = {
+			onSaveProjectVoiceGuide: async (
+				input: Parameters<Props["onSaveProjectVoiceGuide"]>[0],
+			) => {
+				globalRequests.push(input);
+			},
+			onSaveVoiceGuide: async (
+				input: Parameters<Props["onSaveVoiceGuide"]>[0],
+			) => {
+				localeRequests.push(input);
+			},
+		};
+		await dom.render(<TranslationGuidanceEditor {...props(handlers)} />);
+		await click("Edit project voice guide");
+		await type("voice-text", "Speak plainly to builders of every age.");
+		await dom.render(
+			<TranslationGuidanceEditor
+				{...props({
+					...handlers,
+					guidance: {
+						...saved,
+						revision: 3,
+						projectGuide: saved.projectGuide
+							? { ...saved.projectGuide, text: "New shared voice." }
+							: null,
+					},
+				})}
+			/>,
+		);
+		expect(field("voice-text").value).toBe(
+			"Speak plainly to builders of every age.",
+		);
+		expect(dom.container.textContent).toContain("New shared voice.");
+		expect(button("Save project voice guide").disabled).toBe(true);
+		await click("Keep my draft");
+		await click("Save project voice guide");
+		expect(globalRequests).toEqual([
+			{
+				expectedRevision: 3,
+				text: "Speak plainly to builders of every age.",
+				examples: [],
+			},
+		]);
+		await chooseLocale("voice-locale", "pt");
+		await click("Add pt add-on");
+		await type("voice-text", "Use informal singular address.");
+		await click("Save locale add-on");
+		expect(localeRequests).toEqual([
+			{
+				expectedRevision: 3,
+				localeCode: "pt",
+				text: "Use informal singular address.",
+				examples: [],
+			},
+		]);
+	});
+
 	test("gives viewers readable terms and voice without write controls", async () => {
 		await dom.render(
 			<TranslationGuidanceEditor {...props({ canEdit: false })} />,
 		);
 		expect(dom.container.textContent).toContain("Modell");
 		expect(dom.container.textContent).toContain("Use informal address.");
-		expect(dom.container.querySelector("button")).toBeNull();
+		expect(dom.container.textContent).toContain("Be clear, warm, and direct.");
+		expect(
+			[...dom.container.querySelectorAll("button")].some((element) =>
+				/^(Add|Edit|Remove)/.test(element.textContent ?? ""),
+			),
+		).toBe(false);
 	});
 
 	test("adding an existing trimmed term preserves the draft without overwriting its saved entry", async () => {
@@ -180,7 +312,7 @@ describe("Translation guidance editing", () => {
 		await dom.render(
 			<TranslationGuidanceEditor {...props({ onSaveVoiceGuide })} />,
 		);
-		await click("Edit de voice guide");
+		await click("Edit de add-on");
 		await type("voice-text", "Keep instructions short.");
 		await click("Add example");
 		const source = dom.container.querySelector<HTMLTextAreaElement>(
@@ -192,7 +324,7 @@ describe("Translation guidance editing", () => {
 		if (!source || !target) throw new Error("Expected example fields.");
 		await type(source.id, "Start building");
 		await type(target.id, "Bau los");
-		await click("Save voice guide");
+		await click("Save locale add-on");
 		expect(requests[0]).toEqual({
 			expectedRevision: 2,
 			localeCode: "de",
@@ -207,8 +339,8 @@ describe("Translation guidance editing", () => {
 				})}
 			/>,
 		);
-		expect(button("Edit de voice guide").disabled).toBe(true);
-		await click("Remove de voice guide");
+		expect(button("Edit de add-on").disabled).toBe(true);
+		await click("Remove de add-on");
 		expect(requests[1]).toEqual({
 			expectedRevision: 2,
 			localeCode: "de",

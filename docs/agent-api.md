@@ -41,6 +41,7 @@ version and protocol in `X-Blabla-Minimum-CLI-Version` and
 2. Go to **Settings -> API tokens**.
 3. Create a project-scoped token with the minimum scopes:
    - Translation agents: `read`, `search`, `propose`.
+   - Dictionary authors: `read`, `dictionary-write`; owners enable **Allow Dictionary editing** when creating the token. This directly updates active shared terms.
    - Independent Reviewer Agents: `read`, `search`, `review`, using a separate credential.
    - Local Repository Adapter delivery: `export`.
    - The default workspace connection has `read`, `search`, `propose`, `export`,
@@ -77,7 +78,7 @@ intentionally one-time visible.
    confirms values itself.
 3. For a human-selected task, read it with
    `GET /translation-tasks/:id?cursor=...&limit=...`. Each page also includes
-   applicable Dictionary terms and Locale voice guidance once, with immutable
+   the general project Voice Guide, applicable Locale add-ons and Dictionary terms once, with immutable
    citations. To start an agent-owned
    task instead, call `POST /translation-tasks`. Existing-Locale tasks freeze
    up to 32 selected message ids; a new-Locale task covers the complete pinned
@@ -145,7 +146,12 @@ Brickit has accepted it.
 
 Discover Locale codes through `/projects/current` and message identifiers through
 `/workspace/search` or `/workspace/work`. Use a new-Locale Translation Task for
-the configured Portuguese introduction; other new Locales require project setup.
+the configured Portuguese introduction. Arbitrary new-Locale preparation is not
+implemented. Setup can bind catalogs already in Git, within the six-Locale
+working-catalog cap (including Source). The Portuguese proposal-to-Baseline
+transition also has known capacity and review-evidence gaps; see the
+[new-Locale readiness review](../reports/locale-adding-review-2026-09-07.md) before
+planning a rollout.
 
 ## Independent Reviewer Agent workflow
 
@@ -158,7 +164,7 @@ do not pass both translation and reviewer credentials to one agent.
 1. Get the candidate revision's review URL from the human review workbench.
 2. Read `GET /candidate-reviews/:revisionId` using the reviewer token. A
    `kind: "candidate"` response contains Source, current target, candidate text,
-   blank reasons, basis status, authorization, applicable human guidance, and an
+   blank reasons, basis status, authorization, applicable project guidance, and an
    opaque `reviewToken`.
    Inspect these facts. A `kind: "recordedReview"` response instead contains
    `latestReview`: the recorded decision, actual reviewer, authorization,
@@ -214,8 +220,11 @@ not depend on a currently editable target.
 - `read`: project metadata, workspace context, and task/proposal reads.
 - `search`: workspace search and work discovery.
 - `propose`: Translation Task and candidate creation; it cannot apply values.
+- `dictionary-write`: create, replace, or remove active Dictionary entries with
+  revision checks and agent attribution. It does not author Voice Guides or
+  grant translation review or release powers.
 - `review`: independent exact candidate acceptance or rejection, subject to human
-  authorization. It cannot coexist with `propose`, `export`, or
+  authorization. It cannot coexist with `propose`, `dictionary-write`, `export`, or
   `snapshot-submission` on a token.
 - `export`: immutable Release Bundle delivery through the local Repository
   Adapter; it does not grant a remote Git write.
@@ -232,6 +241,8 @@ Returns project identity, source and active Locale codes, the current token's
 scopes, and supported retrieval capabilities and bounds. `newLocaleTargets`
 lists the configured Portuguese introduction when Portuguese is not active.
 `context.codeContext` is `unavailable` until source-code context is implemented.
+`dictionary.canWrite` reports whether this credential has the explicit
+`dictionary-write` scope; `dictionary.batchWrites` advertises the batch interface.
 Historical screens and tags are no longer advertised as usable context.
 
 ### `GET /workspace/search`
@@ -315,13 +326,17 @@ presented against a newer baseline.
 
 ### `POST /guidance/context`
 
-Reads human-maintained Dictionary terms and voice guides. Requires `read`:
+Reads the project Voice Guide, optional Locale add-ons and applicable Dictionary
+terms. Requires `read`:
 
 ```json
 { "texts": ["Build with Brickit"], "locales": ["de", "pt"] }
 ```
 
-Returns the current guidance `revision`, applicable `terms`, and Locale `guides`.
+Returns the current guidance `revision`, `projectGuide` (null if unset), applicable
+`terms`, and Locale add-ons in `guides`. The general guide applies across every
+Locale and appears once, even when `locales` is empty. Add-ons contain local
+details; an absent add-on leaves the general guidance intact.
 Each term is returned once with `matchedTextIndexes` into `texts`, its definition,
 requested Locale renderings, author, timestamp, and immutable `revisionId`.
 Untranslatable Terms have no Locale variants. Matching is case-sensitive within
@@ -329,21 +344,94 @@ literal message text; ICU argument names, selectors and formatter options do not
 become terminology matches, and plural counts separate literal runs. Word
 boundaries prevent `Start` matching `Restart`;
 unspaced scripts can match inside a literal segment. No fuzzy term inference is
-performed.
+performed. Authorship identifies the actual human or authorized agent that last
+changed the entry; an agent-written term is never labelled human-reviewed.
+
+General-guide examples retain the `source` and `target` field names, meaning
+“Before” and “Preferred wording.” They are editorial examples, not translations
+into a particular Locale. Locale add-on examples remain bilingual.
 
 Limits: 50 Source texts, 20 canonical target Locale codes, and 512 KiB for Source
 texts or returned guidance. Portuguese guidance is available before its Locale
 Proposal is created. Guidance starts empty; missing entries are not instructions
 to infer a project policy from popular wording.
 
-Editors maintain it at **Settings → Translation guidance**. API tokens cannot
-write it. Drafts survive failed/stale saves; editors must compare changed saved
+Editors maintain the general guide and optional Locale add-ons at
+**Settings → Translation guidance**. A single selected Locale editor keeps the
+page compact with dozens of Locales. Up to 128 Locale add-ons and 128 renderings
+per Dictionary entry are supported, within the shared 448 KiB active-content
+budget; individual guides allow 8 KiB and terms 16 KiB. Context requests still
+select at most 20 Locales at a time. A project supports up to 256 Dictionary terms;
+each source term is at most 256 UTF-8 bytes.
+
+Editors and explicitly scoped Dictionary agents can maintain terms. Voice Guides
+remain human-authored. Drafts survive failed/stale saves; editors compare changed saved
 entries before deliberately retaining their draft. Updating or removing an entry
 preserves its earlier citation. Read one with
 `GET /guidance/revisions/:revisionId` using the same project's `read` credential.
 Correcting a Locale code during initial setup carries its guidance forward
 atomically and preserves earlier citations. Conflicting destination guidance must
 be resolved before that correction can proceed.
+
+### Dictionary authoring workflow
+
+An owner can deliberately give an agent `dictionary-write` alongside `read`,
+using **Allow Dictionary editing** in token setup. Existing translation and
+reviewer credentials do not acquire that permission. Reviewer tokens cannot
+combine it with `review`.
+
+1. Read `/dictionary`, or use `?sourceTerm=Brickit` for an exact existing entry.
+2. Choose terms and definitions from the human's assignment and inspected project
+   examples. Catalog frequency alone does not establish policy.
+3. Send a bounded batch with the read response's `revision` as `expectedRevision`.
+   Existing entries are replaced in full: preserve other Locale renderings when
+   adding one. These are active Dictionary changes, not translation candidates.
+4. Keep the returned revision and immutable citations. If a response is lost or
+   a write returns `STALE_BASIS`, read again and compare; do not blindly overwrite
+   changes made by a human or another agent. An unchanged write at the current
+   revision creates no extra history.
+
+No automatic seeding runs. The authorized agent performs this workflow when a
+human asks it to fill or maintain the Dictionary.
+
+### `GET /dictionary`
+
+Requires `read`. Returns `{ revision, terms, nextCursor }` with complete term
+entries, all authored Locale renderings, author, timestamp, and `revisionId`.
+`sourceTerm` performs a case-sensitive exact lookup; optional `q` matches literal,
+case-insensitive substrings of names, definitions and rendering values.
+`limit` is 1–50 (default 16). Reads scan at most 64 entries and responses stay
+below 256 KiB. Follow opaque `nextCursor` through empty intermediate pages until
+null. Guidance changes or changed search filters invalidate a cursor with 409.
+
+### `POST /dictionary/terms`
+
+Requires `dictionary-write`. Atomically creates or replaces 1–32 complete terms,
+at most 256 KiB per batch:
+
+```json
+{
+  "expectedRevision": 0,
+  "terms": [
+    { "kind": "untranslatable", "sourceTerm": "Brickit", "definition": "Product name; preserve spelling." },
+    { "kind": "translated", "sourceTerm": "Build", "definition": "Assemble a model.", "renderings": [{ "localeCode": "de", "value": "Bauen" }] }
+  ]
+}
+```
+
+Returns the current shared `revision` and `entries`, each containing `sourceTerm`
+and its immutable `revisionId`. Every changed term advances the shared guidance
+revision. Duplicate names, invalid renderings, or a stale basis roll back the
+whole batch. Invalid input returns 400, exceeded bounds 413, and concurrent
+guidance changes 409. The project and author come from the token, never the body.
+
+### `DELETE /dictionary/terms`
+
+Requires `dictionary-write`. Body:
+`{ "expectedRevision": 2, "sourceTerm": "Build" }`.
+Removes the active entry and returns `{ revision, revisionId }`. Earlier
+citations remain readable with the project's `read` scope. Deleting an already
+absent entry at the current revision is a no-op with a null `revisionId`.
 
 ### `GET /workspace/work`
 
@@ -507,7 +595,8 @@ Follow `nextCursor` even when fewer than the requested targets are returned.
 Private Snapshot and workspace concurrency basis fields are not exposed.
 
 Both task kinds return `guidance` once per page; `matchedTextIndexes` refer to
-`targets` in that page. Terms and voice guides are citable human-authored rules.
+`targets` in that page. The general Voice Guide and Locale add-ons are
+human-authored; Dictionary terms identify their human or authorized agent author.
 Source texts supplied to guidance are capped at 512 KiB; reduce `limit` for large
 messages. Target/candidate feedback has its separate 1 MiB page envelope.
 

@@ -16,7 +16,8 @@ There are two alternatives:
 
 Owners create a dedicated **Reviewer** API token in project settings with
 `read`, `search`, and `review` scopes. Its `review` scope cannot be combined with
-translation, snapshot-submission, or delivery scopes. Assign it to a separate agent; keep the translator's credential
+translation, Dictionary authoring, snapshot-submission, or delivery scopes.
+Assign it to a separate agent; keep the translator's credential
 with the translator. The server rejects self-review using authenticated token
 identities. Credential separation is enforceable; the server cannot inspect
 which process or model operates a credential. Giving both credentials to the
@@ -37,8 +38,9 @@ context, together with an opaque review token. The reviewer must inspect that
 context and submit its decision with the token it received. The same credential
 can search the Catalog Workspace and read related message context to assess
 terminology and established wording. Search access does not extend review
-authorization to other candidates. Applicable Dictionary terms and voice guides
-are included once in review context and bound into its review token; their text
+authorization to other candidates. The general project Voice Guide, applicable
+Locale add-ons, and Dictionary terms are included once in review context and
+bound into its review token; their text
 indexes refer to the single Source value. Immutable guidance citations remain
 readable after later edits or removal. For new-Locale consistency, use
 `POST /proposal-examples/search` with the authorized revision as its review scope

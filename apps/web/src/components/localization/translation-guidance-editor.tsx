@@ -21,6 +21,14 @@ import {
 	FieldLabel,
 } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
+import {
+	Select,
+	SelectContent,
+	SelectGroup,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@blabla/ui/components/select";
 import { Textarea } from "@blabla/ui/components/textarea";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { type FormEvent, useState } from "react";
@@ -35,6 +43,10 @@ type VoiceInput = Omit<
 	FunctionArgs<typeof api.translationGuidance.saveVoiceGuide>,
 	"projectId"
 >;
+type ProjectVoiceInput = Omit<
+	FunctionArgs<typeof api.translationGuidance.saveProjectVoiceGuide>,
+	"projectId"
+>;
 type Term = TermInput["term"];
 type Locale = { code: string; label?: string; active?: boolean };
 type Props = {
@@ -47,6 +59,7 @@ type Props = {
 		sourceTerm: string;
 	}) => Promise<unknown>;
 	onSaveVoiceGuide: (input: VoiceInput) => Promise<unknown>;
+	onSaveProjectVoiceGuide: (input: ProjectVoiceInput) => Promise<unknown>;
 };
 
 function errorText(error: unknown) {
@@ -117,6 +130,56 @@ function DraftActions({
 	);
 }
 
+function LocalePicker({
+	id,
+	label,
+	locales,
+	value,
+	onChange,
+	disabled = false,
+	configuredCodes = [],
+}: {
+	id: string;
+	label: string;
+	locales: Locale[];
+	value: string | undefined;
+	onChange: (value: string) => void;
+	disabled?: boolean;
+	configuredCodes?: string[];
+}) {
+	const configured = new Set(configuredCodes);
+	const items = locales.map((locale) => ({
+		value: locale.code,
+		label: `${locale.label ?? locale.code} (${locale.code})${configured.has(locale.code) ? " · configured" : ""}${locale.active === false ? " · archived" : ""}`,
+	}));
+	return (
+		<Field>
+			<FieldLabel htmlFor={id}>{label}</FieldLabel>
+			<Select
+				value={value ?? null}
+				onValueChange={(value) => {
+					if (value) onChange(value);
+				}}
+				disabled={disabled}
+				items={items}
+			>
+				<SelectTrigger id={id}>
+					<SelectValue placeholder="Choose a Locale" />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectGroup>
+						{items.map((item) => (
+							<SelectItem key={item.value} value={item.value}>
+								{item.label}
+							</SelectItem>
+						))}
+					</SelectGroup>
+				</SelectContent>
+			</Select>
+		</Field>
+	);
+}
+
 function TermEditor({
 	term,
 	guidance,
@@ -143,6 +206,11 @@ function TermEditor({
 				? term.renderings.map((item) => [item.localeCode, item.value])
 				: [],
 		),
+	);
+	const [renderingLocale, setRenderingLocale] = useState(
+		term?.kind === "translated"
+			? (term.renderings[0]?.localeCode ?? locales[0]?.code)
+			: locales[0]?.code,
 	);
 	const [expectedRevision, setExpectedRevision] = useState(guidance.revision);
 	const [busy, setBusy] = useState(false);
@@ -223,31 +291,40 @@ function TermEditor({
 							Keep this term unchanged in every Locale
 						</FieldLabel>
 					</Field>
-					{!untranslatable
-						? locales.map((locale) => (
-								<Field key={locale.code}>
-									<FieldLabel htmlFor={`term-${locale.code}`}>
-										{locale.label ?? locale.code} ({locale.code}) rendering
-										{locale.active === false ? " · archived" : ""}
+					{!untranslatable ? (
+						<>
+							<LocalePicker
+								id="term-locale"
+								configuredCodes={Object.entries(renderings)
+									.filter(([, value]) => value.trim().length > 0)
+									.map(([code]) => code)}
+								label="Rendering Locale"
+								locales={locales}
+								value={renderingLocale}
+								onChange={setRenderingLocale}
+							/>
+							{renderingLocale ? (
+								<Field>
+									<FieldLabel htmlFor={`term-${renderingLocale}`}>
+										Preferred rendering · {renderingLocale}
 									</FieldLabel>
 									<Input
-										id={`term-${locale.code}`}
-										value={renderings[locale.code] ?? ""}
+										id={`term-${renderingLocale}`}
+										value={renderings[renderingLocale] ?? ""}
 										onChange={(event) =>
 											setRenderings((previous) => ({
 												...previous,
-												[locale.code]: event.target.value,
+												[renderingLocale]: event.target.value,
 											}))
 										}
 									/>
 								</Field>
-							))
-						: null}
-					{!untranslatable ? (
-						<FieldDescription>
-							Provide at least one preferred rendering. Leave other Locales
-							blank when no rendering has been decided.
-						</FieldDescription>
+							) : null}
+							<FieldDescription>
+								Provide at least one preferred rendering. Switching Locales
+								keeps your edits. Leave a rendering blank to remove it.
+							</FieldDescription>
+						</>
 					) : null}
 					<DraftActions
 						currentRevision={guidance.revision}
@@ -276,11 +353,14 @@ function VoiceEditor({
 	onSave,
 	onCancel,
 }: {
-	locale: Locale;
-	guide: Guidance["guides"][number] | undefined;
+	locale?: Locale;
+	guide:
+		| { text: string; examples: { source: string; target: string }[] }
+		| null
+		| undefined;
 	guidance: Guidance;
 	canEdit: boolean;
-	onSave: Props["onSaveVoiceGuide"];
+	onSave: Props["onSaveProjectVoiceGuide"];
 	onCancel: () => void;
 }) {
 	const [text, setText] = useState(guide?.text ?? "");
@@ -301,7 +381,6 @@ function VoiceEditor({
 		try {
 			await onSave({
 				expectedRevision,
-				localeCode: locale.code,
 				text,
 				examples: examples.map(({ source, target }) => ({ source, target })),
 			});
@@ -313,12 +392,19 @@ function VoiceEditor({
 		}
 	}
 	return (
-		<form onSubmit={submit} aria-label={`Voice guide for ${locale.code}`}>
+		<form
+			onSubmit={submit}
+			aria-label={
+				locale ? `Voice guide for ${locale.code}` : "Project voice guide"
+			}
+		>
 			<fieldset disabled={!canEdit || busy} className="min-w-0">
 				<FieldGroup>
 					<Field>
 						<FieldLabel htmlFor="voice-text">
-							Voice guidance · {locale.label ?? locale.code}
+							{locale
+								? `Locale add-on · ${locale.label ?? locale.code}`
+								: "Project voice guidance"}
 						</FieldLabel>
 						<Textarea
 							id="voice-text"
@@ -327,15 +413,16 @@ function VoiceEditor({
 							rows={5}
 						/>
 						<FieldDescription>
-							Describe the agreed tone, address, and writing conventions for
-							this Locale.
+							{locale
+								? "Add only the conventions specific to this Locale. The project voice still applies."
+								: "Describe the audience, tone, and writing conventions that apply in every language."}
 						</FieldDescription>
 					</Field>
 					{examples.map((example, index) => (
 						<FieldGroup key={example.id}>
 							<Field>
 								<FieldLabel htmlFor={`example-source-${example.id}`}>
-									Example {index + 1} · Source
+									Example {index + 1} · {locale ? "Source" : "Before"}
 								</FieldLabel>
 								<Textarea
 									id={`example-source-${example.id}`}
@@ -354,7 +441,7 @@ function VoiceEditor({
 							</Field>
 							<Field>
 								<FieldLabel htmlFor={`example-target-${example.id}`}>
-									Example {index + 1} · {locale.code}
+									Example {index + 1} · {locale?.code ?? "Preferred wording"}
 								</FieldLabel>
 								<Textarea
 									id={`example-target-${example.id}`}
@@ -408,11 +495,41 @@ function VoiceEditor({
 						busy={busy}
 						canEdit={canEdit}
 						error={error}
-						label="Save voice guide"
+						label={locale ? "Save locale add-on" : "Save project voice guide"}
 					/>
 				</FieldGroup>
 			</fieldset>
 		</form>
+	);
+}
+
+function SavedVoice({
+	guide,
+	localeCode,
+}: {
+	guide: {
+		text: string;
+		examples: { source: string; target: string }[];
+		revisionId: string;
+	};
+	localeCode?: string;
+}) {
+	return (
+		<div className="flex flex-col gap-3">
+			<p className="whitespace-pre-wrap">{guide.text}</p>
+			{guide.examples.map((example, index) => (
+				<dl
+					// biome-ignore lint/suspicious/noArrayIndexKey: Immutable saved examples have no local state.
+					key={`${guide.revisionId}-${index}`}
+					className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
+				>
+					<dt>{localeCode ? "Source" : "Before"}</dt>
+					<dd className="whitespace-pre-wrap">{example.source}</dd>
+					<dt>{localeCode ?? "Preferred wording"}</dt>
+					<dd className="whitespace-pre-wrap">{example.target}</dd>
+				</dl>
+			))}
+		</div>
 	);
 }
 
@@ -423,9 +540,18 @@ export function TranslationGuidanceEditor({
 	onSaveTerm,
 	onRemoveTerm,
 	onSaveVoiceGuide,
+	onSaveProjectVoiceGuide,
 }: Props) {
 	const [editingTerm, setEditingTerm] = useState<Term | null | undefined>();
 	const [editingLocale, setEditingLocale] = useState<string>();
+	const [editingProjectGuide, setEditingProjectGuide] = useState(false);
+	const [selectedLocale, setSelectedLocale] = useState(
+		guidance.guides[0]?.localeCode ?? locales[0]?.code,
+	);
+	const locale = locales.find((item) => item.code === selectedLocale);
+	const guide = guidance.guides.find(
+		(item) => item.localeCode === selectedLocale,
+	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	async function remove(action: () => Promise<unknown>) {
@@ -455,6 +581,142 @@ export function TranslationGuidanceEditor({
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}
+			<Card size="sm">
+				<CardHeader>
+					<CardTitle>Project voice guide</CardTitle>
+					<CardDescription>
+						The shared voice for every language. Keep the audience, tone, and
+						writing conventions here.
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="flex flex-col gap-4">
+					{editingProjectGuide ? (
+						<VoiceEditor
+							guidance={guidance}
+							guide={guidance.projectGuide}
+							canEdit={canEdit}
+							onSave={onSaveProjectVoiceGuide}
+							onCancel={() => setEditingProjectGuide(false)}
+						/>
+					) : null}
+					{guidance.projectGuide ? (
+						<SavedVoice guide={guidance.projectGuide} />
+					) : (
+						<p className="text-muted-foreground">
+							No project voice guidance yet.
+						</p>
+					)}
+					{canEdit ? (
+						<div className="flex flex-wrap gap-2">
+							<Button
+								variant="outline"
+								disabled={
+									busy || editingProjectGuide || editingLocale !== undefined
+								}
+								onClick={() => setEditingProjectGuide(true)}
+							>
+								{guidance.projectGuide ? "Edit" : "Add"} project voice guide
+							</Button>
+							{guidance.projectGuide ? (
+								<Button
+									variant="ghost"
+									disabled={busy || editingProjectGuide}
+									onClick={() =>
+										void remove(() =>
+											onSaveProjectVoiceGuide({
+												expectedRevision: guidance.revision,
+												text: "",
+												examples: [],
+											}),
+										)
+									}
+								>
+									Remove project voice guide
+								</Button>
+							) : null}
+						</div>
+					) : null}
+					<details>
+						<summary className="cursor-pointer text-muted-foreground text-sm">
+							Locale add-ons · {guidance.guides.length} configured
+						</summary>
+						<div className="flex flex-col gap-4 pt-4">
+							<p className="text-muted-foreground text-sm">
+								Optional exceptions and language conventions. The project voice
+								guide applies to every Locale.
+							</p>
+							<LocalePicker
+								id="voice-locale"
+								configuredCodes={guidance.guides.map((item) => item.localeCode)}
+								label="Locale add-on"
+								locales={locales}
+								value={selectedLocale}
+								onChange={setSelectedLocale}
+								disabled={editingLocale !== undefined}
+							/>
+							{locale ? (
+								<>
+									{editingLocale === locale.code ? (
+										<VoiceEditor
+											key={locale.code}
+											locale={locale}
+											guide={guide}
+											guidance={guidance}
+											canEdit={canEdit && locale.active !== false}
+											onSave={(input) =>
+												onSaveVoiceGuide({ ...input, localeCode: locale.code })
+											}
+											onCancel={() => setEditingLocale(undefined)}
+										/>
+									) : null}
+									{guide ? (
+										<SavedVoice guide={guide} localeCode={locale.code} />
+									) : (
+										<p className="text-muted-foreground">
+											No add-on for {locale.code}. The project voice guide is
+											enough unless this Locale needs specific instructions.
+										</p>
+									)}
+									{canEdit ? (
+										<div className="flex flex-wrap gap-2">
+											<Button
+												variant="outline"
+												disabled={
+													busy ||
+													editingProjectGuide ||
+													editingLocale !== undefined ||
+													locale.active === false
+												}
+												onClick={() => setEditingLocale(locale.code)}
+											>
+												{guide ? "Edit" : "Add"} {locale.code} add-on
+											</Button>
+											{guide ? (
+												<Button
+													variant="ghost"
+													disabled={busy || editingLocale !== undefined}
+													onClick={() =>
+														void remove(() =>
+															onSaveVoiceGuide({
+																expectedRevision: guidance.revision,
+																localeCode: locale.code,
+																text: "",
+																examples: [],
+															}),
+														)
+													}
+												>
+													Remove {locale.code} add-on
+												</Button>
+											) : null}
+										</div>
+									) : null}
+								</>
+							) : null}
+						</div>
+					</details>
+				</CardContent>
+			</Card>
 			<Card size="sm">
 				<CardHeader>
 					<CardTitle>Dictionary</CardTitle>
@@ -496,16 +758,21 @@ export function TranslationGuidanceEditor({
 								{term.kind === "untranslatable" ? (
 									<p>Keep unchanged in every Locale.</p>
 								) : (
-									<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-										{term.renderings.map((rendering) => (
-											<div key={rendering.localeCode} className="contents">
-												<dt>{rendering.localeCode}</dt>
-												<dd className="whitespace-pre-wrap">
-													{rendering.value}
-												</dd>
-											</div>
-										))}
-									</dl>
+									<details>
+										<summary className="cursor-pointer text-muted-foreground text-sm">
+											{term.renderings.length} Locale renderings
+										</summary>
+										<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+											{term.renderings.map((rendering) => (
+												<div key={rendering.localeCode} className="contents">
+													<dt>{rendering.localeCode}</dt>
+													<dd className="whitespace-pre-wrap">
+														{rendering.value}
+													</dd>
+												</div>
+											))}
+										</dl>
+									</details>
 								)}
 								{canEdit ? (
 									<div className="flex flex-wrap gap-2">
@@ -535,101 +802,6 @@ export function TranslationGuidanceEditor({
 							</article>
 						))
 					)}
-				</CardContent>
-			</Card>
-			<Card size="sm">
-				<CardHeader>
-					<CardTitle>Locale voice guidance</CardTitle>
-					<CardDescription>
-						Write the project’s agreed voice and up to five Source/target
-						examples per Locale. Empty guides add no instructions.
-					</CardDescription>
-				</CardHeader>
-				<CardContent className="flex flex-col gap-4">
-					{locales.map((locale) => {
-						const guide = guidance.guides.find(
-							(item) => item.localeCode === locale.code,
-						);
-						return (
-							<article
-								key={locale.code}
-								className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0"
-							>
-								<strong>
-									{locale.label ?? locale.code} ({locale.code})
-									{locale.active === false ? " · archived" : ""}
-								</strong>
-								{editingLocale === locale.code ? (
-									<VoiceEditor
-										locale={locale}
-										guide={guide}
-										guidance={guidance}
-										canEdit={canEdit}
-										onSave={onSaveVoiceGuide}
-										onCancel={() => setEditingLocale(undefined)}
-									/>
-								) : null}
-								{guide ? (
-									<>
-										<p className="whitespace-pre-wrap">{guide.text}</p>
-										{guide.examples.map((example, index) => (
-											<dl
-												// biome-ignore lint/suspicious/noArrayIndexKey: Saved examples have no local state and are replaced as one immutable guide revision.
-												key={`${guide.revisionId}-${index}`}
-												className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
-											>
-												<dt>Source</dt>
-												<dd className="whitespace-pre-wrap">
-													{example.source}
-												</dd>
-												<dt>{locale.code}</dt>
-												<dd className="whitespace-pre-wrap">
-													{example.target}
-												</dd>
-											</dl>
-										))}
-									</>
-								) : (
-									<p className="text-muted-foreground">
-										No voice guidance yet.
-									</p>
-								)}
-								{canEdit ? (
-									<div className="flex flex-wrap gap-2">
-										<Button
-											variant="outline"
-											disabled={
-												busy ||
-												editingLocale !== undefined ||
-												locale.active === false
-											}
-											onClick={() => setEditingLocale(locale.code)}
-										>
-											{guide ? "Edit" : "Add"} {locale.code} voice guide
-										</Button>
-										{guide ? (
-											<Button
-												variant="ghost"
-												disabled={busy || editingLocale !== undefined}
-												onClick={() =>
-													void remove(() =>
-														onSaveVoiceGuide({
-															expectedRevision: guidance.revision,
-															localeCode: locale.code,
-															text: "",
-															examples: [],
-														}),
-													)
-												}
-											>
-												Remove {locale.code} voice guide
-											</Button>
-										) : null}
-									</div>
-								) : null}
-							</article>
-						);
-					})}
 				</CardContent>
 			</Card>
 		</div>

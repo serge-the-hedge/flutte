@@ -3,13 +3,16 @@ export type Actor = {
 	kind: "user" | "agent" | "system" | "repositoryAdapter";
 	id: string;
 };
-export type TokenScope =
-	| "review"
-	| "read"
-	| "search"
-	| "propose"
-	| "export"
-	| "snapshot-submission";
+export const tokenScopeValidator = v.union(
+	v.literal("read"),
+	v.literal("review"),
+	v.literal("search"),
+	v.literal("propose"),
+	v.literal("dictionary-write"),
+	v.literal("export"),
+	v.literal("snapshot-submission"),
+);
+export type TokenScope = Infer<typeof tokenScopeValidator>;
 
 export const DEFAULT_INTEGRATION_BRANCH = "develop";
 
@@ -44,3 +47,5 @@ export async function sha256Hex(value: string): Promise<string> {
 		byte.toString(16).padStart(2, "0"),
 	).join("");
 }
+
+import { type Infer, v } from "convex/values";

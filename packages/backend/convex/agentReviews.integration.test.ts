@@ -175,6 +175,76 @@ async function context(
 }
 
 describe("independent agent review", () => {
+	test("binds general voice and authorized agent Dictionary changes into review context", async () => {
+		const f = await setup();
+		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+			projectId: f.projectId,
+			enabled: true,
+		});
+		const initial = await context(f);
+		await f.owner.mutation(api.translationGuidance.saveProjectVoiceGuide, {
+			projectId: f.projectId,
+			expectedRevision: 0,
+			text: "Be warm and concise in every language.",
+			examples: [],
+		});
+		expect(
+			(
+				await request(f.t, f.reviewer.token, f.revisionId, {
+					reviewToken: initial.reviewToken,
+					decision: { kind: "accept" },
+				})
+			).status,
+		).toBe(409);
+		const withVoice = await context(f);
+		expect(
+			await (await request(f.t, f.reviewer.token, f.revisionId)).json(),
+		).toMatchObject({
+			guidance: {
+				projectGuide: { text: "Be warm and concise in every language." },
+			},
+		});
+		const dictionary = await f.owner.mutation(api.apiTokens.create, {
+			projectId: f.projectId,
+			name: "Dictionary author",
+			scopes: ["read", "dictionary-write"],
+		});
+		const saved = await f.t.fetch("/api/agent/v1/dictionary/terms", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${dictionary.token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				expectedRevision: 1,
+				terms: [
+					{
+						kind: "translated",
+						sourceTerm: "Hello",
+						definition: "Use the established greeting.",
+						renderings: [{ localeCode: "de", value: "Guten Tag" }],
+					},
+				],
+			}),
+		});
+		expect(saved.status).toBe(200);
+		expect(
+			(
+				await request(f.t, f.reviewer.token, f.revisionId, {
+					reviewToken: withVoice.reviewToken,
+					decision: { kind: "accept" },
+				})
+			).status,
+		).toBe(409);
+		expect(
+			await (await request(f.t, f.reviewer.token, f.revisionId)).json(),
+		).toMatchObject({
+			guidance: {
+				terms: [{ authoredBy: { kind: "agent", id: dictionary.tokenId } }],
+			},
+		});
+	});
+
 	test("binds a review to human guidance and retains superseded guidance citations", async () => {
 		const f = await setup();
 		await f.owner.mutation(api.projects.setAgentReviewPolicy, {

@@ -401,9 +401,10 @@ becoming catalog content or release authority.
 _Avoid_: ARB metadata, translation memory, glossary export
 
 **Voice Guide**:
-A human-authored statement of a Locale's audience, tone and editorial conventions,
-with curated examples that translators and reviewers can cite. It expresses
-chosen practice independently of how often wording appears in the catalog.
+A human-authored statement of the project's audience, tone and editorial
+conventions, shared across Locales, with optional Locale-specific add-ons and
+curated examples that translators and reviewers can cite. It expresses chosen
+practice independently of how often wording appears in the catalog.
 _Avoid_: inferred style, translation memory, release rule
 
 **Untranslatable Term**:

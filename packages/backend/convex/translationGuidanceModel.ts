@@ -16,20 +16,33 @@ export const dictionaryTermValidator = v.union(
 	}),
 );
 
-export const voiceGuideFields = {
-	localeCode: v.string(),
+export const projectVoiceGuideFields = {
 	text: v.string(),
 	examples: v.array(v.object({ source: v.string(), target: v.string() })),
+};
+
+export const voiceGuideFields = {
+	localeCode: v.string(),
+	...projectVoiceGuideFields,
 };
 
 export const guidanceContentValidator = v.union(
 	v.object({ kind: v.literal("term"), term: dictionaryTermValidator }),
 	v.object({ kind: v.literal("voiceGuide"), ...voiceGuideFields }),
+	v.object({
+		kind: v.literal("projectVoiceGuide"),
+		...projectVoiceGuideFields,
+	}),
+);
+
+export const guidanceAuthorValidator = v.union(
+	v.object({ kind: v.literal("user"), id: v.string() }),
+	v.object({ kind: v.literal("agent"), id: v.string() }),
 );
 
 export const guidanceAuthorshipFields = {
 	revision: v.number(),
-	authoredBy: v.object({ kind: v.literal("user"), id: v.string() }),
+	authoredBy: guidanceAuthorValidator,
 	authoredAt: v.number(),
 };
 
@@ -48,10 +61,16 @@ export const voiceGuideEvidenceValidator = v.object({
 	...guidanceCitationFields,
 });
 
+export const projectVoiceGuideEvidenceValidator = v.object({
+	...projectVoiceGuideFields,
+	...guidanceCitationFields,
+});
+
 export const guidanceListValidator = v.object({
 	revision: v.number(),
 	terms: v.array(v.object(dictionaryTermEvidenceFields)),
 	guides: v.array(voiceGuideEvidenceValidator),
+	projectGuide: v.union(projectVoiceGuideEvidenceValidator, v.null()),
 });
 
 export const guidanceContextValidator = v.object({
@@ -63,6 +82,7 @@ export const guidanceContextValidator = v.object({
 		}),
 	),
 	guides: v.array(voiceGuideEvidenceValidator),
+	projectGuide: v.union(projectVoiceGuideEvidenceValidator, v.null()),
 });
 
 export const retainedGuidanceRevisionValidator = v.object({

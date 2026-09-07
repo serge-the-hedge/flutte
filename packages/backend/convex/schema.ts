@@ -5,6 +5,7 @@ import {
 	agentReviewAuthorizationValidator,
 	agentReviewPolicyValidator,
 } from "./agentReviewModel";
+import { tokenScopeValidator } from "./lib";
 import { releaseAssessmentFields } from "./releaseRecordModel";
 import {
 	guidanceAuthorshipFields,
@@ -305,7 +306,7 @@ export default defineSchema({
 		.index("by_project_email", ["projectId", "emailLower"])
 		.index("by_email", ["emailLower"]),
 
-	// Human-maintained translation references are independent of release truth.
+	// Authored translation references are independent of release truth.
 	// Heads bound current reads; immutable revisions keep old citations useful.
 	translationGuidanceStates: defineTable({
 		projectId: v.id("projects"),
@@ -1568,16 +1569,7 @@ export default defineSchema({
 		projectId: v.id("projects"),
 		name: v.string(),
 		tokenHash: v.string(),
-		scopes: v.array(
-			v.union(
-				v.literal("read"),
-				v.literal("review"),
-				v.literal("search"),
-				v.literal("propose"),
-				v.literal("export"),
-				v.literal("snapshot-submission"),
-			),
-		),
+		scopes: v.array(tokenScopeValidator),
 		createdByUserId: v.string(),
 		createdAt: v.number(),
 		lastUsedAt: v.optional(v.number()),

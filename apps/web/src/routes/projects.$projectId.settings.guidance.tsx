@@ -23,6 +23,9 @@ function GuidanceRoute() {
 	const saveTerm = useMutation(api.translationGuidance.saveTerm);
 	const removeTerm = useMutation(api.translationGuidance.removeTerm);
 	const saveVoiceGuide = useMutation(api.translationGuidance.saveVoiceGuide);
+	const saveProjectVoiceGuide = useMutation(
+		api.translationGuidance.saveProjectVoiceGuide,
+	);
 	const sourceLocaleCode = locales?.find(
 		(locale) => locale._id === project?.sourceLocaleId,
 	)?.code;
@@ -65,6 +68,9 @@ function GuidanceRoute() {
 					canEdit={project.role === "owner" || project.role === "editor"}
 					onSaveTerm={(input) => saveTerm({ projectId: id, ...input })}
 					onRemoveTerm={(input) => removeTerm({ projectId: id, ...input })}
+					onSaveProjectVoiceGuide={(input) =>
+						saveProjectVoiceGuide({ projectId: id, ...input })
+					}
 					onSaveVoiceGuide={(input) =>
 						saveVoiceGuide({ projectId: id, ...input })
 					}
