@@ -41,13 +41,15 @@ function consumeApostrophe(
 ): [number, boolean] {
 	if (value[index + 1] === "'") return [index + 2, quoted];
 	if (quoted) return [index + 1, false];
-	return [index + 1, "{}#".includes(value[index + 1] ?? "")];
+	const next = value[index + 1];
+	return [index + 1, next !== undefined && "{}#".includes(next)];
 }
 
 type FactCollector = {
 	sawOpeningBrace: boolean;
 	names: string[];
 	seen: Set<string>;
+	literalParts?: string[];
 };
 
 function addArgument(collector: FactCollector, name: string): void {
@@ -68,27 +70,52 @@ function scanPattern(
 	start: number,
 	collector: FactCollector,
 	endsAtClosingBrace: boolean,
+	inPlural = false,
 ): number {
 	let index = start;
 	let quoted = false;
+	let literal = "";
+	const flushLiteral = () => {
+		if (literal.length > 0) collector.literalParts?.push(literal);
+		literal = "";
+	};
 	while (index < value.length) {
 		const char = value[index];
 		if (char === "'") {
-			[index, quoted] = consumeApostrophe(value, index, quoted);
+			const [next, nextQuoted] = consumeApostrophe(value, index, quoted);
+			if (
+				collector.literalParts &&
+				(next === index + 2 || nextQuoted === quoted)
+			) {
+				literal += "'";
+			}
+			[index, quoted] = [next, nextQuoted];
 			continue;
 		}
 		if (quoted) {
+			if (collector.literalParts) literal += char;
 			index++;
 			continue;
 		}
-		if (endsAtClosingBrace && char === "}") return index + 1;
+		if (endsAtClosingBrace && char === "}") {
+			flushLiteral();
+			return index + 1;
+		}
+		if (inPlural && char === "#") {
+			flushLiteral();
+			index++;
+			continue;
+		}
 		if (char !== "{") {
+			if (collector.literalParts) literal += char;
 			index++;
 			continue;
 		}
+		flushLiteral();
 		collector.sawOpeningBrace = true;
-		index = scanArgument(value, index + 1, collector);
+		index = scanArgument(value, index + 1, collector, inPlural);
 	}
+	flushLiteral();
 	return index;
 }
 
@@ -96,6 +123,7 @@ function scanArgument(
 	value: string,
 	start: number,
 	collector: FactCollector,
+	inPlural: boolean,
 ): number {
 	let index = start;
 	index = skipWhitespace(value, index);
@@ -149,7 +177,13 @@ function scanArgument(
 			// skipped until the next token because this module does not validate.
 			continue;
 		}
-		index = scanPattern(value, index + 1, collector, true);
+		index = scanPattern(
+			value,
+			index + 1,
+			collector,
+			true,
+			inPlural || format === "plural" || format === "selectordinal",
+		);
 	}
 	return index;
 }
@@ -171,6 +205,25 @@ export function messageFacts(value: string): MessageFacts {
 		icuType: collector.sawOpeningBrace ? "icu" : "plain",
 		argumentNames: collector.names,
 	};
+}
+
+/** Literal runs use the same ICU traversal as argument facts. They exclude
+ * argument names, selectors, format styles and plural counts, and never join
+ * words across a placeholder or across alternative plural/select arms. */
+export function messageLiteralParts(value: string): readonly string[] {
+	const literalParts: string[] = [];
+	scanPattern(
+		value,
+		0,
+		{
+			sawOpeningBrace: false,
+			names: [],
+			seen: new Set(),
+			literalParts,
+		},
+		false,
+	);
+	return literalParts;
 }
 
 /** Source metadata supplies the declared half of a Message Signature. */

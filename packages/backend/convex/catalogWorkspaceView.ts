@@ -136,9 +136,9 @@ export function currentWorkspaceRows(
 		return {
 			...row,
 			value: head.value,
-			...(head.valueFingerprint === undefined
-				? {}
-				: { valueFingerprint: head.valueFingerprint }),
+			// Older heads predate stored hashes. Their readers must fingerprint
+			// the visible value rather than inherit the underlying Git hash.
+			valueFingerprint: head.valueFingerprint,
 			icuType: message.icuType,
 			argumentNames: [...facts.names],
 			argumentNamesComplete: facts.complete,
@@ -179,6 +179,23 @@ export function currentSourceProposalRows(
 			sourceFingerprint: head.sourceFingerprint,
 		};
 	});
+}
+
+/** Pending English copy does not invalidate a target confirmed against Git,
+ * but a target authored for an older proposal must answer the latest wording. */
+export function decisionSourceFingerprintFor(input: {
+	gitSourceFingerprint: string;
+	currentSourceFingerprint: string;
+	valueSourceFingerprint: string;
+	pendingSourceProposalFingerprint?: string;
+}): string {
+	if (input.pendingSourceProposalFingerprint === undefined) {
+		return input.currentSourceFingerprint;
+	}
+	return input.valueSourceFingerprint === input.gitSourceFingerprint ||
+		input.valueSourceFingerprint === input.pendingSourceProposalFingerprint
+		? input.valueSourceFingerprint
+		: input.pendingSourceProposalFingerprint;
 }
 
 export function currentDecisionForValue(input: {
@@ -414,13 +431,12 @@ export function composeWorkspaceKeyCards(
 						"Catalog Workspace could not fingerprint an active Locale value.",
 				});
 			}
-			const decisionSourceFingerprint =
-				pendingSourceProposalFingerprint === undefined
-					? source.sourceFingerprint
-					: value.sourceFingerprint === sourceRow.sourceFingerprint ||
-							value.sourceFingerprint === pendingSourceProposalFingerprint
-						? value.sourceFingerprint
-						: pendingSourceProposalFingerprint;
+			const decisionSourceFingerprint = decisionSourceFingerprintFor({
+				gitSourceFingerprint: sourceRow.sourceFingerprint,
+				currentSourceFingerprint: source.sourceFingerprint,
+				valueSourceFingerprint: value.sourceFingerprint,
+				pendingSourceProposalFingerprint,
+			});
 			const decision = currentDecisionForValue({
 				row,
 				sourceFingerprint: decisionSourceFingerprint,

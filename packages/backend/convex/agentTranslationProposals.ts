@@ -12,11 +12,11 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { authenticateAgent as authenticate } from "./agentApi";
 import {
 	type AgentReviewAuthorization,
 	agentReviewAuthorizationValidator,
 	agentReviewDecisionValidator,
-	isReviewOnlyToken,
 } from "./agentReviewModel";
 import {
 	authorizeCandidateReview,
@@ -25,17 +25,12 @@ import {
 	readCandidateAuthorization,
 	revokeCandidateReviewGrant as revokeReview,
 } from "./agentReviews";
-import { hashToken } from "./apiTokens";
 import {
 	activeProjectionFor,
-	activeWorkingCatalog,
 	MAX_WORKING_CATALOG_KEYS,
 } from "./catalogProjection";
-import {
-	applyAgentTargetValue,
-	MAX_CATALOG_WORKSPACE_VALUE_HEADS,
-} from "./catalogWorkspace";
-import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
+import { applyAgentTargetValue } from "./catalogWorkspace";
+import { readWorkspaceTarget as currentWorkspaceTarget } from "./catalogWorkspaceRead";
 import { assertTargetValueContract } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
 import {
@@ -46,11 +41,7 @@ import {
 	type LocaleProposalCarryForwardResult,
 } from "./localeProposals";
 import { requireEditor, requireViewer } from "./permissions";
-import {
-	isCurrentSourceProposalHeadForSource,
-	publishedResolutionFor,
-	sourceProposalHeadFor,
-} from "./sourceProposals";
+import { guidanceContextValidator, readGuidance } from "./translationGuidance";
 
 const MAX_PROPOSAL_CLIENT_KEY_BYTES = 256;
 const MAX_REVISION_CLIENT_KEY_BYTES = 256;
@@ -62,15 +53,8 @@ const MAX_REVIEW_CANDIDATES = 128;
 const MAX_CANDIDATES = MAX_WORKING_CATALOG_KEYS;
 const MAX_REVISIONS = MAX_WORKING_CATALOG_KEYS * 2;
 const MAX_RETAINED_BYTES = 16 * 1024 * 1024;
-const MAX_CONTEXT_KEYS = 50;
-const MAX_CONTEXT_LOCALES = 20;
-const MAX_CONTEXT_PAIRS = 128;
-const MAX_DISCOVERY_RESULTS = 50;
-const MAX_DISCOVERY_RESPONSE_BYTES = 512 * 1024;
-const MAX_WORK_QUEUE_ITEMS = 16;
-const MAX_WORK_QUEUE_SCAN_ROWS = 64;
-const MAX_WORK_QUEUE_RESPONSE_BYTES = 768 * 1024;
 const MAX_TASK_TARGETS = 32;
+const MAX_TASK_PAGE_BYTES = 1024 * 1024;
 const MAX_TASK_TITLE_BYTES = 256;
 const MAX_TRANSLATION_TASKS_PER_OWNER = 128;
 
@@ -137,25 +121,6 @@ export type TranslationTaskReviewDecision =
 	| { kind: "reject"; reason?: string }
 	| { kind: "intentionalBlank"; reason: string };
 
-const translationWorkReasonValidator = v.union(
-	v.literal("missing"),
-	v.literal("sourceIdentical"),
-	v.literal("sameKeyRepeat"),
-	v.literal("stale"),
-);
-
-export type TranslationWorkReason =
-	| "missing"
-	| "sourceIdentical"
-	| "sameKeyRepeat"
-	| "stale";
-
-type TranslationWorkCursor = {
-	projectionId: Id<"catalogProjections">;
-	catalogIndex: number;
-	targetIndex: number;
-};
-
 const taskBasisValidator = v.object({
 	kind: v.literal("catalogWorkspace"),
 	projectionId: v.id("catalogProjections"),
@@ -166,10 +131,67 @@ const taskBasisValidator = v.object({
 	sourceFingerprint: v.string(),
 });
 
+const reviewSummaryValidator = v.object({
+	reviewId: v.id("agentTranslationCandidateReviews"),
+	decision: v.object({
+		kind: v.union(
+			v.literal("accept"),
+			v.literal("reject"),
+			v.literal("acceptWithEdits"),
+			v.literal("keepForCurrentSource"),
+			v.literal("intentionalBlank"),
+		),
+		reason: v.optional(v.string()),
+	}),
+	reviewer: v.object({
+		kind: v.union(
+			v.literal("user"),
+			v.literal("agent"),
+			v.literal("system"),
+			v.literal("repositoryAdapter"),
+		),
+		id: v.string(),
+	}),
+	reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
+	finalValueFingerprint: v.optional(v.string()),
+	createdAt: v.number(),
+});
+
+const taskCandidateValidator = v.object({
+	messageId: v.string(),
+	revisionId: v.id("agentTranslationCandidateRevisions"),
+	revision: v.number(),
+	value: v.string(),
+	intentionalBlankReason: v.optional(v.string()),
+	latestReview: v.union(v.null(), reviewSummaryValidator),
+});
+
+/** Both task adapters expose the newest immutable candidate and its own review;
+ * an older revision's verdict must not describe an unreviewed correction. */
+async function taskCandidateFeedback(
+	ctx: QueryCtx,
+	candidate: Doc<"agentTranslationCandidates"> | null,
+) {
+	const revision = candidate?.latestRevisionId
+		? await ctx.db.get(candidate.latestRevisionId)
+		: null;
+	if (!revision) return null;
+	const review = await latestCandidateReview(ctx, revision._id);
+	return {
+		messageId: revision.messageId,
+		revisionId: revision._id,
+		revision: revision.revision,
+		value: revision.value,
+		intentionalBlankReason: revision.intentionalBlankReason,
+		latestReview: review ? reviewSummary(review) : null,
+	};
+}
+
 const taskTargetValidator = v.object({
 	messageId: v.string(),
 	sourceValue: v.string(),
 	targetValue: v.string(),
+	candidate: v.union(v.null(), taskCandidateValidator),
 });
 
 function catalogWorkspaceTaskBasis(
@@ -223,20 +245,6 @@ const localeProposalTaskScopeValidator = v.object({
 	targetCount: v.number(),
 });
 
-const translationWorkPageValidator = v.object({
-	projectionId: v.id("catalogProjections"),
-	items: v.array(
-		v.object({
-			messageId: v.string(),
-			localeCode: v.string(),
-			reasons: v.array(translationWorkReasonValidator),
-			sourceValue: v.string(),
-			targetValue: v.string(),
-		}),
-	),
-	nextCursor: v.union(v.string(), v.null()),
-});
-
 type ProposalTarget =
 	| { kind: "catalogWorkspace" }
 	| { kind: "localeProposal"; localeProposalId: Id<"localeProposals"> };
@@ -286,125 +294,6 @@ function assertNonNegativeInteger(value: number, name: string): void {
 			message: `${name} must be a non-negative integer.`,
 		});
 	}
-}
-
-const ALL_TRANSLATION_WORK_REASONS = [
-	"missing",
-	"sourceIdentical",
-	"sameKeyRepeat",
-	"stale",
-] as const satisfies readonly TranslationWorkReason[];
-
-function translationWorkReasons(
-	digest: Doc<"catalogWorkspaceNavigationRows">,
-	target: Doc<"catalogWorkspaceNavigationRows">["targets"][number],
-): TranslationWorkReason[] {
-	if (target.valueState === "waiting") return ["missing"];
-	if (target.valueState === "stale") return ["stale"];
-	if (target.confirmedGitContent || target.touched) return [];
-
-	const reasons: TranslationWorkReason[] = [];
-	if (
-		!digest.pendingSourceProposal &&
-		target.gitValueFingerprint !== undefined &&
-		target.gitValueFingerprint === digest.source.gitValueFingerprint
-	) {
-		reasons.push("sourceIdentical");
-	}
-	if (
-		target.valueFingerprint !== undefined &&
-		digest.targets.some(
-			(other) =>
-				other.localeId !== target.localeId &&
-				other.valueFingerprint === target.valueFingerprint,
-		)
-	) {
-		reasons.push("sameKeyRepeat");
-	}
-	return reasons;
-}
-
-function decodeTranslationWorkCursor(
-	cursor: string,
-): TranslationWorkCursor | null {
-	if (cursor.length === 0) return null;
-	const match = /^v1\.([^.]+)\.(\d+)\.(\d+)$/.exec(cursor);
-	if (!match) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "Translation work pagination cursor is invalid.",
-		});
-	}
-	const catalogIndex = Number(match[2]);
-	const targetIndex = Number(match[3]);
-	if (
-		!Number.isSafeInteger(catalogIndex) ||
-		catalogIndex < 0 ||
-		!Number.isSafeInteger(targetIndex) ||
-		targetIndex < 0
-	) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "Translation work pagination cursor is invalid.",
-		});
-	}
-	return {
-		projectionId: match[1] as Id<"catalogProjections">,
-		catalogIndex,
-		targetIndex,
-	};
-}
-
-function encodeTranslationWorkCursor(cursor: TranslationWorkCursor): string {
-	return `v1.${cursor.projectionId}.${cursor.catalogIndex}.${cursor.targetIndex}`;
-}
-
-function nextTranslationWorkCursor(
-	rows: readonly Doc<"catalogWorkspaceNavigationRows">[],
-	rowIndex: number,
-	targetIndex: number,
-	projectionId: Id<"catalogProjections">,
-): string | null {
-	const row = rows[rowIndex];
-	if (row && targetIndex + 1 < row.targets.length) {
-		return encodeTranslationWorkCursor({
-			projectionId,
-			catalogIndex: row.catalogIndex,
-			targetIndex: targetIndex + 1,
-		});
-	}
-	const nextRow = rows[rowIndex + 1];
-	return nextRow
-		? encodeTranslationWorkCursor({
-				projectionId,
-				catalogIndex: nextRow.catalogIndex,
-				targetIndex: 0,
-			})
-		: null;
-}
-
-async function authenticate(
-	ctx: QueryCtx | MutationCtx,
-	rawToken: string,
-	scope: "read" | "search" | "propose",
-) {
-	const tokenHash = await hashToken(rawToken);
-	const token = await ctx.db
-		.query("apiTokens")
-		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
-		.unique();
-	if (
-		!token ||
-		token.revokedAt !== undefined ||
-		!token.scopes.includes(scope) ||
-		(token.scopes.includes("review") && !isReviewOnlyToken(token.scopes))
-	) {
-		throw new ConvexError({
-			code: "UNAUTHORIZED",
-			message: "Invalid or insufficient API token.",
-		});
-	}
-	return token;
 }
 
 async function proposalForToken(
@@ -507,105 +396,6 @@ async function newLocaleTaskForOwner(
 		.unique();
 }
 
-async function currentWorkspaceTarget(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-	messageId: string,
-	localeId: Id<"locales">,
-) {
-	const [project, projection] = await Promise.all([
-		ctx.db.get(projectId),
-		activeProjectionFor(ctx, projectId),
-	]);
-	const sourceLocaleId = project?.sourceLocaleId;
-	if (!project || !sourceLocaleId || !projection?.snapshotId) {
-		throw new ConvexError({
-			code: "NOT_FOUND",
-			message: "No active Baseline Catalog is available for this project.",
-		});
-	}
-	const [source, target, head] = await Promise.all([
-		ctx.db
-			.query("catalogProjectionMessages")
-			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
-				q
-					.eq("projectionId", projection._id)
-					.eq("messageId", messageId)
-					.eq("localeId", sourceLocaleId),
-			)
-			.unique(),
-		ctx.db
-			.query("catalogProjectionMessages")
-			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
-				q
-					.eq("projectionId", projection._id)
-					.eq("messageId", messageId)
-					.eq("localeId", localeId),
-			)
-			.unique(),
-		ctx.db
-			.query("catalogWorkspaceValueHeads")
-			.withIndex("by_project_and_messageId_and_localeId", (q) =>
-				q
-					.eq("projectId", projectId)
-					.eq("messageId", messageId)
-					.eq("localeId", localeId),
-			)
-			.unique(),
-	]);
-	if (!source?.isSource || !target || target.isSource) {
-		throw new ConvexError({
-			code: "NOT_FOUND",
-			message: "The requested Catalog Workspace target is not active.",
-		});
-	}
-	if (target.gitValueFingerprint === undefined) {
-		throw new ConvexError({
-			code: "STALE_BASIS",
-			message:
-				"This target predates Git value identity. Refresh the active Catalog Workspace before proposing it.",
-		});
-	}
-	const currentHead =
-		head &&
-		head.basisGitValueFingerprint === target.gitValueFingerprint &&
-		head.basisGitValueRevision === (target.gitValueRevision ?? 0)
-			? head
-			: undefined;
-	const sourceProposalHead = await sourceProposalHeadFor(
-		ctx,
-		projectId,
-		messageId,
-	);
-	const sourceProposalResolution = sourceProposalHead
-		? await publishedResolutionFor(ctx, {
-				_id: sourceProposalHead.proposalId,
-				projectId,
-				messageId,
-			})
-		: null;
-	const effectiveSource =
-		isCurrentSourceProposalHeadForSource(source, sourceProposalHead) &&
-		!sourceProposalResolution
-			? {
-					...source,
-					value: sourceProposalHead.sourceValue,
-					valueFingerprint: sourceProposalHead.sourceFingerprint,
-					sourceFingerprint: sourceProposalHead.sourceFingerprint,
-				}
-			: source;
-	return {
-		projection,
-		source: effectiveSource,
-		target,
-		value: currentHead?.value ?? target.value,
-		valueFingerprint:
-			currentHead?.valueFingerprint ??
-			(await sha256Hex(currentHead?.value ?? target.value)),
-		workspaceRevision: currentHead?.revision ?? 0,
-	};
-}
-
 async function currentLocaleProposalTarget(
 	ctx: QueryCtx | MutationCtx,
 	proposal: {
@@ -674,58 +464,6 @@ async function currentLocaleProposalTarget(
 			},
 		},
 	};
-}
-
-function discoveryEntry(
-	current: Awaited<ReturnType<typeof currentWorkspaceTarget>>,
-) {
-	if (!current.projection.snapshotId) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "The active Catalog Workspace is missing Snapshot identity.",
-		});
-	}
-	return {
-		messageId: current.target.messageId,
-		localeId: current.target.localeId,
-		localeCode: current.target.localeCode,
-		source: {
-			value: current.source.value,
-			fingerprint: current.source.sourceFingerprint,
-			icuType: current.source.icuType,
-			argumentNames: current.source.argumentNames,
-			argumentNamesComplete: current.source.argumentNamesComplete,
-			declaredPlaceholderNames: current.source.declaredPlaceholderNames ?? [],
-			declaredPlaceholderNamesComplete:
-				current.source.declaredPlaceholderNamesComplete ?? true,
-		},
-		target: {
-			value: current.value,
-			valueFingerprint: current.valueFingerprint,
-			gitValueFingerprint: current.target.gitValueFingerprint,
-			gitValueRevision: current.target.gitValueRevision ?? 0,
-			workspaceRevision: current.workspaceRevision,
-			catalogPath: current.target.catalogPath,
-			sourceFingerprint: current.target.sourceFingerprint,
-		},
-		basis: {
-			projectionId: current.projection._id,
-			snapshotId: current.projection.snapshotId,
-			gitValueFingerprint: current.target.gitValueFingerprint,
-			gitValueRevision: current.target.gitValueRevision ?? 0,
-			workspaceRevision: current.workspaceRevision,
-			sourceFingerprint: current.source.sourceFingerprint,
-		},
-	};
-}
-
-function assertDiscoveryResponse(value: unknown): void {
-	if (byteLength(value) > MAX_DISCOVERY_RESPONSE_BYTES) {
-		throw new ConvexError({
-			code: "LIMIT_EXCEEDED",
-			message: "Workspace discovery response exceeds its byte envelope.",
-		});
-	}
 }
 
 type TaskActor =
@@ -1239,6 +977,7 @@ export const taskForAgent = internalQuery({
 			candidateCount: v.number(),
 		}),
 		targets: v.array(taskTargetValidator),
+		guidance: guidanceContextValidator,
 		nextCursor: v.union(v.number(), v.null()),
 	}),
 	handler: async (ctx, args) => {
@@ -1251,6 +990,7 @@ export const taskForAgent = internalQuery({
 			});
 		}
 		assertNonNegativeInteger(args.cursor, "cursor");
+		assertNonNegativeInteger(args.limit, "limit");
 		const limit = Math.min(16, Math.max(1, Math.trunc(args.limit)));
 		const rows = await ctx.db
 			.query("translationTaskTargets")
@@ -1259,22 +999,45 @@ export const taskForAgent = internalQuery({
 			)
 			.take(limit + 1);
 		const targets = rows.slice(0, limit);
-		const liveTargets = await Promise.all(
-			targets.map(async (target) => {
-				const current = await currentWorkspaceTarget(
+		const liveTargets = [];
+		let targetBytes = 0;
+		for (const target of targets) {
+			const [current, candidate] = await Promise.all([
+				currentWorkspaceTarget(
 					ctx,
 					proposal.projectId,
 					target.messageId,
 					target.localeId,
-				);
-				return {
-					messageId: target.messageId,
-					sourceValue: current.source.value,
-					targetValue: current.value,
-				};
-			}),
-		);
-		const last = targets[targets.length - 1];
+				),
+				ctx.db
+					.query("agentTranslationCandidates")
+					.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
+						q
+							.eq("proposalId", proposal._id)
+							.eq("messageId", target.messageId)
+							.eq("localeId", target.localeId),
+					)
+					.unique(),
+			]);
+			const liveTarget = {
+				messageId: target.messageId,
+				sourceValue: current.source.value,
+				targetValue: current.value,
+				candidate: await taskCandidateFeedback(ctx, candidate),
+			};
+			const bytes = new TextEncoder().encode(
+				JSON.stringify(liveTarget),
+			).byteLength;
+			if (bytes > MAX_TASK_PAGE_BYTES) {
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message: `Translation Task value “${target.messageId}” exceeds its page envelope.`,
+				});
+			}
+			if (targetBytes + bytes > MAX_TASK_PAGE_BYTES) break;
+			liveTargets.push(liveTarget);
+			targetBytes += bytes;
+		}
 		return {
 			task: {
 				taskId: proposal._id,
@@ -1285,7 +1048,11 @@ export const taskForAgent = internalQuery({
 				candidateCount: proposal.candidateCount,
 			},
 			targets: liveTargets,
-			nextCursor: rows.length > limit && last ? last.catalogIndex + 1 : null,
+			guidance: await readGuidance(ctx, token.projectId, {
+				texts: liveTargets.map((target) => target.sourceValue),
+				localeCodes: [proposal.taskScope.localeCode],
+			}),
+			nextCursor: rows[liveTargets.length]?.catalogIndex ?? null,
 		};
 	},
 });
@@ -1717,15 +1484,7 @@ export const newLocaleTaskCandidatesForAgent = internalQuery({
 		taskId: v.id("agentTranslationProposals"),
 		messageIds: v.array(v.string()),
 	},
-	returns: v.array(
-		v.object({
-			messageId: v.string(),
-			revisionId: v.id("agentTranslationCandidateRevisions"),
-			revision: v.number(),
-			value: v.string(),
-			intentionalBlankReason: v.optional(v.string()),
-		}),
-	),
+	returns: v.array(taskCandidateValidator),
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
 		const proposal = await proposalForToken(ctx, args.taskId, token._id);
@@ -1761,345 +1520,10 @@ export const newLocaleTaskCandidatesForAgent = internalQuery({
 						.eq("localeProposalId", localeProposalId),
 				)
 				.unique();
-			const revision = candidate?.latestRevisionId
-				? await ctx.db.get(candidate.latestRevisionId)
-				: null;
-			if (revision) {
-				result.push({
-					messageId,
-					revisionId: revision._id,
-					revision: revision.revision,
-					value: revision.value,
-					intentionalBlankReason: revision.intentionalBlankReason,
-				});
-			}
+			const feedback = await taskCandidateFeedback(ctx, candidate);
+			if (feedback) result.push(feedback);
 		}
 		return result;
-	},
-});
-
-export const workspaceContext = internalQuery({
-	args: {
-		token: v.string(),
-		keys: v.array(v.string()),
-		locales: v.array(v.string()),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "read");
-		if (
-			args.keys.length > MAX_CONTEXT_KEYS ||
-			args.locales.length > MAX_CONTEXT_LOCALES ||
-			args.keys.length * args.locales.length > MAX_CONTEXT_PAIRS
-		) {
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: `Workspace context supports at most ${MAX_CONTEXT_KEYS} keys, ${MAX_CONTEXT_LOCALES} Locales, and ${MAX_CONTEXT_PAIRS} pairs.`,
-			});
-		}
-		const localeIds = new Map<string, Id<"locales">>();
-		for (const code of args.locales) {
-			const locale = await ctx.db
-				.query("locales")
-				.withIndex("by_project_code", (q) =>
-					q.eq("projectId", token.projectId).eq("code", code),
-				)
-				.unique();
-			if (locale && locale.archivedAt === undefined) {
-				localeIds.set(code, locale._id);
-			}
-		}
-		const rows = [];
-		for (const messageId of args.keys) {
-			for (const localeId of localeIds.values()) {
-				try {
-					rows.push(
-						discoveryEntry(
-							await currentWorkspaceTarget(
-								ctx,
-								token.projectId,
-								messageId,
-								localeId,
-							),
-						),
-					);
-				} catch (error) {
-					if (
-						error instanceof ConvexError &&
-						typeof error.data === "object" &&
-						error.data !== null &&
-						"code" in error.data &&
-						error.data.code === "NOT_FOUND"
-					) {
-						continue;
-					}
-					throw error;
-				}
-			}
-		}
-		const result = { rows };
-		assertDiscoveryResponse(result);
-		return result;
-	},
-});
-
-export const workspaceSearch = internalQuery({
-	args: {
-		token: v.string(),
-		q: v.optional(v.string()),
-		localeCode: v.optional(v.string()),
-		limit: v.optional(v.number()),
-	},
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "search");
-		const active = await activeWorkingCatalog(ctx, token.projectId);
-		if (!active) return { results: [], hasMore: false };
-		const limit = Math.min(
-			MAX_DISCOVERY_RESULTS,
-			Math.max(1, Math.trunc(args.limit ?? MAX_DISCOVERY_RESULTS)),
-		);
-		const heads = await ctx.db
-			.query("catalogWorkspaceValueHeads")
-			.withIndex("by_project", (q) => q.eq("projectId", token.projectId))
-			.take(MAX_CATALOG_WORKSPACE_VALUE_HEADS + 1);
-		if (heads.length > MAX_CATALOG_WORKSPACE_VALUE_HEADS) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Catalog Workspace exceeds its value-head envelope.",
-			});
-		}
-		const headByIdentity = new Map(
-			heads.map((head) => [`${head.messageId}\u0000${head.localeId}`, head]),
-		);
-		const sourceByMessageId = new Map(
-			active.rows
-				.filter((row) => row.isSource)
-				.map((row) => [row.messageId, row]),
-		);
-		const needle = args.q?.trim().toLocaleLowerCase() ?? "";
-		const matchingRows = active.rows.filter((row) => {
-			if (row.isSource) return false;
-			if (args.localeCode && row.localeCode !== args.localeCode) return false;
-			const source = sourceByMessageId.get(row.messageId);
-			const head = headByIdentity.get(`${row.messageId}\u0000${row.localeId}`);
-			const visibleValue =
-				head &&
-				head.basisGitValueFingerprint === row.gitValueFingerprint &&
-				head.basisGitValueRevision === (row.gitValueRevision ?? 0)
-					? head.value
-					: row.value;
-			return (
-				needle.length === 0 ||
-				[row.messageId, source?.value ?? "", visibleValue]
-					.join(" ")
-					.toLocaleLowerCase()
-					.includes(needle)
-			);
-		});
-		const pageRows = matchingRows.slice(0, limit + 1);
-		const hasMore = pageRows.length > limit;
-		const results = await Promise.all(
-			pageRows
-				.slice(0, limit)
-				.map(async (row) =>
-					discoveryEntry(
-						await currentWorkspaceTarget(
-							ctx,
-							token.projectId,
-							row.messageId,
-							row.localeId,
-						),
-					),
-				),
-		);
-		const result = { results, hasMore };
-		assertDiscoveryResponse(result);
-		return result;
-	},
-});
-
-/** Exhaustive, low-read discovery for translation work. The Navigation Index
- * owns ordering and classification; this query scans only a bounded index
- * window and hydrates full Source/target values for matches. The cursor pins
- * the exact projection so a Baseline change cannot silently splice two runs. */
-export const workspaceWorkPage = internalQuery({
-	args: {
-		token: v.string(),
-		cursor: v.string(),
-		limit: v.number(),
-		localeCode: v.optional(v.string()),
-		reasons: v.optional(v.array(translationWorkReasonValidator)),
-		q: v.optional(v.string()),
-	},
-	returns: translationWorkPageValidator,
-	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "search");
-		if (
-			!Number.isSafeInteger(args.limit) ||
-			args.limit < 1 ||
-			args.limit > MAX_WORK_QUEUE_ITEMS
-		) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: `Translation work pages contain 1–${MAX_WORK_QUEUE_ITEMS} items.`,
-			});
-		}
-		const requestedReasons = args.reasons ?? [...ALL_TRANSLATION_WORK_REASONS];
-		const reasonSet = new Set<TranslationWorkReason>();
-		for (const reason of requestedReasons) {
-			if (reasonSet.has(reason)) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "Translation work reasons must be unique.",
-				});
-			}
-			reasonSet.add(reason);
-		}
-		if (reasonSet.size === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "At least one translation work reason is required.",
-			});
-		}
-
-		const projection = await activeProjectionFor(ctx, token.projectId);
-		if (!projection) {
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "No active Baseline Catalog is available for this project.",
-			});
-		}
-		await readyNavigationStateFor(ctx, {
-			projectId: token.projectId,
-			projectionId: projection._id,
-			expectedRowCount: projection.expectedKeyCount,
-		});
-		const decodedCursor = decodeTranslationWorkCursor(args.cursor);
-		if (decodedCursor && decodedCursor.projectionId !== projection._id) {
-			throw new ConvexError({
-				code: "STALE_BASIS",
-				message:
-					"The Baseline changed while translation work was being paged; restart from the first page.",
-			});
-		}
-		const cursor: TranslationWorkCursor = decodedCursor ?? {
-			projectionId: projection._id,
-			catalogIndex: 0,
-			targetIndex: 0,
-		};
-		const rows = await ctx.db
-			.query("catalogWorkspaceNavigationRows")
-			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
-				q
-					.eq("projectId", token.projectId)
-					.eq("projectionId", projection._id)
-					.gte("catalogIndex", cursor.catalogIndex),
-			)
-			.take(MAX_WORK_QUEUE_SCAN_ROWS + 1);
-		const pageRows = rows.slice(0, MAX_WORK_QUEUE_SCAN_ROWS);
-		const needle = args.q?.trim().toLocaleLowerCase() ?? "";
-		const items: Array<{
-			messageId: string;
-			localeCode: string;
-			reasons: TranslationWorkReason[];
-			sourceValue: string;
-			targetValue: string;
-		}> = [];
-
-		for (let rowIndex = 0; rowIndex < pageRows.length; rowIndex += 1) {
-			const row = pageRows[rowIndex];
-			if (!row) continue;
-			const targetStart =
-				row.catalogIndex === cursor.catalogIndex ? cursor.targetIndex : 0;
-			if (
-				targetStart >= row.targets.length &&
-				row.catalogIndex === cursor.catalogIndex
-			) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "Translation work pagination cursor is invalid.",
-				});
-			}
-			if (needle && !row.searchCorpus.some((value) => value.includes(needle))) {
-				continue;
-			}
-			for (
-				let targetIndex = targetStart;
-				targetIndex < row.targets.length;
-				targetIndex += 1
-			) {
-				const target = row.targets[targetIndex];
-				if (
-					!target ||
-					(args.localeCode && target.localeCode !== args.localeCode)
-				) {
-					continue;
-				}
-				const reasons = translationWorkReasons(row, target).filter((reason) =>
-					reasonSet.has(reason),
-				);
-				if (reasons.length === 0) continue;
-				const current = await currentWorkspaceTarget(
-					ctx,
-					token.projectId,
-					row.messageId,
-					target.localeId,
-				);
-				// An empty Source value is source-data evidence, not untranslated
-				// target work and not an Intentional Blank. Keep it out of every
-				// translation-repair reason instead of asking agents to invent text.
-				if (current.source.value.length === 0) continue;
-				const item = {
-					messageId: row.messageId,
-					localeCode: target.localeCode,
-					reasons,
-					sourceValue: current.source.value,
-					targetValue: current.value,
-				};
-				if (byteLength([...items, item]) > MAX_WORK_QUEUE_RESPONSE_BYTES) {
-					if (items.length === 0) {
-						throw new ConvexError({
-							code: "LIMIT_EXCEEDED",
-							message:
-								"One translation work item exceeds the response envelope.",
-						});
-					}
-					return {
-						projectionId: projection._id,
-						items,
-						nextCursor: encodeTranslationWorkCursor({
-							projectionId: projection._id,
-							catalogIndex: row.catalogIndex,
-							targetIndex,
-						}),
-					};
-				}
-				items.push(item);
-				if (items.length === args.limit) {
-					return {
-						projectionId: projection._id,
-						items,
-						nextCursor: nextTranslationWorkCursor(
-							rows,
-							rowIndex,
-							targetIndex,
-							projection._id,
-						),
-					};
-				}
-			}
-		}
-		const overflow = rows[MAX_WORK_QUEUE_SCAN_ROWS];
-		return {
-			projectionId: projection._id,
-			items,
-			nextCursor: overflow
-				? encodeTranslationWorkCursor({
-						projectionId: projection._id,
-						catalogIndex: overflow.catalogIndex,
-						targetIndex: 0,
-					})
-				: null,
-		};
 	},
 });
 
@@ -2823,7 +2247,7 @@ export const contextForReview = query({
 			return {
 				kind: "localeProposal" as const,
 				available: true as const,
-				localeCode: current.localeProposal.runtimeLocale,
+				localeCode: current.localeProposal.localeCode,
 				source: {
 					value: current.source.sourceValue,
 					icuType: current.source.source.icuType,
@@ -3283,32 +2707,6 @@ export const revokeCandidateReviewGrant = mutation({
 	handler: async (ctx, args) => await revokeReview(ctx, args.grantId),
 });
 
-const reviewSummaryValidator = v.object({
-	reviewId: v.id("agentTranslationCandidateReviews"),
-	decision: v.object({
-		kind: v.union(
-			v.literal("accept"),
-			v.literal("reject"),
-			v.literal("acceptWithEdits"),
-			v.literal("keepForCurrentSource"),
-			v.literal("intentionalBlank"),
-		),
-		reason: v.optional(v.string()),
-	}),
-	reviewer: v.object({
-		kind: v.union(
-			v.literal("user"),
-			v.literal("agent"),
-			v.literal("system"),
-			v.literal("repositoryAdapter"),
-		),
-		id: v.string(),
-	}),
-	reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
-	finalValueFingerprint: v.optional(v.string()),
-	createdAt: v.number(),
-});
-
 const agentReviewContextValidator = v.object({
 	kind: v.literal("candidate"),
 	proposalId: v.id("agentTranslationProposals"),
@@ -3346,6 +2744,7 @@ const agentReviewContextValidator = v.object({
 	latestReview: v.union(v.null(), reviewSummaryValidator),
 	reviewAuthorization: agentReviewAuthorizationValidator,
 	reviewToken: v.string(),
+	guidance: guidanceContextValidator,
 });
 
 const recordedReviewValidator = v.object({
@@ -3399,7 +2798,10 @@ async function contextForAgentReviewer(
 		latestReview: review ? reviewSummary(review) : null,
 		reviewAuthorization: authorization,
 	};
-	let context: Omit<Infer<typeof agentReviewContextValidator>, "reviewToken">;
+	let context: Omit<
+		Infer<typeof agentReviewContextValidator>,
+		"reviewToken" | "guidance"
+	>;
 	let mutableBasis: unknown;
 	if (proposal.target.kind === "catalogWorkspace") {
 		if (!revision.localeId || revision.basis.kind !== "catalogWorkspace")
@@ -3475,7 +2877,7 @@ async function contextForAgentReviewer(
 		};
 		context = {
 			...common,
-			localeCode: current.localeProposal.runtimeLocale,
+			localeCode: current.localeProposal.localeCode,
 			source: { value: current.source.sourceValue, ...current.source.source },
 			target: {
 				value: value?.value ?? "",
@@ -3490,20 +2892,27 @@ async function contextForAgentReviewer(
 			stagedValue: value,
 		};
 	}
-	if (byteLength(context) > 900 * 1024)
+	const reviewContext = {
+		...context,
+		guidance: await readGuidance(ctx, proposal.projectId, {
+			texts: [context.source.value],
+			localeCodes: [context.localeCode],
+		}),
+	};
+	if (byteLength(reviewContext) > 900 * 1024)
 		throw new ConvexError({
 			code: "LIMIT_EXCEEDED",
 			message: "One reviewer context exceeds its bounded byte envelope.",
 		});
 	const reviewToken = await sha256Hex(
 		JSON.stringify({
-			context,
+			context: reviewContext,
 			mutableBasis,
 			latestReviewId: review?._id ?? null,
 			policyRevision: authorized.policyRevision,
 		}),
 	);
-	return { ...context, reviewToken };
+	return { ...reviewContext, reviewToken };
 }
 
 export const contextForAgentReview = internalQuery({

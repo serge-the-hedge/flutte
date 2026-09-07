@@ -26,13 +26,22 @@ milliseconds, and the standard `Retry-After` response header in seconds. Honor
 the header and retry with backoff; do not treat a rate limit as validation
 failure.
 
+Translation, discovery, and candidate-review requests do not require CLI version
+headers. The project CLI protocol floor applies to Repository Adapter endpoints
+and the legacy CLI reads `GET /locale-proposals/pt` and
+`GET /locale-proposals/pt/artifact`. Those clients send
+`X-Blabla-CLI-Protocol`; an incompatible or missing protocol returns `426` with
+`CLI_UPGRADE_REQUIRED`. Successful CLI responses advertise any configured minimum
+version and protocol in `X-Blabla-Minimum-CLI-Version` and
+`X-Blabla-Minimum-CLI-Protocol`.
+
 ## Human Setup
 
 1. Open the project in the web app.
 2. Go to **Settings -> API tokens**.
 3. Create a project-scoped token with the minimum scopes:
    - Translation agents: `read`, `search`, `propose`.
-   - Independent Reviewer Agents: `read`, `review`, using a separate credential.
+   - Independent Reviewer Agents: `read`, `search`, `review`, using a separate credential.
    - Local Repository Adapter delivery: `export`.
    - The default workspace connection has `read`, `search`, `propose`, `export`,
      and `snapshot-submission` for the complete local workflow. It never has
@@ -54,8 +63,11 @@ intentionally one-time visible.
 ## Preferred Agent Workflow
 
 1. Discover the project with `GET /projects/current`.
-2. Search the accepted Catalog Workspace with `GET /workspace/search`, using
-   `q`, `localeCode`, and `limit` to keep the working set small.
+2. Find examples with `GET /workspace/search`, usually using `localeCode`,
+   `quality=confirmed`, and `view=compact`. Choose `searchIn=source` or `target`
+   when the field matters. Follow `nextCursor` until it is null, including
+   empty intermediate pages. Broaden to `quality=all` to inspect unconfirmed
+   imports, with their evidence labels intact.
    For an exhaustive repair run, page `GET /workspace/work` instead; its
    projection-pinned cursor covers missing, Source-identical, same-key repeated,
    and stale target values without treating equal text on unrelated keys as a
@@ -64,7 +76,9 @@ intentionally one-time visible.
    plan with `GET /workspace/ordinary-confirmations`; this endpoint never
    confirms values itself.
 3. For a human-selected task, read it with
-   `GET /translation-tasks/:id?cursor=...&limit=...`. To start an agent-owned
+   `GET /translation-tasks/:id?cursor=...&limit=...`. Each page also includes
+   applicable Dictionary terms and Locale voice guidance once, with immutable
+   citations. To start an agent-owned
    task instead, call `POST /translation-tasks`. Existing-Locale tasks freeze
    up to 32 selected message ids; a new-Locale task covers the complete pinned
    Source template and needs no client-supplied ids.
@@ -144,11 +158,16 @@ do not pass both translation and reviewer credentials to one agent.
 1. Get the candidate revision's review URL from the human review workbench.
 2. Read `GET /candidate-reviews/:revisionId` using the reviewer token. A
    `kind: "candidate"` response contains Source, current target, candidate text,
-   blank reasons, basis status, authorization, and an opaque `reviewToken`.
+   blank reasons, basis status, authorization, applicable human guidance, and an
+   opaque `reviewToken`.
    Inspect these facts. A `kind: "recordedReview"` response instead contains
    `latestReview`: the recorded decision, actual reviewer, authorization,
    timestamp, and any final value fingerprint. It has no `reviewToken` and
    requires no new decision.
+   Use `/workspace/search` and `/workspace/context` with the same reviewer
+   credential to inspect established wording for related messages before
+   deciding. Catalog access does not authorize reviewing another revision; each
+   candidate still requires project policy or its own human delegation.
 3. Submit `POST /candidate-reviews/:revisionId` with the returned opaque
    `reviewToken` and a decision, for example:
 
@@ -159,7 +178,7 @@ do not pass both translation and reviewer credentials to one agent.
    To reject, use `{ "kind": "reject", "reason": "Explain the defect" }`.
    Acceptance applies exact candidate bytes; it cannot supply an edited value.
    An Intentional Blank must already have its reason in the candidate.
-4. If Source, target, candidate, prior review, or authority changed, fetch fresh
+4. If Source, target, candidate, prior review, guidance, or authority changed, fetch fresh
    context and reassess it. Do not reuse the prior verdict automatically.
 5. Report the recorded review result. Rejection leaves the live value unchanged;
    acceptance records the reviewer identity and human authorization. The reviewer
@@ -209,15 +228,122 @@ integration needs.
 
 ### `GET /projects/current`
 
-Returns compact project metadata: project id, name, source locale, locales,
-screens, and tags.
+Returns project identity, source and active Locale codes, the current token's
+scopes, and supported retrieval capabilities and bounds. `newLocaleTargets`
+lists the configured Portuguese introduction when Portuguese is not active.
+`context.codeContext` is `unavailable` until source-code context is implemented.
+Historical screens and tags are no longer advertised as usable context.
 
 ### `GET /workspace/search`
 
-Searches the accepted Catalog Workspace rather than the legacy translation
-tables. Query params are `q`, `localeCode`, and `limit` (maximum 50). Each
-result includes the message id, source facts, current target value, and the
-target `basis` needed by a candidate revision.
+Searches effective Source and current Target Values in Catalog Order. It uses
+case-folded literal substrings, preserving punctuation, accents, and unspaced
+scripts. It does not stem words, repair typos, or rank semantic similarity.
+Native Convex text search was evaluated against the six real catalogs and
+missed internal Chinese term occurrences; see the
+[evaluation](../reports/native-convex-search-evaluation-2026-09-07.md).
+
+| Parameter | Meaning |
+| --- | --- |
+| `q` | Search text, at most 2,048 UTF-8 bytes; optional for browsing |
+| `localeCode` | Restrict Target Values to one active Locale |
+| `searchIn` | `all` (default), `key`, `source`, or `target` |
+| `match` | `substring` (default) or case-sensitive, byte-exact `exact` |
+| `keyPrefix` | Optional case-sensitive message identifier prefix |
+| `quality` | `all` (default) or `confirmed` |
+| `view` | `full` (default) or `compact` for example discovery |
+| `limit` | Integer 1–50, default 16 |
+| `cursor` | Opaque `nextCursor` from the preceding page |
+
+`quality=confirmed` requires a nonempty, contract-valid value confirmed against
+its current effective Source and no pending First Review. It is a reliable
+starting set, not a claim that each value is a curated voice example. Inspect
+`evidence.confirmation` for its real actor and authorization; batch confirmation
+and editorial curation are different acts. A settled Git value may still differ
+from a pending Source Proposal, so use `sourceMatchesCurrent` instead of
+inferring currency from `valueState` alone.
+
+Each result includes bilingual text, matched fields, and evidence: current value
+state, source currency, contract validity, First Review, confirmation provenance,
+blank reason when applicable, and a stable reference. Full results additionally
+carry bounded ICU facts and the legacy candidate `basis`; use context when those
+facts are needed. Search uses the same effective values as submission and review.
+
+Pages scan at most 64 Navigation keys and hydrate at most 64 candidate pairs;
+responses stay below 512 KiB. An exact key query uses the existing equality index.
+`nextCursor: null` means completion. A non-null cursor can accompany an empty
+page or a page with fewer than `limit` results; `hasMore` means there is more
+scope to scan, not that another match is guaranteed. Changing filters requires
+starting again. Catalog or Source Proposal changes return `STALE_BASIS` (409)
+instead of silently mixing evidence. Invalid parameters return 400; unknown or
+archived requested Locales return 404.
+
+### `POST /proposal-examples/search`
+
+Finds reviewed examples inside a new-Locale proposal before it is bound into the
+Catalog Workspace. Requires `read` and `search`. It accepts the same `q`,
+`searchIn`, `match`, `keyPrefix`, `limit`, and `cursor` fields as Workspace search,
+plus one access scope:
+
+```json
+{
+  "scope": { "kind": "task", "taskId": "<new-Locale task>" },
+  "q": "peças",
+  "searchIn": "target",
+  "limit": 8
+}
+```
+
+An independent reviewer instead supplies
+`{ "kind": "review", "candidateRevisionId": "<authorized revision>" }`.
+The server checks current human authorization for every request. Task scope
+preserves token-owned task privacy; a reviewer never needs the translating
+credential or `propose` scope. Existing-Locale examples use Workspace search.
+
+Results contain `items`, proposal/snapshot identities and revision, and an opaque
+`nextCursor`. Each item has exact Source/target text, matched fields, and
+`provenance.kind: "reviewedDraft"` with the real author/reviewer evidence.
+Only human-authored or authorized reviewed values matching the current pinned
+Source and contract qualify; unreviewed submissions are excluded. A deliberate
+blank retains its reason. These examples are draft evidence, not Release Truth.
+
+Reads scan at most 64 staged values, stop at their byte budget, and fetch Source
+rows by index instead of downloading the Source template repeatedly. Continue
+through empty pages until `nextCursor` is null. Changed proposal content, search
+scope, or Snapshot requires a fresh search. Old snapshot examples are not silently
+presented against a newer baseline.
+
+### `POST /guidance/context`
+
+Reads human-maintained Dictionary terms and voice guides. Requires `read`:
+
+```json
+{ "texts": ["Build with Brickit"], "locales": ["de", "pt"] }
+```
+
+Returns the current guidance `revision`, applicable `terms`, and Locale `guides`.
+Each term is returned once with `matchedTextIndexes` into `texts`, its definition,
+requested Locale renderings, author, timestamp, and immutable `revisionId`.
+Untranslatable Terms have no Locale variants. Matching is case-sensitive within
+literal message text; ICU argument names, selectors and formatter options do not
+become terminology matches, and plural counts separate literal runs. Word
+boundaries prevent `Start` matching `Restart`;
+unspaced scripts can match inside a literal segment. No fuzzy term inference is
+performed.
+
+Limits: 50 Source texts, 20 canonical target Locale codes, and 512 KiB for Source
+texts or returned guidance. Portuguese guidance is available before its Locale
+Proposal is created. Guidance starts empty; missing entries are not instructions
+to infer a project policy from popular wording.
+
+Editors maintain it at **Settings → Translation guidance**. API tokens cannot
+write it. Drafts survive failed/stale saves; editors must compare changed saved
+entries before deliberately retaining their draft. Updating or removing an entry
+preserves its earlier citation. Read one with
+`GET /guidance/revisions/:revisionId` using the same project's `read` credential.
+Correcting a Locale code during initial setup carries its guidance forward
+atomically and preserves earlier citations. Conflicting destination guidance must
+be resolved before that correction can proceed.
 
 ### `GET /workspace/work`
 
@@ -237,7 +363,9 @@ strings plus every applicable reason. The opaque `nextCursor` is `null` at the
 end; pass a non-null cursor back unchanged. It is pinned to the active Catalog
 Projection, so a Baseline change returns `STALE_BASIS` instead of combining two
 catalog versions. The queue scans only a bounded Navigation Index range and
-hydrates full values only for matches.
+hydrates full values only for matches. `q` searches the message identifier,
+effective Source, and the returned target's text, respecting `localeCode`.
+Archived Locales are excluded.
 
 This is the discovery seam for claims such as “all missing translations.” Use
 `GET /workspace/search` for open-ended terminology and similar-key lookup. A
@@ -248,8 +376,9 @@ For a complete repair run, page one `localeCode` at a time. Create one
 Translation Task from each non-empty page, use `POST /workspace/context` to read
 the same keys across the established Locales, and submit candidates to that
 task. Do not interleave review acceptance with the initial discovery pass. After
-review, restart the queue from its first page and require an empty result before
-claiming the selected reasons are exhausted; this catches work invalidated or
+review, restart the queue and require zero matches across a complete pass ending
+at `nextCursor: null` before claiming the selected reasons are exhausted. An empty
+intermediate page does not prove completion. This catches work invalidated or
 introduced while the run was open.
 
 ### `GET /workspace/ordinary-confirmations`
@@ -280,9 +409,15 @@ Body:
 }
 ```
 
-Returns exact source/target values and bounded ICU facts for the requested
-pairs. The response's `basis` must be passed unchanged to
-`POST /translation-proposals/:id/candidate-revisions`.
+Returns exact Source/target values, bounded ICU facts, and the same evidence as
+search for at most 50 unique keys, 20 unique Locales, and 128 pairs. Unavailable
+pairs are listed in `missing`; they are never silently discarded. `guidance`
+contains shared applicable terms and voice guides once; its text indexes refer
+to the ordered `guidanceMessageIds`. `codeContext.status` is explicitly
+`unavailable`. The entire response is bounded to 512 KiB; request fewer pairs if
+it exceeds that envelope. The response's `basis` must be passed unchanged to the
+lower-level `POST /translation-proposals/:id/candidate-revisions`. Normal task
+submission does not require copying it.
 
 ### `POST /translation-proposals`
 
@@ -359,9 +494,22 @@ Existing-Locale targets come from their frozen selection but resolve exact
 Source and current reviewed target text when each page is read. A Source
 Proposal or target edit therefore updates the existing task rather than making
 the entire key selection obsolete. New-Locale targets page the complete pinned
-Source template. A new-Locale target also returns its current immutable
-candidate revision, when one exists. Private Snapshot, fingerprint, workspace,
-and Convex-id basis fields are not exposed.
+Source template. Each target returns `candidate: null` or its newest immutable
+candidate revision: `revisionId`, `revision`, `value`, any Intentional Blank
+reason, and `latestReview`. That review is `null` until this exact revision is
+reviewed; otherwise it includes the decision, bounded reason, reviewer,
+authorization, timestamp, and any final value fingerprint. Corrections do not
+inherit an older revision's verdict. This is historical feedback; current target
+text may have changed since that decision.
+
+Pages stop at 16 targets or 1 MiB of target payload, whichever comes first.
+Follow `nextCursor` even when fewer than the requested targets are returned.
+Private Snapshot and workspace concurrency basis fields are not exposed.
+
+Both task kinds return `guidance` once per page; `matchedTextIndexes` refer to
+`targets` in that page. Terms and voice guides are citable human-authored rules.
+Source texts supplied to guidance are capped at 512 KiB; reduce `limit` for large
+messages. Target/candidate feedback has its separate 1 MiB page envelope.
 
 ### `POST /translation-tasks/:id/candidates`
 

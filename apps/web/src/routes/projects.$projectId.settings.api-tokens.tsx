@@ -56,7 +56,7 @@ const workspaceScopes: TokenScope[] = [
 	"export",
 	"snapshot-submission",
 ];
-const reviewerScopes: TokenScope[] = ["read", "review"];
+const reviewerScopes: TokenScope[] = ["read", "search", "review"];
 type ApiToken = FunctionReturnType<typeof api.apiTokens.list>[number];
 
 export const Route = createFileRoute(
@@ -168,8 +168,8 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 							<CardDescription>
 								Workspace credentials let local commands sync snapshots and
 								deliver reviewed bundles, and agents propose translations.
-								Reviewer credentials belong to a separate agent and only read
-								and review authorized candidates.
+								Reviewer credentials belong to a separate agent, with catalog
+								search and access to authorized candidate reviews.
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -197,9 +197,9 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 									{isReviewer ? (
 										<p className="text-muted-foreground text-xs">
 											Give this credential only to a separate reviewer agent. It
-											can read and review authorized candidates, but cannot
-											propose translations, submit snapshots, or deliver
-											changes.
+											can search the catalog and review authorized candidates,
+											but cannot propose translations, submit snapshots, or
+											deliver changes.
 										</p>
 									) : null}
 									<Field>

@@ -395,9 +395,16 @@ _Avoid_: empty translation, copied source, approved deviation
 
 **Dictionary**:
 A Blabla-owned, project-scoped, translator-facing record of how particular
-terms are handled. It explains Source Echoes and flags Dictionary Conflicts; it
-never gates a release and never reaches the catalog files.
+terms are handled, including definitions and chosen Locale renderings. It guides
+wording, explains Source Echoes, and identifies Dictionary Conflicts without
+becoming catalog content or release authority.
 _Avoid_: ARB metadata, translation memory, glossary export
+
+**Voice Guide**:
+A human-authored statement of a Locale's audience, tone and editorial conventions,
+with curated examples that translators and reviewers can cite. It expresses
+chosen practice independently of how often wording appears in the catalog.
+_Avoid_: inferred style, translation memory, release rule
 
 **Untranslatable Term**:
 A Dictionary entry naming a term that is never translated in any Locale, with a

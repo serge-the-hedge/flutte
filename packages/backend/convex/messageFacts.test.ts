@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { messageFacts } from "./messageFacts";
+import { messageFacts, messageLiteralParts } from "./messageFacts";
 
 describe("message facts", () => {
 	test("collects nested ICU arguments without treating plural arm text as a placeholder", () => {
@@ -20,5 +20,27 @@ describe("message facts", () => {
 			icuType: "icu",
 			argumentNames: ["name", "gender"],
 		});
+	});
+
+	test("returns only literal runs while preserving quoted text and separating plural alternatives", () => {
+		expect(
+			messageLiteralParts(
+				"Don't {name}; '{Brand}' {count, plural, one{One Brickit} other{Many Brickit}} {cost, number, currency}",
+			),
+		).toEqual(["Don't ", "; {Brand} ", "One Brickit", "Many Brickit", " "]);
+		expect(messageLiteralParts("Start{name} now")).toEqual(["Start", " now"]);
+		expect(messageLiteralParts("Players'")).toEqual(["Players'"]);
+	});
+
+	test("separates plural substitutions from literal and quoted number signs", () => {
+		expect(messageLiteralParts("# models")).toEqual(["# models"]);
+		expect(
+			messageLiteralParts("{count, plural, other{# models; '#' models}}"),
+		).toEqual([" models; # models"]);
+		expect(
+			messageLiteralParts(
+				"{count, plural, other{Before#{kind, select, other{# models}}}}",
+			),
+		).toEqual(["Before", " models"]);
 	});
 });

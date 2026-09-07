@@ -6,6 +6,10 @@ import {
 	agentReviewPolicyValidator,
 } from "./agentReviewModel";
 import { releaseAssessmentFields } from "./releaseRecordModel";
+import {
+	guidanceAuthorshipFields,
+	guidanceContentValidator,
+} from "./translationGuidanceModel";
 
 const role = v.union(
 	v.literal("owner"),
@@ -300,6 +304,31 @@ export default defineSchema({
 		.index("by_project", ["projectId"])
 		.index("by_project_email", ["projectId", "emailLower"])
 		.index("by_email", ["emailLower"]),
+
+	// Human-maintained translation references are independent of release truth.
+	// Heads bound current reads; immutable revisions keep old citations useful.
+	translationGuidanceStates: defineTable({
+		projectId: v.id("projects"),
+		revision: v.number(),
+		termCount: v.number(),
+		guideCount: v.number(),
+		byteLength: v.number(),
+	}).index("by_project", ["projectId"]),
+
+	translationGuidanceEntries: defineTable({
+		projectId: v.id("projects"),
+		key: v.string(),
+		content: guidanceContentValidator,
+		revisionId: v.id("translationGuidanceRevisions"),
+		...guidanceAuthorshipFields,
+	}).index("by_project_and_key", ["projectId", "key"]),
+
+	translationGuidanceRevisions: defineTable({
+		projectId: v.id("projects"),
+		key: v.string(),
+		content: v.union(guidanceContentValidator, v.null()),
+		...guidanceAuthorshipFields,
+	}).index("by_project_and_revision", ["projectId", "revision"]),
 
 	locales: defineTable({
 		projectId: v.id("projects"),

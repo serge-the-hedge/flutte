@@ -28,6 +28,7 @@ import {
 	currentWorkspaceRows,
 	decisionIdentity,
 	decisionRecordMap,
+	decisionSourceFingerprintFor,
 	encodedSize,
 	sourceChangeMap,
 	translatorConfirmationMap,
@@ -243,13 +244,12 @@ export async function deriveNavigationDigest(input: {
 		// The same source-fingerprint rule as the complete read: a pending
 		// Source Proposal leaves Git-settled targets alone, keeps same-pass
 		// work current, and makes work against an older candidate stale.
-		const decisionSourceFingerprint =
-			pendingSourceProposalFingerprint === undefined
-				? sourceEffective.sourceFingerprint
-				: effective.sourceFingerprint === sourceRow.sourceFingerprint ||
-						effective.sourceFingerprint === pendingSourceProposalFingerprint
-					? effective.sourceFingerprint
-					: pendingSourceProposalFingerprint;
+		const decisionSourceFingerprint = decisionSourceFingerprintFor({
+			gitSourceFingerprint: sourceRow.sourceFingerprint,
+			currentSourceFingerprint: sourceEffective.sourceFingerprint,
+			valueSourceFingerprint: effective.sourceFingerprint,
+			pendingSourceProposalFingerprint,
+		});
 		const decision = currentDecisionForValue({
 			row: targetRow,
 			sourceFingerprint: decisionSourceFingerprint,
