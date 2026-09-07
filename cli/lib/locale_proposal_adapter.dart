@@ -344,6 +344,7 @@ class RepositoryAdapter {
         'This checkout is on $currentBranch, but this proposal delivers into ${artifact.sourceSnapshot.integrationBranch}. Check out ${artifact.sourceSnapshot.integrationBranch} and retry.',
       );
     }
+    final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
     await _ensureRelevantPathsAreClean(checkout);
     await _ensureIndexIsClean(checkout);
     await _ensureCommitIdentity(checkout);
@@ -354,6 +355,7 @@ class RepositoryAdapter {
       _runner,
       checkout,
       prefix: 'blabla-locale-proposal-',
+      commit: appliedOnto,
     );
     try {
       await _runGenerator(staging.root, request.flutter);
@@ -375,10 +377,10 @@ class RepositoryAdapter {
         changedPaths,
       );
 
-      // The checked files were clean before staging. Check once more immediately
-      // before switching branches so a concurrent edit cannot be overwritten.
-      await _ensureRelevantPathsAreClean(checkout);
       await _portuguese.ensureUnchanged(request.gateway, artifact);
+      await _ensureRelevantPathsAreClean(checkout);
+      await _ensureIndexIsClean(checkout);
+      await staging.ensureCheckoutUnchanged(currentBranch);
       await _git(checkout, ['switch', '-c', branchName]);
       await _writeCandidateFiles(checkout, candidateFiles);
       await _git(checkout, ['add', '--', ...changedPaths]);

@@ -59,8 +59,9 @@ still pending.
 | Message first accepted after bootstrap | It becomes an Introduced Message permanently. Locales active at introduction form its frozen First Review scope. |
 | Source identifier or bound Locale absent | Its retained state is soft-archived. An unbound file is setup evidence, not an active Locale. |
 
-Bootstrap is the only broad trust boundary. Its batch policy never transfers to
-later introductions.
+Bootstrap permits the initial broad confirmation. A later introduction must
+complete First Review through deliberate per-Locale human decisions before any
+subsequent value can qualify for ordinary batch confirmation.
 
 For an Introduced Message:
 

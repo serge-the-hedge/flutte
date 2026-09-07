@@ -134,7 +134,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
   final Uri baseUrl;
   final String token;
   final void Function(String line)? onWarning;
-  String? _lastCompatibilityWarning;
+  final _compatibility = CliCompatibility();
 
   @override
   Future<SnapshotSyncContext> readContext() async {
@@ -244,15 +244,14 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
           : client.postUrl(_endpoint(suffix)));
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set('X-Blabla-CLI-Version', blablaCliVersion);
-      request.headers.set('X-Blabla-CLI-Protocol', '$blablaCliProtocol');
+      _compatibility.stamp(request.headers);
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
       }
       final response = await request.close();
       final text = await utf8.decoder.bind(response).join();
-      _checkCompatibility(response);
+      _compatibility.check(response.headers, onWarning: onWarning);
       if (response.statusCode != HttpStatus.ok) {
         throw RepositoryAdapterException(
           'Blabla rejected the snapshot sync request (${response.statusCode}). ${_errorMessage(text)}',
@@ -292,26 +291,6 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       // The status line remains useful when a proxy returned non-JSON text.
     }
     return 'Check the checkout, token scope, and project setup.';
-  }
-
-  void _checkCompatibility(HttpClientResponse response) {
-    final requiredProtocol = int.tryParse(
-      response.headers.value('X-Blabla-Minimum-CLI-Protocol') ?? '',
-    );
-    if (requiredProtocol != null && requiredProtocol > blablaCliProtocol) {
-      throw RepositoryAdapterException(
-        'Blabla requires CLI protocol $requiredProtocol, but this binary supports $blablaCliProtocol. Install a newer Blabla CLI before retrying.',
-      );
-    }
-    final minimumVersion = response.headers.value(
-      'X-Blabla-Minimum-CLI-Version',
-    );
-    if (minimumVersion == null || minimumVersion == blablaCliVersion) return;
-    final warning =
-        'A newer Blabla CLI ($minimumVersion or newer) is available. This sync remains compatible.';
-    if (_lastCompatibilityWarning == warning) return;
-    _lastCompatibilityWarning = warning;
-    onWarning?.call(warning);
   }
 }
 

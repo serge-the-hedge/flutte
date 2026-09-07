@@ -1,13 +1,24 @@
 # Blabla as Brickit's localization control plane — ready-to-build specification
 
-Status: **locked**. Every decision below is closed. This document is the single
-place a builder reads before splitting the work into implementation tickets; it
-does not restate the reasoning, it states the rule and links to the ticket that
-holds the reasoning and the measurement.
+Status: **accepted design, partly implemented**. This document defines the
+intended product rules; it is not a claim that every specified surface ships.
+The Agent API guide describes the callable workflow, and the catalog message
+lifecycle describes the implemented review boundary. Keep all three aligned
+when a product decision changes.
+
+| Area | Implementation status |
+| --- | --- |
+| Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
+| Translation Tasks, immutable agent candidates, human review | Implemented |
+| Release assessment, bundles, existing-Locale and Portuguese delivery | Implemented |
+| Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
+| Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
+| Dictionary and explained Source Echoes | Planned; current UI only observes source-identical text |
+| MCP adapter | Planned; HTTP is the supported agent transport |
 
 Charted by [Wayfinder: Make Blabla Brickit's trusted localization control
-plane](https://github.com/serge-the-hedge/blabla/issues/4) and locked by [Lock
-the ready-to-build specification](https://github.com/serge-the-hedge/blabla/issues/14).
+plane](https://github.com/serge-the-hedge/flutte/issues/4) and locked by [Lock
+the ready-to-build specification](https://github.com/serge-the-hedge/flutte/issues/14).
 
 Vocabulary is `CONTEXT.md` at the repo root. Every capitalized term here is
 defined there, and no synonym it lists under _Avoid_ appears in this document.
@@ -25,8 +36,8 @@ sole author of its executable Source Contract.
 
 The first supported surface is the six-file Flutter ARB catalog in
 `../brickit-app/brickit-flutter`: `intl_en.arb` plus `de`, `es`, `fr`, `ru`,
-`zh`, at `packages/brickit_generated/lib/l10n/`. 1,434 keys, 8,604 target
-values, one translator.
+`zh`, at `packages/brickit_generated/lib/l10n/`. 1,434 keys, 7,170 target
+values across five target Locales (8,604 values including English), one translator.
 
 Three properties define the system, and everything else follows from them.
 
@@ -34,13 +45,13 @@ Three properties define the system, and everything else follows from them.
 values, and executable ARB metadata originate in a Flutter pull request. Blabla
 may propose an English *value* change and may never author anything else on the
 source side. [Decide where localization source changes
-originate](https://github.com/serge-the-hedge/blabla/issues/5), [Decide how
-Source Proposals reach Git](https://github.com/serge-the-hedge/blabla/issues/21)
+originate](https://github.com/serge-the-hedge/flutte/issues/5), [Decide how
+Source Proposals reach Git](https://github.com/serge-the-hedge/flutte/issues/21)
 
 **Blabla holds no Git credential.** It cannot fetch, push, open a pull request,
 or read a PR feed. Everything that touches the repository is done by a developer
 running a command in their own checkout under their own identity. [Decide the
-first Flutter repository adapter](https://github.com/serge-the-hedge/blabla/issues/12)
+first Flutter repository adapter](https://github.com/serge-the-hedge/flutte/issues/12)
 
 **Nothing begins unattended.** No scheduler, poller, webhook, or reconciliation
 loop may initiate work. Every ingest, assessment, delivery, or maintenance run
@@ -61,7 +72,7 @@ The **Localization Sync Module** owns the whole lifecycle from a Git-addressed
 Source Snapshot to a deterministic Release Bundle. Web, agent API, HTTP, and the
 developer CLI are adapters into it, never parallel implementations of the
 workflow. [Design the Localization Sync module
-interface](https://github.com/serge-the-hedge/blabla/issues/9)
+interface](https://github.com/serge-the-hedge/flutte/issues/9)
 
 External workflow commands:
 
@@ -75,7 +86,7 @@ buildRelease(input: ReleaseBuildRequest): Promise<ReleaseBuildRun>
 `recordFallbackApproval` from the original interface **does not exist** — the
 decision it served was deleted. `attachContextManifest` is new, because [Decide
 how the code-context manifest is
-produced](https://github.com/serge-the-hedge/blabla/issues/18) made a manifest
+produced](https://github.com/serge-the-hedge/flutte/issues/18) made a manifest
 separately submittable against a commit Blabla already holds.
 
 Behind the seam: ARB parsing and losslessness, ICU and generated-interface
@@ -96,7 +107,7 @@ script. Never `dart pub global activate` — it demonstrably ignores the committ
 lockfile and hands each developer a different parser. Source lives in a
 top-level `cli/` directory outside the Bun workspace globs, with its own build
 matrix. [Decide the developer command's distribution and toolchain
-contract](https://github.com/serge-the-hedge/blabla/issues/20)
+contract](https://github.com/serge-the-hedge/flutte/issues/20)
 
 It is a **thin client**: Git and toolchain I/O only. Every byte that lands in a
 catalog is decided server-side, so two developers on different CLI versions
@@ -135,52 +146,52 @@ Non-negotiable. Each is enforced somewhere concrete, named here.
 
 1. **`@@locale` matches the Locale Binding.** A bound file declaring a different
    canonical code rejects snapshot publication. [Decide locale identity and
-   migration](https://github.com/serge-the-hedge/blabla/issues/10)
+   migration](https://github.com/serge-the-hedge/flutte/issues/10)
 2. **Snapshot Identity is project + repository + commit + content-hashed file
    manifest**, and ingestion is idempotent on it. A resubmission resumes or
    returns the existing run. [Decide snapshot sync and reconciliation
-   semantics](https://github.com/serge-the-hedge/blabla/issues/7)
+   semantics](https://github.com/serge-the-hedge/flutte/issues/7)
 3. **Publication is atomic.** A snapshot and its reconciliation appear together
    or not at all; failure yields diagnostics and no partial baseline, archive,
    or catalog change.
 4. **Message identifiers survive exactly.** They are generated Dart API
    identity. Normalization is forbidden; unsupported identifiers are rejected.
    [Define what lossless Flutter round-tripping
-   means](https://github.com/serge-the-hedge/blabla/issues/6)
+   means](https://github.com/serge-the-hedge/flutte/issues/6)
 5. **Absence, intentional emptiness, and source fallback stay distinct.** Export
    never invents `""`. It writes `""` only where an Intentional Blank records
    why. [Prototype the release record and batch-decision
-   experience](https://github.com/serge-the-hedge/blabla/issues/16)
+   experience](https://github.com/serge-the-hedge/flutte/issues/16)
 6. **Contract Validity is non-waivable.** Invalid ICU, or a target that does not
    leave its Message Signature and the source's declared metadata intact, leaves
    the release Blocked. [Set the Brickit release-readiness
-   policy](https://github.com/serge-the-hedge/blabla/issues/8)
+   policy](https://github.com/serge-the-hedge/flutte/issues/8)
 7. **A target value's argument set is a subset of the source's**, checked at
    save. A target may not introduce an argument. [Decide the automatic transform
    catalogue for contract
-   changes](https://github.com/serge-the-hedge/blabla/issues/23)
+   changes](https://github.com/serge-the-hedge/flutte/issues/23)
 8. **Every plural and select block carries `other`**, in every Locale, or
    `gen-l10n` aborts. [Decide how compound ICU shapes are
-   edited](https://github.com/serge-the-hedge/blabla/issues/26)
+   edited](https://github.com/serge-the-hedge/flutte/issues/26)
 9. **A Release Bundle never contains a Source Fallback.** An undecided value
    blocks its Locale instead.
 10. **Release Scope is every active bound target Locale.** A Locale leaves scope
     only through deliberate setup or a source change, never a per-release
     selection. Posture, however, is computed over the keys in the record's
     delta. [Decide how Source Proposals reach
-    Git](https://github.com/serge-the-hedge/blabla/issues/21)
+    Git](https://github.com/serge-the-hedge/flutte/issues/21)
 11. **Blabla-side context never reaches ARB and never becomes a Source
     Proposal.** [Bound automatic code-context
-    inference](https://github.com/serge-the-hedge/blabla/issues/11)
+    inference](https://github.com/serge-the-hedge/flutte/issues/11)
 12. **Delivery applies a Release Delta, never a complete file write.** Any key
     the release does not name keeps whatever the tree already holds. [Define the
     adapter's baseline-drift
-    contract](https://github.com/serge-the-hedge/blabla/issues/19)
+    contract](https://github.com/serge-the-hedge/flutte/issues/19)
 13. **A deleted key is never resurrected** by a delivery.
 14. **Imported metadata and document globals are immutable** in Blabla. Only
     target values and Blabla-side provenance are editable. [Choose the lossless
     ARB metadata storage
-    model](https://github.com/serge-the-hedge/blabla/issues/17)
+    model](https://github.com/serge-the-hedge/flutte/issues/17)
 
 ---
 
@@ -269,7 +280,7 @@ durable record**: a dispositioned consequence stays listed, struck through, with
 who and when. There is no separate report view and action view, and no moment
 where acting on something destroys the evidence it happened. [Prototype the
 reconciliation review and recovery
-experience](https://github.com/serge-the-hedge/blabla/issues/15)
+experience](https://github.com/serge-the-hedge/flutte/issues/15)
 
 Grouping, in order: Locale setup → Broken by a source change → Changed in Git →
 Archived by sync → To review → To translate. Scope first, then severity, then
@@ -325,7 +336,7 @@ Document**: ordered JSON members, all document globals, every message value,
 complete per-message metadata, raw placeholder objects, unknown extensions. The
 original bytes are kept as immutable snapshot evidence. There is no surgical
 raw-file overlay. [Choose the lossless ARB metadata storage
-model](https://github.com/serge-the-hedge/blabla/issues/17)
+model](https://github.com/serge-the-hedge/flutte/issues/17)
 
 The normalized catalog is a **derived workflow projection**, not a second source
 of truth: message identity, source and target values, provenance, Locale
@@ -426,7 +437,7 @@ type conflict.
 ignoring underscores, 96% prefix-contiguous, maintained by nobody. Waiting work
 marks itself and **never sorts ahead**: a list that rearranges as you work it is
 the failure this map has rejected twice. [Decide how a translator finds their
-way through the catalog](https://github.com/serge-the-hedge/blabla/issues/25)
+way through the catalog](https://github.com/serge-the-hedge/flutte/issues/25)
 
 **Navigation loads the whole key set, but not the Locale values.** It returns
 one compact digest per key, including Catalog Order, the search corpus, and the
@@ -491,7 +502,7 @@ half years.
 
 Every Locale of a key, **open, full width, in one scroll**. No source panel, no
 disclosure, nothing to operate before typing. [Prototype the per-key translation
-editor](https://github.com/serge-the-hedge/blabla/issues/24)
+editor](https://github.com/serge-the-hedge/flutte/issues/24)
 
 - **Every value is a live field from first paint.** The caret lands where you
   click. Fields are borderless at rest, so a page of values reads as text.
@@ -533,7 +544,7 @@ top-level plural and select decomposes — not just the first. A target's segmen
 stack is independent of its source's, which is why a Chinese value that drops
 the plural entirely is an ordinary value here rather than an escape hatch.
 [Decide how compound ICU shapes are
-edited](https://github.com/serge-the-hedge/blabla/issues/26)
+edited](https://github.com/serge-the-hedge/flutte/issues/26)
 
 **A plural block is inline text carrying a dotted underline**, showing the
 `other` arm as the **Representative Arm**. Typing into it lands on **every arm**
@@ -581,7 +592,7 @@ is never the default view for a shape that decomposes.
 **One Context Disclosure per key card, present on all 1,434 keys** — including
 the 460 with nothing to show, so that absence reads as a sentence inside it
 rather than as a signal from a missing control. [Decide how code context reaches
-the translator](https://github.com/serge-the-hedge/blabla/issues/27)
+the translator](https://github.com/serge-the-hedge/flutte/issues/27)
 
 The split is decided by one test: **does this finding change the sentence you
 write, or does it only tell you where you are?** Only two things sit at rest on
@@ -622,7 +633,7 @@ Blabla-owned, project-scoped, translator-facing, never written to Git. Two entry
 kinds: an **Untranslatable Term** (never translated anywhere) and a translatable
 entry (one definition plus a rendering per Locale). [Decide the disposition of
 imported source-identical
-values](https://github.com/serge-the-hedge/blabla/issues/22)
+values](https://github.com/serge-the-hedge/flutte/issues/22)
 
 It does exactly two things: it silences a **Source Echo**, and it flags a
 **Dictionary Conflict**. No suggestions, no autocomplete, no enforcement.
@@ -677,7 +688,7 @@ plausible, and in the right language — exactly what Brickit ships today. Gatin
 ~195 target slots a month would make Blabla strictly slower to release than the
 workflow it replaces. A release containing 39 unconfirmed keys assesses
 **Ready**. [Decide how machine-generated placeholder translations are
-handled](https://github.com/serge-the-hedge/blabla/issues/28)
+handled](https://github.com/serge-the-hedge/flutte/issues/28)
 
 That non-blocking rule applies to ordinary imported backlog, not to a known
 post-bootstrap introduction. New Git keys commonly carry provisional target
@@ -795,7 +806,7 @@ Produced by the developer command **at submit time**, from a **parse-only** Dart
 syntax tree, carrying **raw references rather than findings**. Nothing is added
 to `brickit-flutter`: no workflow, no checked-in artifact, no `tool/` directory.
 [Decide how the code-context manifest is
-produced](https://github.com/serge-the-hedge/blabla/issues/18)
+produced](https://github.com/serge-the-hedge/flutte/issues/18)
 
 Parse-only is what makes this possible: the checkout is neither bootstrapped nor
 code-generated — `.dart_tool/package_config.json` exists in neither package and
@@ -910,7 +921,7 @@ specification** and no decision above waits on them; see §16.
 An **ordered sequence, not a data migration**. 121 of Blabla's 125 live keys
 already exist in the source catalog, and 120 of 121 target values per Locale are
 byte-identical to Git — there is no catalog to map. [Define live-data migration
-and cutover](https://github.com/serge-the-hedge/blabla/issues/13)
+and cutover](https://github.com/serge-the-hedge/flutte/issues/13)
 
 1. **Purge the test debris** — the four test keys (`for_testing_1..3`,
    `testing`), their values and history rows, the `testing` and `for-testing`
@@ -951,8 +962,11 @@ and cutover](https://github.com/serge-the-hedge/blabla/issues/13)
    only after a human approves this exact preview; ordinary product use records
    the authenticated editor instead.
 
-After this one bootstrap decision, a later Git introduction is never eligible
-for `ordinary-v1`, even when every target is non-empty and otherwise ordinary.
+A later Git introduction is excluded from `ordinary-v1` while any Locale in its
+frozen First Review scope is pending, even when its targets look ordinary. Each
+Locale needs a deliberate human decision. After that scope is complete, later
+Git values follow the ordinary confirmation/currency rules; introduction
+provenance remains permanent, but is not a permanent batch exclusion.
 
 **Shadow release**, both gates mechanical, before any bundle is authoritative:
 a **no-op** bundle reproducing the six ARB files byte for byte with a clean
@@ -1015,9 +1029,9 @@ Five things were consequences of the decisions rather than statements in them.
 They are decided here, on the record, so that no implementer has to guess.
 
 **1. Baseline lineage is a reported fact.** [Decide snapshot sync and
-reconciliation semantics](https://github.com/serge-the-hedge/blabla/issues/7)
+reconciliation semantics](https://github.com/serge-the-hedge/flutte/issues/7)
 requires Git ancestry to control baseline advancement; [Decide the first Flutter
-repository adapter](https://github.com/serge-the-hedge/blabla/issues/12) leaves
+repository adapter](https://github.com/serge-the-hedge/flutte/issues/12) leaves
 Blabla no way to compute it. The adapter reports the relationship it observes in
 the clone, and only a reported descendant advances the baseline — §5.1. The
 alternative readings both fail: verifying it needs the Git credential this map
@@ -1027,7 +1041,7 @@ that carry different keys.
 **2. Translation Review Mode is not built in the first version.** The term and
 its `Unreviewed Translation` stay reserved in `CONTEXT.md` for a project that
 needs a separate reviewer, but nothing renders it: [Prototype the per-key
-translation editor](https://github.com/serge-the-hedge/blabla/issues/24) made
+translation editor](https://github.com/serge-the-hedge/flutte/issues/24) made
 confirming and saving the same gesture, the postures in §9.1 have no
 awaiting-review state, and the specified workflow is one translator throughout.
 
@@ -1036,14 +1050,13 @@ single commit gesture saves one value. The durable grouping devices that survive
 are the Release Record's delta, the Reconciliation Report, the Work Hand-off,
 and the tag — all of which are sets of keys rather than staged edits.
 
-**4. An agent's write is not a Translator Confirmation.** A Confirmation records
-that *a human* affirmed a value, so a value written through the agent API lands
-as an ordinary current value with no Confirmation and derives as an Unconfirmed
-Import — the same treatment as machine text arriving through Git, which is the
-right answer for the same reason. A human accepting it is what confirms it,
-exactly as [Set the Brickit release-readiness
-policy](https://github.com/serge-the-hedge/blabla/issues/8) described assisted
-work.
+**4. An agent submits a Candidate Value, not a current value.** The agent API
+appends immutable candidates inside Translation Tasks. Submission changes
+neither the Catalog Workspace nor human confirmation evidence. An authenticated
+editor accepts, edits, or rejects the candidate through the task's review
+workflow; accepting a value records its applied basis and Translator
+Confirmation. Imported text from Git remains a separate path and may derive as
+an Unconfirmed Import. See [Agent Translation Guide](../agent-api.md).
 
 **5. English is never an Unconfirmed Import.** Git authors it, and making
 English an editable peer Locale in the editor does not change who writes it in
@@ -1099,21 +1112,21 @@ This is every such case.
 
 | Retired | By | Now |
 |---|---|---|
-| `Fallback Approval`, `Batch Decision`, `Ready with Deviations` | [#16](https://github.com/serge-the-hedge/blabla/issues/16) | Deleted. Postures are Blocked / Needs Decisions / Ready. A translator wanting English types it. |
-| `recordFallbackApproval` in the module interface | [#16](https://github.com/serge-the-hedge/blabla/issues/16) | Removed; `attachContextManifest` added by [#18](https://github.com/serge-the-hedge/blabla/issues/18). |
-| Posture name `Requires Approval` | [#16](https://github.com/serge-the-hedge/blabla/issues/16) | `Needs Decisions`. |
-| `Source-identical Translation` as a state | [#22](https://github.com/serge-the-hedge/blabla/issues/22) | Retired. Identity is a derived **Source Echo**; the value is ordinary and current. |
-| Cutover's "first release reproduces Git as Ready with Deviations" | [#16](https://github.com/serge-the-hedge/blabla/issues/16) | Undecided values block; nothing is grandfathered because pre-cutover content is exported and discarded. |
-| "Reliable inference needs a real Dart resolver" | [#18](https://github.com/serge-the-hedge/blabla/issues/18) | Parse-only reaches every applied finding. The case against **regex** survives; the resolver is needed for layout constraints alone. |
-| "A target-only change cannot break the build" | [#23](https://github.com/serge-the-hedge/blabla/issues/23) | False for an edit that introduces an argument, which changes the shared abstract signature silently. |
-| Scan completeness meaning "free of diagnostics" | [#20](https://github.com/serge-the-hedge/blabla/issues/20) | Files **reached**. Two files with modern-analyzer diagnostics would otherwise cost 665 keys of evidence permanently. |
-| "One field per plural category the target language needs" | [#26](https://github.com/serge-the-hedge/blabla/issues/26) | `zero`/`one`/`two` are Exact-number Cases, live in every language; the rule as written would delete a live arm from all 74 blocks. |
-| The filter axis named `screen` | [#27](https://github.com/serge-the-hedge/blabla/issues/27) | **Code Area** — 47 areas, only 17 of them `screens/*`. Placement unchanged: second-class, in the filter bar. |
-| "The delivery command writes the target catalogs" | [#19](https://github.com/serge-the-hedge/blabla/issues/19) | It applies a Release Delta. A wholesale write from a month-old baseline silently drops every key added since. |
-| A contract-breaking change requiring an explicit rebase | [#15](https://github.com/serge-the-hedge/blabla/issues/15) | No rebase step. Transforms run automatically where nothing is lost; the residue is per-Locale translation work. |
-| Cutover's Crowdin mapping question | [#13](https://github.com/serge-the-hedge/blabla/issues/13) | `crowdin.yml` is dead configuration pointing at a nonexistent path; it is deleted, not mapped. |
-| A Blabla-held read-only GitHub token | [#21](https://github.com/serge-the-hedge/blabla/issues/21) | Rejected on measurement — the commits it would watch were direct pushes with no pull request. |
-| A TypeScript CLI with a Dart helper | [#20](https://github.com/serge-the-hedge/blabla/issues/20) | One Dart binary. `tree-sitter-dart` is a 2023 "grammar attempt"; `package:analyzer` parses 796 files in 711 ms. |
+| `Fallback Approval`, `Batch Decision`, `Ready with Deviations` | [#16](https://github.com/serge-the-hedge/flutte/issues/16) | Deleted. Postures are Blocked / Needs Decisions / Ready. A translator wanting English types it. |
+| `recordFallbackApproval` in the module interface | [#16](https://github.com/serge-the-hedge/flutte/issues/16) | Removed; `attachContextManifest` added by [#18](https://github.com/serge-the-hedge/flutte/issues/18). |
+| Posture name `Requires Approval` | [#16](https://github.com/serge-the-hedge/flutte/issues/16) | `Needs Decisions`. |
+| `Source-identical Translation` as a state | [#22](https://github.com/serge-the-hedge/flutte/issues/22) | Retired. Identity is a derived **Source Echo**; the value is ordinary and current. |
+| Cutover's "first release reproduces Git as Ready with Deviations" | [#16](https://github.com/serge-the-hedge/flutte/issues/16) | Undecided values block; nothing is grandfathered because pre-cutover content is exported and discarded. |
+| "Reliable inference needs a real Dart resolver" | [#18](https://github.com/serge-the-hedge/flutte/issues/18) | Parse-only reaches every applied finding. The case against **regex** survives; the resolver is needed for layout constraints alone. |
+| "A target-only change cannot break the build" | [#23](https://github.com/serge-the-hedge/flutte/issues/23) | False for an edit that introduces an argument, which changes the shared abstract signature silently. |
+| Scan completeness meaning "free of diagnostics" | [#20](https://github.com/serge-the-hedge/flutte/issues/20) | Files **reached**. Two files with modern-analyzer diagnostics would otherwise cost 665 keys of evidence permanently. |
+| "One field per plural category the target language needs" | [#26](https://github.com/serge-the-hedge/flutte/issues/26) | `zero`/`one`/`two` are Exact-number Cases, live in every language; the rule as written would delete a live arm from all 74 blocks. |
+| The filter axis named `screen` | [#27](https://github.com/serge-the-hedge/flutte/issues/27) | **Code Area** — 47 areas, only 17 of them `screens/*`. Placement unchanged: second-class, in the filter bar. |
+| "The delivery command writes the target catalogs" | [#19](https://github.com/serge-the-hedge/flutte/issues/19) | It applies a Release Delta. A wholesale write from a month-old baseline silently drops every key added since. |
+| A contract-breaking change requiring an explicit rebase | [#15](https://github.com/serge-the-hedge/flutte/issues/15) | No rebase step. Transforms run automatically where nothing is lost; the residue is per-Locale translation work. |
+| Cutover's Crowdin mapping question | [#13](https://github.com/serge-the-hedge/flutte/issues/13) | `crowdin.yml` is dead configuration pointing at a nonexistent path; it is deleted, not mapped. |
+| A Blabla-held read-only GitHub token | [#21](https://github.com/serge-the-hedge/flutte/issues/21) | Rejected on measurement — the commits it would watch were direct pushes with no pull request. |
+| A TypeScript CLI with a Dart helper | [#20](https://github.com/serge-the-hedge/flutte/issues/20) | One Dart binary. `tree-sitter-dart` is a 2023 "grammar attempt"; `package:analyzer` parses 796 files in 711 ms. |
 
 ---
 

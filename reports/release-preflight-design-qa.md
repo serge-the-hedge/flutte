@@ -1,4 +1,9 @@
-# Release pre-flight design QA
+# Historical Release pre-flight design QA
+
+Archived slice evidence, retained for its recorded measurements. The capture date
+was not recorded; the machine-local screenshot and recording paths below are not
+portable evidence. This is not current QA sign-off. Bundle construction described
+as future work below has since shipped. See the current lifecycle and tests.
 
 **Comparison target**
 

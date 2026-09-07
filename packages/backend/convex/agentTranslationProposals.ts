@@ -375,9 +375,10 @@ async function authenticate(
 	rawToken: string,
 	scope: "read" | "search" | "propose",
 ) {
+	const tokenHash = await hashToken(rawToken);
 	const token = await ctx.db
 		.query("apiTokens")
-		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", hashToken(rawToken)))
+		.withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
 		.unique();
 	if (
 		!token ||

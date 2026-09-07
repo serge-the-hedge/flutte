@@ -89,7 +89,7 @@ between the canonical app and a preview. Production is not mutated by this
 script.
 
 Every Convex preview is a fresh database. Sign up a disposable preview user, or
-add a deliberate `--preview-run` seed later. Password-reset delivery remains in
+add a deliberate `--preview-run` seed later. Account-email delivery remains in
 Resend test mode unless that preview also inherits a test API key and sender;
 production email credentials must not be preview defaults.
 
@@ -106,14 +106,14 @@ curl -sS -D - \
 The `get-session` response should include an `access-control-allow-origin`
 header matching the request origin.
 
-## Password Recovery Email
+## Verification and Password Recovery Email
 
-Password recovery is sent from Convex through the official durable Resend
-component. Resend credentials belong to each Convex deployment, not Vercel.
+Email verification and password recovery are sent from Convex through the official
+durable Resend component. Resend credentials belong to each Convex deployment, not Vercel.
 
 1. In Resend, add `flutte-updates.seryozha.world` as a sending domain.
 2. Add the exact SPF and DKIM records Resend displays to Gandi. Keep open and
-   click tracking disabled for password-reset mail. Add DMARC after SPF and
+   click tracking disabled for account mail. Add DMARC after SPF and
    DKIM verify.
 3. Create a sending-only Resend API key and configure production Convex:
 
@@ -142,7 +142,10 @@ For development, create a separate webhook pointing at
 API key, and leave `RESEND_TEST_MODE=true`. The component then accepts only
 Resend test recipients. No Resend key or webhook secret belongs in Vercel.
 
-The account UI supports requesting a one-hour reset link, choosing a new
+The account banner sends and resends verification links; invitations grant access
+only after the account proves control of its email address. Sign-in and personal
+project creation remain available without verification. The account UI also
+supports requesting a one-hour reset link, choosing a new
 password, and changing a known password. A successful reset revokes existing
 sessions. Final delivery records are retained for one week; abandoned records
 are retained for four weeks and cleaned automatically.
@@ -171,5 +174,7 @@ part of a snapshot and must be configured separately.
 4. Invite your colleague by email and choose a role.
 5. Ask them to open `https://blabla.seryozha.world`.
 6. They sign up with the same email.
-7. The app activates pending invites after sign-in and the project appears in
-   their Projects view.
+7. They use the account banner to send a verification link and open it.
+8. The app activates pending invitations after verification and the project
+   appears in their Projects view. Already verified accounts can be added
+   immediately by the owner.

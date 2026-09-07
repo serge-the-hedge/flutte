@@ -46,6 +46,7 @@ class FlutterToolchainResolver {
     Directory checkout, {
     String? explicitSdk,
   }) async {
+    checkout = checkout.absolute;
     final candidate = await _resolveCandidate(checkout, explicitSdk);
     final version = await _version(checkout, candidate);
     final constraint = await _projectFlutterConstraint(checkout);

@@ -11,28 +11,23 @@
 import type * as accessControl from "../accessControl.js";
 import type * as agentApi from "../agentApi.js";
 import type * as agentTranslationProposals from "../agentTranslationProposals.js";
-import type * as aggregates from "../aggregates.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as archiveReconciliation from "../archiveReconciliation.js";
 import type * as auth from "../auth.js";
 import type * as catalogDocument from "../catalogDocument.js";
+import type * as catalogIntroductionReviews from "../catalogIntroductionReviews.js";
 import type * as catalogProjection from "../catalogProjection.js";
 import type * as catalogWorkspace from "../catalogWorkspace.js";
 import type * as catalogWorkspaceDecisionQueries from "../catalogWorkspaceDecisionQueries.js";
 import type * as catalogWorkspaceNavigation from "../catalogWorkspaceNavigation.js";
 import type * as catalogWorkspaceView from "../catalogWorkspaceView.js";
-import type * as changeSetValidation from "../changeSetValidation.js";
-import type * as changeSets from "../changeSets.js";
 import type * as contractTransforms from "../contractTransforms.js";
 import type * as crons from "../crons.js";
-import type * as diffs from "../diffs.js";
 import type * as emails from "../emails.js";
 import type * as exports from "../exports.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
-import type * as importValidation from "../importValidation.js";
 import type * as imports from "../imports.js";
-import type * as keys from "../keys.js";
 import type * as lib from "../lib.js";
 import type * as localeProposals from "../localeProposals.js";
 import type * as locales from "../locales.js";
@@ -49,13 +44,9 @@ import type * as releaseBundles from "../releaseBundles.js";
 import type * as releaseRecordModel from "../releaseRecordModel.js";
 import type * as releaseRecords from "../releaseRecords.js";
 import type * as restoreProposals from "../restoreProposals.js";
-import type * as screens from "../screens.js";
 import type * as snapshots from "../snapshots.js";
 import type * as sourceProposals from "../sourceProposals.js";
-import type * as tags from "../tags.js";
 import type * as translationResidue from "../translationResidue.js";
-import type * as values from "../values.js";
-import type * as workflows from "../workflows.js";
 
 import type {
   ApiFromModules,
@@ -67,28 +58,23 @@ declare const fullApi: ApiFromModules<{
   accessControl: typeof accessControl;
   agentApi: typeof agentApi;
   agentTranslationProposals: typeof agentTranslationProposals;
-  aggregates: typeof aggregates;
   apiTokens: typeof apiTokens;
   archiveReconciliation: typeof archiveReconciliation;
   auth: typeof auth;
   catalogDocument: typeof catalogDocument;
+  catalogIntroductionReviews: typeof catalogIntroductionReviews;
   catalogProjection: typeof catalogProjection;
   catalogWorkspace: typeof catalogWorkspace;
   catalogWorkspaceDecisionQueries: typeof catalogWorkspaceDecisionQueries;
   catalogWorkspaceNavigation: typeof catalogWorkspaceNavigation;
   catalogWorkspaceView: typeof catalogWorkspaceView;
-  changeSetValidation: typeof changeSetValidation;
-  changeSets: typeof changeSets;
   contractTransforms: typeof contractTransforms;
   crons: typeof crons;
-  diffs: typeof diffs;
   emails: typeof emails;
   exports: typeof exports;
   healthCheck: typeof healthCheck;
   http: typeof http;
-  importValidation: typeof importValidation;
   imports: typeof imports;
-  keys: typeof keys;
   lib: typeof lib;
   localeProposals: typeof localeProposals;
   locales: typeof locales;
@@ -105,13 +91,9 @@ declare const fullApi: ApiFromModules<{
   releaseRecordModel: typeof releaseRecordModel;
   releaseRecords: typeof releaseRecords;
   restoreProposals: typeof restoreProposals;
-  screens: typeof screens;
   snapshots: typeof snapshots;
   sourceProposals: typeof sourceProposals;
-  tags: typeof tags;
   translationResidue: typeof translationResidue;
-  values: typeof values;
-  workflows: typeof workflows;
 }>;
 
 /**

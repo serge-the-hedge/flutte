@@ -3,8 +3,8 @@
 This app exposes a compact HTTP API for LLM agents working on translations.
 Agents use project-scoped API tokens to discover the accepted Catalog Workspace,
 submit immutable translation candidates, and leave the final value change to a
-human review. The older change-set endpoints remain available for compatibility
-but are not the current-value write path.
+human review. Legacy catalog operations are retired; their HTTP addresses return migration
+errors rather than accepting work into a disconnected corpus.
 
 Use this document as the canonical workflow guide for translation agents.
 
@@ -79,29 +79,12 @@ intentionally one-time visible.
 6. Report a value as **proposed** until the human review succeeds. The API
    never claims that an agent submission is live.
 
-The authenticated production Proposals workbench is available at
-`/projects/:projectId/proposals`. The throwaway comparison remains available
-at `/proposals/prototype` when we want to evaluate interaction alternatives.
+The authenticated Proposals workbench is at `/projects/:projectId/proposals`.
 
-### Legacy compatibility workflow
-
-The following endpoints are retained for historic integrations only. New
-agents should use the preferred workflow above:
-
-1. Search with `GET /strings/search`.
-2. Fetch legacy context with `POST /context`.
-3. Create a legacy review with `POST /change-sets`.
-4. Check legacy state with `GET /change-sets/:id`.
-
-That path writes the pre-Catalog-Workspace corpus and must not be used to claim
-that a value is current in the Strings editor.
-
-For either workflow, separate real language issues from app-context artifacts.
-Note any intentionally preserved casing, spacing, or punctuation in your report
-so later agents do not propose the same cosmetic changes. Release files are not
-available through the legacy Agent API export. An editor builds a Release Bundle
-from a Ready Release Record, then the local Repository Adapter applies it
-through the dedicated release endpoints.
+Separate language issues from app-context artifacts. Note intentionally preserved
+casing, spacing, and punctuation so later agents do not repeat cosmetic changes.
+An editor builds a Release Bundle from a Ready Release Record; the local
+Repository Adapter delivers it through the dedicated release endpoints.
 
 ### New-Locale Translation Task
 
@@ -142,9 +125,9 @@ view, and its artifact stays immutable. A ready current-source artifact is
 review-ready evidence for the later local Repository Adapter, not proof that
 Brickit has accepted it.
 
-Do not invent locale codes, screens, tags, or keys. Read them from
-`/projects/current` or `/strings/search`. If a target locale is missing, ask a
-human to create it in the web app before proposing translations.
+Discover Locale codes through `/projects/current` and message identifiers through
+`/workspace/search` or `/workspace/work`. Use a new-Locale Translation Task for
+the configured Portuguese introduction; other new Locales require project setup.
 
 ## Translation Rules
 
@@ -156,23 +139,20 @@ human to create it in the web app before proposing translations.
   formatting cleanup.
 - Treat the source locale as the source of truth. Only edit source strings when
   the human explicitly asks for source-copy changes.
-- Use `status=missing`, `status=stale`, or `status=needs_review` to prioritize
-  work. Avoid touching already translated strings unless the task asks for
-  polish or consistency.
-- Keep proposals reviewable. Prefer focused change sets by locale, screen, tag,
-  or feature area instead of one large mixed batch.
-- Use `POST /strings/tags` for organization work. It creates a reviewable
-  metadata change set and does not mutate live string tags directly.
-- Never claim changes are live after creating a change set. Humans must approve
-  and apply the review in the web app.
+- Page `/workspace/work` by Locale and reason to find unfinished work. Preserve
+  already reviewed values unless the task explicitly calls for further edits.
+- Keep each existing-Locale Translation Task focused on at most 32 selected
+  messages. Submit at most 16 candidates per request.
+- Report candidates as proposed until a human saves the review in the task.
 
 ## Scopes
 
-- `read`: project metadata, context, and change-set status.
-- `search`: string search.
-- `propose`: translation and tag change-set creation.
-- `export`: read and apply an immutable Release Bundle through the local
-  Repository Adapter. It does not grant a remote Git write.
+- `read`: project metadata, workspace context, and task/proposal reads.
+- `search`: workspace search and work discovery.
+- `propose`: Translation Task and candidate creation; it cannot apply values.
+- `export`: immutable Release Bundle delivery through the local Repository
+  Adapter; it does not grant a remote Git write.
+- `snapshot-submission`: repository snapshot submission through the local adapter.
 
 Create tokens in the web app under project settings. Pick the minimum scopes the
 integration needs.
@@ -440,113 +420,20 @@ Returns the proposal header for the token that created it.
 Returns a bounded page of the proposal's current candidate revisions. Use
 `limit` (maximum 16) and the returned `continueCursor` to continue.
 
-### `GET /strings/search`
+### Retired catalog endpoints
 
-Query params:
+`GET /strings/search`, `POST /context`, `POST /change-sets`,
+`POST /strings/tags`, and `POST /export` return `410 Gone` with
+`code: RETIRED_WORKFLOW`. Replace legacy search/context with the workspace
+endpoints and proposed writes with Translation Tasks. There is no current
+agent tag-authoring workflow.
 
-- `q`
-- `locale`
-- `screen`
-- `tag`
-- `status`
-- `limit`
-
-Returns compact rows with key, source value, target value, locale, status, and
-version.
-
-Each row includes the string's own `screen` slug and full `tags` list. When no
-target value exists for the requested locale, `target` is empty, `status` is
-`missing`, and `version` is `0`.
-
-### `POST /context`
-
-Body:
-
-```json
-{
-  "keys": ["checkout.payButton"],
-  "locales": ["hy"],
-  "includeHistory": true
-}
-```
-
-Returns requested fields and optional recent history.
-
-### `POST /change-sets`
-
-Body:
-
-```json
-{
-  "title": "Improve checkout Armenian copy",
-  "description": "Agent-proposed copy edits",
-  "items": [
-    {
-      "key": "checkout.payButton",
-      "locale": "hy",
-      "baseVersion": 4,
-      "nextValue": "Վճարել հիմա"
-    }
-  ]
-}
-```
-
-Creates an open review. Humans approve and apply changes in the web app.
-
-`baseVersion` is optional for backwards compatibility, but agents should include
-it whenever possible. If the live value version differs from `baseVersion`, the
-item is created as conflicted instead of pending.
-
-The request fails if the title is blank, no items are provided, or any key or
-locale is unknown or archived. Items whose `nextValue` already matches the live
-value are omitted as no-ops; if every item is a no-op, the request fails instead
-of creating an empty review.
-
-Response:
-
-```json
-{
-  "changeSetId": "k...",
-  "status": "open",
-  "itemsProposed": 1,
-  "itemsConflicted": 0,
-  "itemsRejected": 0,
-  "itemsAccepted": 1,
-  "reviewUrl": "/projects/j.../reviews/k..."
-}
-```
-
-`itemsAccepted` is kept for older integrations. Prefer `itemsProposed`,
-`itemsConflicted`, and `itemsRejected` for new clients.
-
-### `POST /strings/tags`
-
-Creates an open review that adds one or more tags to a selected batch of
-strings. Tags may already exist or be new. The agent does not mutate live string
-metadata directly.
-
-Body:
-
-```json
-{
-  "title": "Tag checkout strings",
-  "description": "Group checkout strings for review",
-  "selection": {
-    "type": "keys",
-    "keys": ["checkout.payButton", "checkout.cancelButton"]
-  },
-  "tagSlugs": ["checkout", "button"]
-}
-```
-
-Selections: `all`, `keys`, `tag`, `screen`.
-
-The request fails if the selection matches no active strings or if every
-selected string already has the requested tags.
-
-### `GET /change-sets/:id`
-
-Returns compact review state and item statuses.
+`GET /change-sets/:id` remains an authenticated historical read. It returns
+stored items, `retired: true`, and a migration explanation. It does not return a
+review link or apply those items to the Catalog Workspace. Historical tables
+and import/export job evidence remain stored; their old Convex writers have
+been removed. For pending historic work, read its values and submit a new task
+against the current Workspace basis for human review.
 
 ### Portuguese Locale Proposal endpoints
 
