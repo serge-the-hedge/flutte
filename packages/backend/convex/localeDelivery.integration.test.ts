@@ -295,60 +295,86 @@ describe("Locale delivery observation and binding realization", () => {
 			false,
 		);
 	});
-	test("long review history does not reject ordinary unmatched imports", async () => {
-		const { t, user, projectId, proposalId, artifact } = await fixture();
-		await t.run(async (ctx) => {
-			const proposal = await ctx.db.get(proposalId);
-			if (!proposal) throw new Error("Missing proposal");
-			const { _id, _creationTime, ...fields } = proposal;
-			const values = await ctx.db
-				.query("localeProposalValues")
-				.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
-				.collect();
-			for (let index = 0; index < 513; index++) {
-				const copyId = await ctx.db.insert("localeProposals", fields);
-				for (const value of values) {
-					const { _id, _creationTime, ...fields } = value;
-					await ctx.db.insert("localeProposalValues", {
-						...fields,
-						proposalId: copyId,
-					});
+	test.each(["target", "source"])(
+		"long review history does not reject unmatched %s changes",
+		async (change) => {
+			const { t, user, projectId, proposalId, artifact } = await fixture();
+			await t.run(async (ctx) => {
+				const proposal = await ctx.db.get(proposalId);
+				if (!proposal) throw new Error("Missing proposal");
+				const { _id, _creationTime, ...fields } = proposal;
+				const values = await ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+					.collect();
+				for (let index = 0; index < 513; index++) {
+					const copyId = await ctx.db.insert("localeProposals", fields);
+					for (const value of values) {
+						const { _id, _creationTime, ...fields } = value;
+						await ctx.db.insert("localeProposalValues", {
+							...fields,
+							proposalId: copyId,
+						});
+					}
 				}
-			}
-		});
-		const localeId = await user.mutation(api.locales.create, {
-			projectId,
-			code: "pt",
-		});
-		await user.action(api.locales.bind, {
-			localeId,
-			catalogPath: "intl_pt.arb",
-		});
-		const target: Record<string, unknown> = JSON.parse(
-			artifact.catalog.content,
-		);
-		target.greeting = "A new unreviewed translation";
-		await user.action(api.snapshots.ingest, {
-			projectId,
-			repository: "repo",
-			commit: "long-history",
-			lineage: {
-				baselineCommit: "baseline",
-				relationship: "descendant",
-				mergeBase: "baseline",
-			},
-			files: [
-				{ catalogPath: "intl_en.arb", content: sourceContent },
-				{ catalogPath: "intl_pt.arb", content: JSON.stringify(target) },
-			],
-		});
-		const cards = await readWorkspaceKeyCards(user, projectId);
-		expect(
-			cards.keys
-				.find((key) => key.id === "greeting")
-				?.values.find((value) => value.localeId === localeId),
-		).toMatchObject({ valueState: "unconfirmedImport" });
-	});
+			});
+			const localeId = await user.mutation(api.locales.create, {
+				projectId,
+				code: "pt",
+			});
+			await user.action(api.locales.bind, {
+				localeId,
+				catalogPath: "intl_pt.arb",
+			});
+			const target: Record<string, unknown> = JSON.parse(
+				artifact.catalog.content,
+			);
+			if (change === "target") target.greeting = "A new unreviewed translation";
+			const ingested = await user.action(api.snapshots.ingest, {
+				projectId,
+				repository: "repo",
+				commit: "long-history",
+				lineage: {
+					baselineCommit: "baseline",
+					relationship: "descendant",
+					mergeBase: "baseline",
+				},
+				files: [
+					{
+						catalogPath: "intl_en.arb",
+						content:
+							change === "source"
+								? sourceContent.replace("Hello", "Hello again")
+								: sourceContent,
+					},
+					{
+						catalogPath: "intl_pt.arb",
+						content:
+							change === "source"
+								? artifact.catalog.content
+								: JSON.stringify(target),
+					},
+				],
+			});
+			expect(await t.run((ctx) => ctx.db.get(ingested.runId))).toMatchObject({
+				status: "succeeded",
+			});
+			const cards = await readWorkspaceKeyCards(user, projectId);
+			expect(
+				cards.keys
+					.find((key) => key.id === "greeting")
+					?.values.find((value) => value.localeId === localeId),
+			).toMatchObject({ valueState: "unconfirmedImport" });
+			expect(
+				await user.query(api.localeDelivery.forProposal, { proposalId }),
+			).toBeNull();
+			expect(
+				cards.keys
+					.find((key) => key.id === "quiet")
+					?.values.find((value) => value.localeId === localeId),
+			).toMatchObject({ valueState: "settled" });
+		},
+	);
 	test("observes exact delivery, then binds without advancing Snapshot Identity and retains reviewed text and blank evidence", async () => {
 		const { t, user, projectId, proposalId, artifact, existingFiles } =
 			await fixture({

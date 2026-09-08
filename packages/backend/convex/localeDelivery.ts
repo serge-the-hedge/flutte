@@ -544,12 +544,8 @@ export async function stageLocaleDeliveries(
 				}
 			}
 		}
-		if (!proposal && !candidatesDone)
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message:
-					"Locale delivery artifact matching exceeded its bounded proposal history.",
-			});
+		// Exhausting exact-artifact history is not an invalid import. Continue
+		// with per-value review reuse without claiming an exact observation.
 		if (!proposal) {
 			if (bound)
 				await stageMatchingReviewedPairs(
