@@ -44,6 +44,7 @@ import {
 	gitAuthoredChanges,
 	gitChangeBatches,
 	gitChangeEnvelope,
+	LOCALE_REVIEW_EVIDENCE_VERSION,
 	MAX_PROJECTED_LOCALES,
 	MAX_WORKING_CATALOG_BYTES,
 	MAX_WORKING_CATALOG_KEYS,
@@ -715,6 +716,14 @@ async function assertStagingProjection(
 				"A Baseline Snapshot requires its own staging catalog projection.",
 		});
 	}
+	if (
+		(projection.localeReviewEvidenceVersion ?? 0) <
+		LOCALE_REVIEW_EVIDENCE_VERSION
+	)
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Locale review evidence has not finished staging.",
+		});
 	await assertDeliveryStaged(ctx, projection._id);
 	await assertStagedReconciliationReport(ctx, projection);
 	return projection;
@@ -733,6 +742,8 @@ async function hasPublishedProjection(
 		projection.commit === snapshot.commit &&
 		projection.manifestHash === snapshot.manifestHash &&
 		projection.status === "published" &&
+		(projection.localeReviewEvidenceVersion ?? 0) >=
+			LOCALE_REVIEW_EVIDENCE_VERSION &&
 		projection.snapshotId === snapshot._id
 	);
 }

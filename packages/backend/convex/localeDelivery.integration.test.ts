@@ -25,7 +25,13 @@ const sourceContent = JSON.stringify({
 	quiet: "Hidden",
 });
 async function fixture(
-	input: { targetCodes?: string[]; introduceQuiet?: boolean } = {},
+	input: {
+		targetCodes?: string[];
+		introduceQuiet?: boolean;
+		sourceContent?: string;
+		greetingSource?: string;
+		greetingTarget?: string;
+	} = {},
 ) {
 	const t = createBackend();
 	const user = await authenticatedBackend(t, "locale-delivery-owner");
@@ -83,7 +89,10 @@ async function fixture(
 		repository: "repo",
 		commit: "baseline",
 		files: [
-			{ catalogPath: "intl_en.arb", content: sourceContent },
+			{
+				catalogPath: "intl_en.arb",
+				content: input.sourceContent ?? sourceContent,
+			},
 			...existingFiles,
 		],
 		...(input.introduceQuiet
@@ -106,8 +115,8 @@ async function fixture(
 		items: [
 			{
 				messageId: "greeting",
-				value: "Olá",
-				sourceFingerprint: await sha256Hex("Hello"),
+				value: input.greetingTarget ?? "Olá",
+				sourceFingerprint: await sha256Hex(input.greetingSource ?? "Hello"),
 			},
 			{
 				messageId: "quiet",
@@ -129,6 +138,243 @@ async function fixture(
 }
 
 describe("Locale delivery observation and binding realization", () => {
+	test.each(["formatting", "other source", "other target"])(
+		"preserves reviewed pairs when delivery changes only %s",
+		async (change) => {
+			const { t, user, projectId, proposalId, artifact } = await fixture();
+			const target: Record<string, unknown> = JSON.parse(
+				artifact.catalog.content,
+			);
+			if (change === "other target") target.quiet = "Visible now";
+			const delivered = await user.action(api.snapshots.ingest, {
+				projectId,
+				repository: "repo",
+				commit: "delivered",
+				lineage: {
+					baselineCommit: "baseline",
+					relationship: "descendant",
+					mergeBase: "baseline",
+				},
+				files: [
+					{
+						catalogPath: "intl_en.arb",
+						content:
+							change === "other source"
+								? sourceContent.replace("Hidden", "Hidden now")
+								: sourceContent,
+					},
+					{
+						catalogPath: "intl_pt.arb",
+						content:
+							change === "other source"
+								? artifact.catalog.content
+								: JSON.stringify(target, null, 4),
+					},
+				],
+			});
+			const localeId = await user.mutation(api.locales.create, {
+				projectId,
+				code: "pt",
+			});
+			await user.action(api.locales.bind, {
+				localeId,
+				catalogPath: "intl_pt.arb",
+			});
+			const cards = await readWorkspaceKeyCards(user, projectId);
+			expect(
+				cards.keys
+					.find((key) => key.id === "greeting")
+					?.values.find((value) => value.localeId === localeId),
+			).toMatchObject({ valueState: "settled" });
+			const quiet = cards.keys
+				.find((key) => key.id === "quiet")
+				?.values.find((value) => value.localeId === localeId);
+			if (change === "formatting")
+				expect(quiet).toMatchObject({ valueState: "settled" });
+			else expect(quiet).not.toMatchObject({ valueState: "settled" });
+			const decisions = await t.run((ctx) =>
+				ctx.db.query("catalogWorkspaceDecisionRecords").collect(),
+			);
+			expect(decisions).toHaveLength(change === "formatting" ? 2 : 1);
+			expect(
+				decisions.every(
+					(decision) =>
+						decision.localeProposalId === proposalId &&
+						decision.recordedBy.kind === "user",
+				),
+			).toBe(true);
+			if (change === "formatting")
+				expect(
+					decisions.find((decision) => decision.kind === "intentionalBlank")
+						?.reason,
+				).toBe("This label is deliberately hidden.");
+			expect(
+				await user.query(api.localeDelivery.forProposal, { proposalId }),
+			).toBeNull();
+			expect(
+				await user.query(api.localeDelivery.bindingForProposal, { proposalId }),
+			).toEqual({
+				localeId,
+				catalogPath: "intl_pt.arb",
+				snapshotId: delivered.snapshotId,
+			});
+			const stranger = await authenticatedBackend(t, "binding-status-stranger");
+			await expect(
+				stranger.query(api.localeDelivery.bindingForProposal, { proposalId }),
+			).rejects.toThrow();
+		},
+	);
+	test.each([
+		"source text",
+		"source contract",
+		"target text",
+		"missing blank",
+		"wrong path",
+		"wrong locale",
+		"draft proposal",
+	])("never carries review across changed %s", async (change) => {
+		const originalSource = JSON.stringify({
+			"@@locale": "en",
+			greeting: "Hello {name}",
+			"@greeting": { placeholders: { name: { type: "String" } } },
+			quiet: "Hidden",
+		});
+		const { t, user, projectId, proposalId, artifact } = await fixture({
+			sourceContent: originalSource,
+			greetingSource: "Hello {name}",
+			greetingTarget: "Olá {name}",
+		});
+		const target: Record<string, unknown> = JSON.parse(
+			artifact.catalog.content,
+		);
+		if (change === "target text") target.greeting = "Oi {name}";
+		if (change === "missing blank") delete target.quiet;
+		if (change === "wrong locale") target["@@locale"] = "de";
+		if (change === "draft proposal")
+			await t.run((ctx) => ctx.db.patch(proposalId, { status: "draft" }));
+		const catalogPath =
+			change === "wrong path" ? "other_pt.arb" : "intl_pt.arb";
+		const localeId = await user.mutation(api.locales.create, {
+			projectId,
+			code: change === "wrong locale" ? "de" : "pt",
+		});
+		await user.action(api.locales.bind, { localeId, catalogPath });
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "delivered",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "intl_en.arb",
+					content:
+						change === "source text"
+							? originalSource.replace("Hello", "Welcome")
+							: change === "source contract"
+								? originalSource.replace('"String"', '"num"')
+								: originalSource,
+				},
+				{ catalogPath, content: JSON.stringify(target, null, 4) },
+			],
+		});
+		const key = change === "missing blank" ? "quiet" : "greeting";
+		const cards = await readWorkspaceKeyCards(user, projectId);
+		expect(
+			cards.keys
+				.find((card) => card.id === key)
+				?.values.find((value) => value.localeId === localeId),
+		).not.toMatchObject({ valueState: "settled" });
+		const decisions = await t.run((ctx) =>
+			ctx.db.query("catalogWorkspaceDecisionRecords").collect(),
+		);
+		expect(decisions.some((decision) => decision.messageId === key)).toBe(
+			false,
+		);
+	});
+	test.each(["target", "source"])(
+		"long review history does not reject unmatched %s changes",
+		async (change) => {
+			const { t, user, projectId, proposalId, artifact } = await fixture();
+			await t.run(async (ctx) => {
+				const proposal = await ctx.db.get(proposalId);
+				if (!proposal) throw new Error("Missing proposal");
+				const { _id, _creationTime, ...fields } = proposal;
+				const values = await ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+					.collect();
+				for (let index = 0; index < 513; index++) {
+					const copyId = await ctx.db.insert("localeProposals", fields);
+					for (const value of values) {
+						const { _id, _creationTime, ...fields } = value;
+						await ctx.db.insert("localeProposalValues", {
+							...fields,
+							proposalId: copyId,
+						});
+					}
+				}
+			});
+			const localeId = await user.mutation(api.locales.create, {
+				projectId,
+				code: "pt",
+			});
+			await user.action(api.locales.bind, {
+				localeId,
+				catalogPath: "intl_pt.arb",
+			});
+			const target: Record<string, unknown> = JSON.parse(
+				artifact.catalog.content,
+			);
+			if (change === "target") target.greeting = "A new unreviewed translation";
+			const ingested = await user.action(api.snapshots.ingest, {
+				projectId,
+				repository: "repo",
+				commit: "long-history",
+				lineage: {
+					baselineCommit: "baseline",
+					relationship: "descendant",
+					mergeBase: "baseline",
+				},
+				files: [
+					{
+						catalogPath: "intl_en.arb",
+						content:
+							change === "source"
+								? sourceContent.replace("Hello", "Hello again")
+								: sourceContent,
+					},
+					{
+						catalogPath: "intl_pt.arb",
+						content:
+							change === "source"
+								? artifact.catalog.content
+								: JSON.stringify(target),
+					},
+				],
+			});
+			expect(await t.run((ctx) => ctx.db.get(ingested.runId))).toMatchObject({
+				status: "succeeded",
+			});
+			const cards = await readWorkspaceKeyCards(user, projectId);
+			expect(
+				cards.keys
+					.find((key) => key.id === "greeting")
+					?.values.find((value) => value.localeId === localeId),
+			).toMatchObject({ valueState: "unconfirmedImport" });
+			expect(
+				await user.query(api.localeDelivery.forProposal, { proposalId }),
+			).toBeNull();
+			expect(
+				cards.keys
+					.find((key) => key.id === "quiet")
+					?.values.find((value) => value.localeId === localeId),
+			).toMatchObject({ valueState: "settled" });
+		},
+	);
 	test("observes exact delivery, then binds without advancing Snapshot Identity and retains reviewed text and blank evidence", async () => {
 		const { t, user, projectId, proposalId, artifact, existingFiles } =
 			await fixture({

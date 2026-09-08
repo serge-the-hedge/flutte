@@ -159,6 +159,13 @@ export function LocaleProposalWorkbench({
 			? { proposalId: convexId<"localeProposals">(activeProposalId) }
 			: "skip",
 	);
+	const binding = useQuery(
+		api.localeDelivery.bindingForProposal,
+		activeProposalId
+			? { proposalId: convexId<"localeProposals">(activeProposalId) }
+			: "skip",
+	);
+	const languageIsBound = binding != null || delivery?.status === "bound";
 	const createLocale = useMutation(api.locales.create);
 	const bindLocale = useAction(api.locales.bind);
 	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
@@ -175,6 +182,7 @@ export function LocaleProposalWorkbench({
 	const reviewState = detail
 		? localeProposalReviewState({
 				status: detail.proposal.status,
+				isBound: languageIsBound,
 				isCurrentBaseline: detail.isCurrentBaseline,
 				remaining: detail.proposal.progress.remaining,
 				pendingReview: detail.pendingReview,
@@ -708,21 +716,22 @@ export function LocaleProposalWorkbench({
 			) : null}
 			{detail?.proposal.status === "ready" &&
 			delivery !== undefined &&
-			(delivery !== null || detail.isCurrentBaseline) ? (
+			binding !== undefined &&
+			(languageIsBound || delivery !== null || detail.isCurrentBaseline) ? (
 				<Alert>
 					<AlertTitle>
-						{delivery?.status === "bound"
-							? "Language is bound"
+						{languageIsBound
+							? "Language is available in Strings"
 							: delivery?.status === "observed"
 								? "Delivered catalog found in Git"
 								: "Ready to deliver"}
 					</AlertTitle>
 					<AlertDescription className="flex flex-col items-start gap-3">
-						{delivery?.status === "bound" ? (
+						{languageIsBound ? (
 							<>
 								<p>
-									The reviewed values and Intentional Blank reasons are now
-									available in Strings.
+									This task is complete. Review current translations and any
+									changed source values in Strings.
 								</p>
 								<Button
 									nativeButton={false}
@@ -826,8 +835,10 @@ export function LocaleProposalWorkbench({
 					</AlertDescription>
 				</Alert>
 			) : null}
-			{!delivery &&
+			{!languageIsBound &&
+			!delivery &&
 			delivery !== undefined &&
+			binding !== undefined &&
 			(reviewState?.phase === "stale" ||
 				reviewState?.phase === "previousSource") ? (
 				<Alert className="mb-4">

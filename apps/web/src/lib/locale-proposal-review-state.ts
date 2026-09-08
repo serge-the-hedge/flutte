@@ -3,7 +3,8 @@ export type LocaleProposalReviewPhase =
 	| "readyToFinalize"
 	| "stale"
 	| "previousSource"
-	| "finalized";
+	| "finalized"
+	| "handedOff";
 
 export type LocaleProposalReviewState = {
 	phase: LocaleProposalReviewPhase;
@@ -16,10 +17,21 @@ export type LocaleProposalReviewState = {
 /** Turns persistence facts into the workflow state an editor needs to see. */
 export function localeProposalReviewState(input: {
 	status: "draft" | "ready";
+	isBound?: boolean;
 	isCurrentBaseline: boolean;
 	remaining: number;
 	pendingReview: { count: number; hasMore: boolean };
 }): LocaleProposalReviewState {
+	if (input.status === "ready" && input.isBound) {
+		return {
+			phase: "handedOff",
+			badgeLabel: "Language connected",
+			emptyTitle: "Language is available in Strings",
+			emptyDescription:
+				"This task is complete. Review current translations and any changed source values in Strings.",
+			canFinalize: false,
+		};
+	}
 	if (!input.isCurrentBaseline && input.status === "ready") {
 		return {
 			phase: "previousSource",
