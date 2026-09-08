@@ -28,6 +28,7 @@ import {
 	CheckCheck,
 	GitBranch,
 	Languages,
+	Link2,
 	ListChecks,
 	LoaderCircle,
 	Search,
@@ -47,7 +48,6 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
-
 import { IcuMessageSegmentEditor } from "@/components/localization/icu-message-segment-editor";
 import { readMessageSegments } from "@/lib/icu-message-segments";
 import type {
@@ -97,13 +97,13 @@ import {
 	stringsWindowKeyCap,
 } from "@/lib/strings-window";
 import { CatalogDraftRecovery } from "./catalog-draft-recovery";
+import { CatalogValueRow, QUIET_CATALOG_FIELD } from "./catalog-value-row";
 
 /**
  * The reading measure. Wide enough that a 300-character paragraph is
  * comfortable, capped short of the line lengths that lose the eye on the
  * return sweep.
  */
-const VALUE_MEASURE = "max-w-[74ch]";
 
 /**
  * A value's height is its content's height. The shared Textarea ships
@@ -120,9 +120,6 @@ const CATALOG_LOADING_ROW_KEYS = [
 	"catalog-loading-row-2",
 	"catalog-loading-row-3",
 ] as const;
-
-const QUIET_FIELD =
-	"field-sizing-content min-h-0 w-full resize-none border-0 bg-transparent px-2 py-1 text-[13px] leading-relaxed shadow-none transition-colors hover:bg-muted/40 focus:bg-muted/60 focus-visible:border-0 focus-visible:ring-0 md:text-[13px] dark:bg-transparent dark:hover:bg-muted/30 dark:focus:bg-muted/50";
 
 export type CommitCatalogValue = (
 	input: CatalogWorkspaceCommit,
@@ -202,46 +199,6 @@ function isEditableCatalogWorkspaceValue(
 	);
 }
 
-/**
- * A value's own line. The Locale sits in a narrow gutter and the value takes
- * the rest of the width at a reading measure; the coloured rule beside it is
- * the only thing that fires without being asked, and only for work that is
- * still waiting on someone.
- */
-function ValueRow({
-	localeCode,
-	tone,
-	children,
-}: {
-	localeCode: string;
-	tone: ValueTone;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="relative flex items-start gap-2">
-			<span
-				aria-hidden="true"
-				className={cn(
-					"mt-1.5 w-px shrink-0 self-stretch rounded",
-					tone === "attention"
-						? "bg-amber-500/70"
-						: tone === "mark"
-							? "bg-border"
-							: "bg-transparent",
-				)}
-			/>
-			<span
-				className="max-w-[25%] shrink-0 break-all pt-1.5 font-medium font-mono text-[11px] text-muted-foreground/60"
-				style={{ width: "var(--locale-gutter, 3ch)" }}
-				title={localeCode}
-			>
-				{localeCode}
-			</span>
-			<div className={cn("min-w-0 flex-1", VALUE_MEASURE)}>{children}</div>
-		</div>
-	);
-}
-
 /** The one line allowed under a value, and only when it has something to say. */
 function ValuePhraseLine({
 	phrase,
@@ -288,7 +245,7 @@ function CatalogValue({
 				: "Empty value"
 			: value.value;
 	return (
-		<ValueRow localeCode={value.localeCode} tone={presentation.tone}>
+		<CatalogValueRow localeCode={value.localeCode} tone={presentation.tone}>
 			<p
 				dir="auto"
 				className={cn(
@@ -301,7 +258,7 @@ function CatalogValue({
 				{visibleValue}
 			</p>
 			<ValuePhraseLine phrase={presentation.phrase} tone={presentation.tone} />
-		</ValueRow>
+		</CatalogValueRow>
 	);
 }
 
@@ -595,7 +552,7 @@ function EditableCatalogValue({
 		value.intentionalBlankReason !== undefined && !isDirty && !isRecordingBlank;
 
 	return (
-		<ValueRow localeCode={value.localeCode} tone={presentation.tone}>
+		<CatalogValueRow localeCode={value.localeCode} tone={presentation.tone}>
 			{isSaving ? (
 				<span
 					role="status"
@@ -629,7 +586,7 @@ function EditableCatalogValue({
 					onKeyDown={onEditorKeyDown}
 					onFocus={() => setIsFocused(true)}
 					onBlur={() => setIsFocused(false)}
-					fieldClassName={QUIET_FIELD}
+					fieldClassName={QUIET_CATALOG_FIELD}
 					showRawToggle={isFocused || (isDirty && !isSaving)}
 				/>
 			)}
@@ -738,7 +695,7 @@ function EditableCatalogValue({
 			) : null}
 
 			<ValuePhraseLine phrase={phrase} tone={presentation.tone} />
-		</ValueRow>
+		</CatalogValueRow>
 	);
 }
 
@@ -857,20 +814,35 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						)}
 					/>
 				) : null}
-				<button
-					type="button"
-					onClick={() => onNavigationChange({ query: "", key: catalogKey.id })}
-					className={cn(
-						"min-w-0 rounded-sm text-left text-[13px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-						catalogKey.name === undefined
-							? "truncate font-mono text-foreground/90"
-							: "break-words font-medium",
-						catalogKey.name === null && "text-muted-foreground",
-					)}
-					aria-label={`Open ${accessibleTitle} permalink`}
-				>
-					{title}
-				</button>
+				{title === null ? (
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						onClick={() =>
+							onNavigationChange({ query: "", key: catalogKey.id })
+						}
+						aria-label={`Open ${accessibleTitle} permalink`}
+					>
+						<Link2 aria-hidden="true" />
+					</Button>
+				) : (
+					<button
+						type="button"
+						onClick={() =>
+							onNavigationChange({ query: "", key: catalogKey.id })
+						}
+						className={cn(
+							"min-w-0 rounded-sm text-left text-[13px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+							catalogKey.name === undefined
+								? "truncate font-mono text-foreground/90"
+								: "break-words font-medium",
+						)}
+						aria-label={`Open ${accessibleTitle} permalink`}
+					>
+						{title}
+					</button>
+				)}
 				{controls.onManageKey ? (
 					<Button
 						variant="ghost"

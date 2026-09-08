@@ -152,7 +152,8 @@ describe("Catalog editor draft lifecycle", () => {
 			if (!card) throw new Error("Missing card fixture");
 			const navigation: unknown[] = [];
 			const selections: string[][] = [];
-			const display = name ?? "Unnamed string: Welcome";
+			const managed: string[] = [];
+			const display = name ?? "Welcome";
 			await render({
 				...next,
 				hydratedCards: new Map([
@@ -177,11 +178,12 @@ describe("Catalog editor draft lifecycle", () => {
 				]),
 				onNavigationChange: (state) => navigation.push(state),
 				onSelectionChange: (ids) => selections.push([...ids]),
+				onManageKey: (key) => managed.push(key.id),
 			});
 			const permalink = testDom.container.querySelector<HTMLButtonElement>(
 				`[aria-label="Open ${display} permalink"]`,
 			);
-			expect(permalink?.textContent).toBe(name ?? "Unnamed string");
+			expect(permalink?.textContent).toBe(name ?? "");
 			expect(permalink?.classList.contains("font-mono")).toBe(false);
 			const input = testDom.container.querySelector<HTMLTextAreaElement>(
 				'textarea[data-workspace-message-id="generated-id"]',
@@ -201,6 +203,14 @@ describe("Catalog editor draft lifecycle", () => {
 					?.click();
 			});
 			expect(selections.at(-1)).toEqual(["generated-id"]);
+			await act(async () => {
+				testDom.container
+					.querySelector<HTMLButtonElement>(
+						`[aria-label="Details for ${display}"]`,
+					)
+					?.click();
+			});
+			expect(managed).toEqual(["generated-id"]);
 		},
 	);
 

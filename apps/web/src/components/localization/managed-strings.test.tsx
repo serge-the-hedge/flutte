@@ -156,13 +156,14 @@ describe("Basic project workflow", () => {
 		expect(dom.container.textContent).toContain("Build {anything}");
 		expect(dom.container.textContent).toContain("Store subtitle");
 		expect(dom.container.textContent).not.toContain("Raw ICU");
-		const name =
-			dom.container.querySelector<HTMLInputElement>("#new-string-name");
 		const source =
 			dom.container.querySelector<HTMLTextAreaElement>("#new-string-text");
-		if (!name || !source) throw new Error("Missing composer");
-		await type(name, "App Store subtitle");
+		if (!source) throw new Error("Missing composer");
 		await type(source, "Keep {braces} literal");
+		const name =
+			dom.container.querySelector<HTMLInputElement>("#new-string-name");
+		if (!name) throw new Error("Missing composer details");
+		await type(name, "App Store subtitle");
 		const beforeUnload = new dom.window.Event("beforeunload", {
 			cancelable: true,
 		});
@@ -177,7 +178,7 @@ describe("Basic project workflow", () => {
 				);
 		});
 		expect(source.closest("fieldset")?.disabled).toBe(true);
-		expect(button("Adding…").disabled).toBe(true);
+		expect(button("Saving…").disabled).toBe(true);
 		await act(async () => {
 			pendingCreate?.resolve("new_line");
 		});
@@ -199,14 +200,15 @@ describe("Basic project workflow", () => {
 				name: "App Store subtitle",
 				sourceValue: "Keep {braces} literal",
 				context: "",
+				translations: [],
 			},
 		});
 		await act(async () => button("Languages").click());
 		const code = dom.container.querySelector<HTMLInputElement>(
-			'[aria-label="New language code"]',
+			'section[aria-label="Project languages"] input[list]',
 		);
 		const label = dom.container.querySelector<HTMLInputElement>(
-			'[aria-label="New language name"]',
+			'section[aria-label="Project languages"] input:not([list])',
 		);
 		if (!code || !label) throw new Error("Missing language form");
 		await type(code, "de");
@@ -217,14 +219,13 @@ describe("Basic project workflow", () => {
 		dom.window.dispatchEvent(languageUnload);
 		expect(languageUnload.defaultPrevented).toBe(true);
 		await act(async () => button("Add language").click());
-		await act(async () => button("Save languages").click());
 		expect(calls.at(-1)).toEqual({
-			name: "contentCollections:setLocales",
+			name: "contentCollections:addLocale",
 			args: {
 				projectId: "project",
 				collectionId: "marketing",
-				localeIds: ["fr-id", "de-id"],
-				expectedMembershipRevision: 1,
+				code: "de",
+				label: "German",
 			},
 		});
 		const previousClipboard = Object.getOwnPropertyDescriptor(
@@ -258,6 +259,72 @@ describe("Basic project workflow", () => {
 			if (previousClipboard)
 				Object.defineProperty(navigator, "clipboard", previousClipboard);
 			else Reflect.deleteProperty(navigator, "clipboard");
+		}
+	});
+
+	test("retains an active composer when project membership becomes read-only", async () => {
+		const listeners = new Set<() => void>();
+		watch.mockImplementation((query, _args) => ({
+			onUpdate: (listener) => {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+			localQueryResult: () => results[getFunctionName(query)] as never,
+			localQueryLogs: () => [],
+			journal: () => undefined,
+		}));
+		const root = createRootRoute({
+			component: () => (
+				<ConvexProvider client={client}>
+					<ManagedStrings
+						projectId="project"
+						collectionId="marketing"
+						search={{}}
+						onSearch={() => {}}
+					/>
+				</ConvexProvider>
+			),
+		});
+		const router = createRouter({
+			routeTree: root,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		await router.load();
+		await dom.render(<RouterProvider router={router} />);
+		const source =
+			dom.container.querySelector<HTMLTextAreaElement>("#new-string-text");
+		if (!source) throw new Error("Composer missing");
+		await type(source, "Keep this source");
+		const target = dom.container.querySelector<HTMLTextAreaElement>(
+			'[data-composer-locale-id="fr-id"]',
+		);
+		if (!target) throw new Error("Translation missing");
+		await type(target, "Conserver");
+		await act(async () => button("Languages").click());
+		const original = results["projects:get"];
+		try {
+			results["projects:get"] = {
+				name: "Brickit",
+				role: "viewer",
+				sourceLocale: { _id: "en-id", code: "en" },
+			};
+			await act(async () => {
+				for (const listener of listeners) listener();
+			});
+			expect(dom.container.querySelector("#new-string-text")).toBe(source);
+			expect(source.value).toBe("Keep this source");
+			expect(source.readOnly).toBe(true);
+			expect(target.value).toBe("Conserver");
+			expect(target.readOnly).toBe(true);
+			expect(
+				dom.container.querySelector<HTMLInputElement>(
+					'section[aria-label="Project languages"] input[list]',
+				)?.disabled,
+			).toBe(true);
+		} finally {
+			results["projects:get"] = original;
 		}
 	});
 	test("All languages hydrate through bounded splits without a render loop", async () => {

@@ -101,4 +101,47 @@ describe("Strings draft navigation guard", () => {
 			}
 		},
 	);
+	test("persistent composer drafts allow language filters but still protect leaving the project", async () => {
+		function View() {
+			useCatalogNavigationGuard(true, true);
+			return <p>Composer draft</p>;
+		}
+		const route = createRootRoute({
+			component: View,
+			validateSearch: (search: Record<string, unknown>) => ({
+				locales: stringsLanguagesFromSearch(search),
+				collection: search.collection,
+			}),
+		});
+		const router = createRouter({
+			routeTree: route,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		await router.load();
+		await dom.render(<RouterProvider router={router} />);
+		const original = window.confirm;
+		const confirm = mock(() => false);
+		window.confirm = confirm;
+		try {
+			await act(async () => {
+				await router.navigate({
+					to: "/",
+					search: { locales: ["fr"], collection: undefined },
+				});
+			});
+			expect(confirm).not.toHaveBeenCalled();
+			expect(router.state.location.search.locales).toEqual(["fr"]);
+			await act(async () => {
+				void router.navigate({
+					to: "/",
+					search: { locales: ["fr"], collection: "legacy-other" },
+				});
+				await Promise.resolve();
+			});
+			expect(confirm).toHaveBeenCalledTimes(1);
+			expect(router.state.location.search.collection).toBeUndefined();
+		} finally {
+			window.confirm = original;
+		}
+	});
 });

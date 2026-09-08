@@ -65,7 +65,7 @@ export type StringsCatalogKey = {
 	targets: readonly CatalogWorkspaceValue[];
 };
 
-/** Human names label Basic content; stable IDs label repository and legacy keys. */
+/** Unnamed Basic content has no headline; its source supplies accessible control labels. */
 export function stringDisplayName({
 	id,
 	name,
@@ -75,12 +75,12 @@ export function stringDisplayName({
 	name?: string | null;
 	sourceValue: string;
 }) {
-	const title = name === undefined ? id : (name ?? "Unnamed string");
+	const title = name === undefined ? id : name;
 	const preview =
 		name === null
 			? sourceValue.slice(0, 160).replace(/\s+/g, " ").trim().slice(0, 100)
 			: "";
-	return { title, label: preview ? `${title}: ${preview}` : title };
+	return { title, label: title ?? (preview || "String") };
 }
 
 /** The route carries this opaque compare-and-save input to the Catalog

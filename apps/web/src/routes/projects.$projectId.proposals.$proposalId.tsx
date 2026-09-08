@@ -609,15 +609,17 @@ function ProposalDetailContent() {
 				{waitingTaskTargets.map((target) => (
 					<Card key={target._id} className="border-dashed">
 						<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
-							<CardTitle className="truncate text-sm">
-								{
-									stringDisplayName({
-										id: target.messageId,
-										name: target.name,
-										sourceValue: target.sourceValue ?? "",
-									}).title
-								}
-							</CardTitle>
+							{target.name !== null ? (
+								<CardTitle className="truncate text-sm">
+									{
+										stringDisplayName({
+											id: target.messageId,
+											name: target.name,
+											sourceValue: target.sourceValue ?? "",
+										}).title
+									}
+								</CardTitle>
+							) : null}
 							<Badge variant="outline">awaiting candidate</Badge>
 						</CardHeader>
 						<CardContent className="grid gap-3 md:grid-cols-2">
@@ -649,7 +651,7 @@ function ProposalDetailContent() {
 					const revisionContext = reviewContext[revision._id];
 					const display = stringDisplayName({
 						id: revision.messageId,
-						name: revisionContext?.name,
+						name: revisionContext?.name ?? (managed ? null : undefined),
 						sourceValue: revisionContext?.sourceValue ?? "",
 					});
 					const revisionBasisState = revisionContext?.basisState;
@@ -660,12 +662,14 @@ function ProposalDetailContent() {
 					return (
 						<Card key={candidate._id}>
 							<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
-								<div className="flex min-w-0 items-center gap-2">
-									<Bot aria-hidden className="size-4 text-muted-foreground" />
-									<CardTitle className="truncate text-sm">
-										{display.title}
-									</CardTitle>
-								</div>
+								{display.title !== null ? (
+									<div className="flex min-w-0 items-center gap-2">
+										<Bot aria-hidden className="size-4 text-muted-foreground" />
+										<CardTitle className="truncate text-sm">
+											{display.title}
+										</CardTitle>
+									</div>
+								) : null}
 								<Badge
 									variant={
 										isDirty ? "secondary" : isReviewed ? "default" : "secondary"
