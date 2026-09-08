@@ -39,7 +39,6 @@ import {
 	memo,
 	useCallback,
 	useContext,
-	useDeferredValue,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -664,11 +663,11 @@ function EditableCatalogValue({
 						<span>⌘↵ {presentation.commitHint}</span>
 					) : null}
 					{value.isSource && isDirty ? (
-						<span>editing English proposes a change to Git</span>
+						<span>editing the source proposes a change to Git</span>
 					) : null}
 					{presentation.echoesSource ? (
 						<span>
-							identical to English — saving records that as the decision
+							identical to the source — saving records that as the decision
 						</span>
 					) : null}
 					{presentation.affordances.includes("confirm") ? (
@@ -1757,23 +1756,13 @@ function StringsCatalogNavigator({
 	workHandoff?: { keyCount: number; onClear: () => void };
 	onCreateTranslationTask?: CreateTranslationTask;
 }) {
-	// Legacy callers filter local digests; paged server results arrive prefiltered.
-	const deferredQuery = useDeferredValue(navigationState.query);
 	const matching = useMemo(
 		() =>
 			navigateStringsDigests(navigation, {
-				query: deferredQuery,
 				key: navigationState.key,
-				scope: navigationState.scope,
 				handoffMessageIds: navigationState.handoffMessageIds,
 			}),
-		[
-			navigation,
-			deferredQuery,
-			navigationState.key,
-			navigationState.scope,
-			navigationState.handoffMessageIds,
-		],
+		[navigation, navigationState.key, navigationState.handoffMessageIds],
 	);
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
@@ -1918,9 +1907,8 @@ function StringsCatalogNavigator({
 	);
 }
 
-/** Strings opens on the compact Navigation read and hydrates only the visible
- * card window. Search and Catalog Scopes run locally over the digests; the
- * virtualizer is the pagination controller, with no visible pagination.
+/** Strings receives a server-filtered browse page and hydrates only its visible
+ * card window. The route owns page navigation; the virtualizer limits mounting.
  * The Source Contract stays immutable in its projection; an editor may
  * instead commit a value-only Source Proposal through the same Workspace
  * seam as target work. */

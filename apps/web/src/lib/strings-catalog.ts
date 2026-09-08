@@ -28,32 +28,10 @@ export type CatalogWorkspaceKey = {
 	values: readonly CatalogWorkspaceValue[];
 };
 
-/** The complete, published working catalog returned by the Localization Sync
- * Module. The route deliberately receives it whole: client-side navigation is
- * local, while the server owns authorization and the bounded read envelope. */
-export type CatalogWorkspace = {
-	snapshotId?: string;
-	canEdit?: boolean;
-	valueStateCounts?: {
-		waiting: number;
-		unconfirmedImport: number;
-		stale: number;
-		settled: number;
-	};
-	keys: readonly CatalogWorkspaceKey[];
-};
-
 export type StringsCatalogKey = {
 	id: string;
 	source: CatalogWorkspaceValue;
 	targets: readonly CatalogWorkspaceValue[];
-};
-
-export type StringsCatalog = {
-	snapshotId?: string;
-	canEdit?: boolean;
-	valueStateCounts?: CatalogWorkspace["valueStateCounts"];
-	keys: readonly StringsCatalogKey[];
 };
 
 /** The route carries this opaque compare-and-save input to the Catalog
@@ -151,20 +129,5 @@ export function readStringsCatalogKey(
 		id: key.id,
 		source,
 		targets: key.values.filter((value) => !value.isSource),
-	};
-}
-
-/** Shape a Baseline Catalog for the Strings adapter without changing Catalog
- * Order. */
-export function readStringsCatalog(
-	catalog: CatalogWorkspace | null,
-): StringsCatalog | null {
-	if (catalog === null) return null;
-
-	return {
-		snapshotId: catalog.snapshotId,
-		canEdit: catalog.canEdit ?? false,
-		valueStateCounts: catalog.valueStateCounts,
-		keys: catalog.keys.map(readStringsCatalogKey),
 	};
 }

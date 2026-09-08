@@ -45,11 +45,6 @@ function windowedProps(catalog: {
 				introductionReviewPending: catalog.introducedMessageIds?.has(key.id)
 					? key.targets.length
 					: 0,
-				searchCorpus: [
-					key.id.toLowerCase(),
-					key.source.value.toLowerCase(),
-					...key.targets.map((target) => target.value.toLowerCase()),
-				],
 				source: {
 					localeId: key.source.localeId ?? key.source.localeCode,
 					gitValueFingerprint: key.source.gitValueFingerprint ?? "source",
@@ -1009,57 +1004,5 @@ describe("StringsCatalogView window hydration", () => {
 		expect(markup).toContain('data-slot="skeleton"');
 		expect(markup).not.toContain("h-72 w-full");
 		expect(markup).not.toContain("Checkout settings");
-	});
-
-	test("search over the digests replaces the visible page", () => {
-		const props = windowedProps(catalog);
-		const markup = renderToStaticMarkup(
-			<StringsCatalogView
-				{...navigationProps}
-				{...props}
-				navigationState={{ query: "checkout" }}
-			/>,
-		);
-
-		expect((markup.match(/data-catalog-key=/g) ?? []).length).toBe(1);
-		expect(markup).toContain("checkout_title");
-		expect(markup).not.toContain("account_title");
-	});
-
-	test("scope filtering selects whole keys over digest target states", () => {
-		const scoped = windowedProps({
-			...catalog,
-			valueStateCounts: {
-				waiting: 1,
-				unconfirmedImport: 0,
-				stale: 0,
-				settled: 2,
-			},
-			keys: catalog.keys.map((key, index) => ({
-				...key,
-				targets:
-					index === 1
-						? [
-								{
-									localeCode: "de",
-									isSource: false,
-									value: "Rechnung",
-									materialized: false,
-									valueState: "waiting" as const,
-								},
-							]
-						: [],
-			})),
-		});
-		const markup = renderToStaticMarkup(
-			<StringsCatalogView
-				{...navigationProps}
-				{...scoped}
-				navigationState={{ query: "", scope: "waiting" }}
-			/>,
-		);
-
-		expect((markup.match(/data-catalog-key=/g) ?? []).length).toBe(1);
-		expect(markup).toContain("billing_title");
 	});
 });

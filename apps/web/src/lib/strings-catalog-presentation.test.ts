@@ -76,23 +76,23 @@ describe("presentCatalogWorkspaceValue", () => {
 		expect(presentation.affordances).toEqual(["confirm"]);
 	});
 
-	test("an unconfirmed value equal to its source reads as English, not chosen", () => {
+	test("an unconfirmed value equal to its source reads as Source, not chosen", () => {
 		const presentation = present(
 			target({ value: "Account", valueState: "unconfirmedImport" }),
 			{ draftValue: "Account" },
 		);
 
-		expect(presentation.phrase).toBe("English, not chosen");
+		expect(presentation.phrase).toBe("Source, not chosen");
 		expect(presentation.tone).toBe("mark");
 		expect(presentation.blocks).toBe(false);
 	});
 
-	test("a semantic Source change says English changed and blocks", () => {
+	test("a semantic Source change says Source changed and blocks", () => {
 		const presentation = present(
 			target({ valueState: "stale", sourceChangeKind: "semantic" }),
 		);
 
-		expect(presentation.phrase).toBe("English changed");
+		expect(presentation.phrase).toBe("Source changed");
 		expect(presentation.tone).toBe("attention");
 		expect(presentation.blocks).toBe(true);
 	});
@@ -113,7 +113,7 @@ describe("presentCatalogWorkspaceValue", () => {
 			{ sourceValue: "", draftValue: "" },
 		);
 
-		expect(presentation.phrase).not.toBe("English, not chosen");
+		expect(presentation.phrase).not.toBe("Source, not chosen");
 	});
 
 	test("an Intentional Blank is settled and silent", () => {
@@ -244,13 +244,13 @@ describe("affordances follow focus", () => {
 });
 
 describe("the note shown while typing", () => {
-	test("a target being typed to match English says so", () => {
+	test("a target being typed to match the source says so", () => {
 		expect(
 			present(target(), { isDirty: true, draftValue: "Account" }).echoesSource,
 		).toBe(true);
 	});
 
-	test("a target that differs from English says nothing", () => {
+	test("a target that differs from the source says nothing", () => {
 		expect(
 			present(target(), { isDirty: true, draftValue: "Konto" }).echoesSource,
 		).toBe(false);
