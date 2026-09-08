@@ -52,6 +52,55 @@ async function setup() {
 }
 
 describe("managed content", () => {
+	test("browses creation order independently of keys or renames and never repeats name matches", async () => {
+		const s = await setup();
+		for (const key of ["zeta", "alpha", "middle"])
+			await s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key,
+				name: "Shared name",
+				sourceValue: "Ordinary",
+			});
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: "zeta",
+			sourceValue: "Ordinary",
+			name: "Shared name renamed",
+			expectedSourceRevision: 1,
+		});
+		expect(
+			(await s.owner.query(api.managedContent.page, s.address)).items.map(
+				(item) => item.key,
+			),
+		).toEqual(["title", "zeta", "alpha", "middle"]);
+		const oldPageLink = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			limit: 1,
+			cursor: JSON.stringify({
+				collectionId: s.address.collectionId,
+				q: "",
+				key: "middle",
+			}),
+		});
+		expect(oldPageLink.items.map((item) => item.key)).toEqual(["title"]);
+		expect(JSON.parse(oldPageLink.nextCursor ?? "null").version).toBe(2);
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		let requests = 0;
+		do {
+			const page = await s.owner.query(api.managedContent.page, {
+				...s.address,
+				q: "Shared name",
+				limit: 1,
+				cursor,
+			});
+			keys.push(...page.items.map((item) => item.key));
+			cursor = page.nextCursor ?? undefined;
+			expect(++requests).toBeLessThan(10);
+		} while (cursor);
+		expect(keys).toEqual(["zeta", "alpha", "middle"]);
+	});
+
 	test("creates optional duplicate names independently from generated stable keys", async () => {
 		const s = await setup();
 		const ids = [];
@@ -345,18 +394,24 @@ describe("managed content", () => {
 				key: `a${String(i).padStart(2, "0")}`,
 				sourceValue: "Ordinary",
 			});
+		await s.owner.mutation(api.managedContent.createMessage, {
+			...s.address,
+			key: "late",
+			name: "Late named match",
+			sourceValue: "Ordinary",
+		});
 		const first = await s.owner.query(api.managedContent.page, {
 			...s.address,
-			q: "anything",
+			q: "Late named match",
 		});
 		expect(first.items).toEqual([]);
 		expect(first.nextCursor).not.toBeNull();
 		const next = await s.owner.query(api.managedContent.page, {
 			...s.address,
-			q: "anything",
+			q: "Late named match",
 			cursor: first.nextCursor ?? undefined,
 		});
-		expect(next.items.map((item) => item.key)).toEqual(["title"]);
+		expect(next.items.map((item) => item.key)).toEqual(["late"]);
 		expect(next.nextCursor).toBeNull();
 		const focused = await s.owner.query(api.managedContent.page, {
 			...s.address,
@@ -388,9 +443,28 @@ describe("managed content", () => {
 				localeIds: [s.localeId],
 			}),
 		).rejects.toThrow("fewer pairs");
-		const page = await s.owner.query(api.managedContent.page, s.address);
-		expect(page.items.length).toBeGreaterThan(0);
-		expect(page.nextCursor).not.toBeNull();
+		await expect(
+			s.owner.query(api.managedContent.page, s.address),
+		).rejects.toThrow("Request fewer strings");
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await s.owner.query(api.managedContent.page, {
+				...s.address,
+				limit: 2,
+				cursor,
+			});
+			keys.push(...page.items.map((item) => item.key));
+			cursor = page.nextCursor ?? undefined;
+		} while (cursor);
+		expect(keys).toEqual([
+			"title",
+			"large0",
+			"large1",
+			"large2",
+			"large3",
+			"large4",
+		]);
 	});
 	test("an oversized encoded source never becomes false end-of-results", async () => {
 		const s = await setup();

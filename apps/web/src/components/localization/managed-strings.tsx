@@ -20,6 +20,7 @@ import type {
 import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
+import { useManagedPage } from "@/lib/use-managed-page";
 import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
 import { StringsCatalogView } from "./strings-catalog-view";
@@ -146,12 +147,11 @@ export function ManagedStrings({
 	const project = useQuery(api.projects.get, { projectId: address.projectId });
 	const collection = useQuery(api.contentCollections.get, address);
 	const locales = useQuery(api.locales.list, { projectId: address.projectId });
-	const page = useQuery(api.managedContent.page, {
+	const page = useManagedPage({
 		...address,
 		cursor: search.cursor,
 		focusKey: search.cursor ? undefined : search.key,
 		q: search.q,
-		limit: 16,
 	});
 	const commitTarget = useMutation(api.managedContent.commit);
 	const saveSource = useMutation(api.managedContent.saveSource);

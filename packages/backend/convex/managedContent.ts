@@ -277,28 +277,47 @@ function parseCursor(
 	collectionId: Id<"contentCollections">,
 	q: string,
 ) {
-	if (cursor === undefined) return undefined;
+	if (cursor === undefined) return null;
+	if (cursor.length > 8192)
+		fail("VALIDATION", "Invalid browse cursor. Restart from the first page.");
 	try {
 		const parsed: unknown = JSON.parse(cursor);
+		// Old key-sorted page links restart when switching to creation order.
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"collectionId" in parsed &&
+			parsed.collectionId === collectionId &&
+			"q" in parsed &&
+			parsed.q === q &&
+			!("version" in parsed) &&
+			"key" in parsed &&
+			typeof parsed.key === "string" &&
+			parsed.key.length <= 256
+		)
+			return null;
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&
 			"collectionId" in parsed &&
 			"q" in parsed &&
-			"key" in parsed &&
+			"version" in parsed &&
+			parsed.version === 2 &&
+			"cursor" in parsed &&
 			parsed.collectionId === collectionId &&
 			parsed.q === q &&
-			typeof parsed.key === "string" &&
-			parsed.key.length <= 256
+			typeof parsed.cursor === "string" &&
+			parsed.cursor.length > 0
 		)
-			return parsed.key;
+			return parsed.cursor;
 	} catch {}
 	fail(
 		"VALIDATION",
-		"This cursor does not belong to the collection and search.",
+		"This cursor does not belong to the collection and search. Restart from the first page.",
 	);
 }
-/** Bounded source-key discovery; a continuation can accompany an empty matching page. */
+/** Creation-ordered browse with one native pagination call. Whole pages are consumed,
+ * including filtered rows; oversized pages are retried by the client with a lower limit. */
 export async function readManagedPage(
 	ctx: ReadCtx,
 	input: CollectionAddress & {
@@ -333,57 +352,51 @@ export async function readManagedPage(
 			.unique();
 		const items =
 			source && source.archivedAt === undefined ? [sourceEntry(source)] : [];
-		if (bytes(items) > MAX_MANAGED_RESPONSE_BYTES)
+		const result = { items, nextCursor: null };
+		if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 			fail(
 				"LIMIT_EXCEEDED",
 				"This source string exceeds the 1 MiB encoded browse limit. Shorten its text or context before browsing it.",
 			);
-		return { items, nextCursor: null };
+		return result;
 	}
-	const after = parseCursor(input.cursor, input.collectionId, q);
-	const rows = await ctx.db
+	const cursor = parseCursor(input.cursor, input.collectionId, q);
+	const page = await ctx.db
 		.query("managedMessages")
-		.withIndex("by_collection_key", (index) =>
-			after === undefined
-				? index.eq("collectionId", input.collectionId)
-				: index.eq("collectionId", input.collectionId).gt("key", after),
+		.withIndex("by_collection", (index) =>
+			index.eq("collectionId", input.collectionId),
 		)
-		.take(17);
-	const items: ReturnType<typeof sourceEntry>[] = [];
-	let last = after;
-	let consumed = 0;
-	for (const row of rows.slice(0, 16)) {
-		if (
-			row.archivedAt === undefined &&
-			(q.length === 0 ||
-				row.key.toLowerCase().includes(q) ||
-				(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
-				row.sourceValue.toLowerCase().includes(q))
-		) {
-			const entry = sourceEntry(row);
-			if (items.length >= limit) break;
-			if (bytes([...items, entry]) > MAX_MANAGED_RESPONSE_BYTES) {
-				if (items.length === 0)
-					fail(
-						"LIMIT_EXCEEDED",
-						"This source string exceeds the 1 MiB encoded browse limit. Shorten its text or context before browsing it.",
-					);
-				break;
-			}
-			items.push(entry);
-		}
-		last = row.key;
-		consumed++;
-	}
-	const hasMore = consumed < rows.length;
-	return {
+		.order("asc")
+		.paginate({ cursor, numItems: limit, maximumRowsRead: 16 });
+	const items = page.page
+		.filter(
+			(row) =>
+				row.archivedAt === undefined &&
+				(q.length === 0 ||
+					row.key.toLowerCase().includes(q) ||
+					(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
+					row.sourceValue.toLowerCase().includes(q)),
+		)
+		.map(sourceEntry);
+	const result = {
 		items,
-		nextCursor:
-			hasMore && last !== undefined
-				? JSON.stringify({ collectionId: input.collectionId, q, key: last })
-				: null,
+		nextCursor: page.isDone
+			? null
+			: JSON.stringify({
+					version: 2,
+					collectionId: input.collectionId,
+					q,
+					cursor: page.continueCursor,
+				}),
 	};
+	if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
+		fail(
+			"LIMIT_EXCEEDED",
+			"This page exceeds the 1 MiB encoded browse limit. Request fewer strings; if one string still exceeds it, shorten its text or context.",
+		);
+	return result;
 }
+
 async function readContextPairs(
 	ctx: ReadCtx,
 	input: CollectionAddress & {

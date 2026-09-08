@@ -23,7 +23,8 @@ change your search or page. Name and context are optional details.
 Names accept spaces and Unicode, can repeat, and can be changed or cleared from
 **Details**. Unnamed strings need no invented label. Stable IDs are assigned
 automatically and remain unchanged in links, tasks and exports. Existing keys
-initially appear as names. Search finds names and source text.
+initially appear as names. Strings stay in creation order when renamed; search
+finds names and source text. Large text pages automatically use smaller batches.
 
 Choose project languages to start translating.
 The source/target editor and Translation Tasks use the same review policy as

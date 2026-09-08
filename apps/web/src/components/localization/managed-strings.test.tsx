@@ -281,6 +281,7 @@ describe("Basic project workflow", () => {
 			},
 		};
 		const seen: number[] = [];
+		const pageLimits: number[] = [];
 		watch.mockImplementation((query, args) => {
 			const name = getFunctionName(query);
 			const ids: string[] = Array.isArray(args.localeIds)
@@ -302,9 +303,12 @@ describe("Basic project workflow", () => {
 						}
 					: many[name];
 			if (name === "managedContent:context") seen.push(ids.length);
+			if (name === "managedContent:page") pageLimits.push(Number(args.limit));
 			return {
 				onUpdate: () => () => {},
 				localQueryResult: () => {
+					if (name === "managedContent:page" && Number(args.limit) > 2)
+						throw new ConvexError({ code: "LIMIT_EXCEEDED" });
 					if (name === "managedContent:context" && ids.length > 2)
 						throw new ConvexError({ code: "LIMIT_EXCEEDED" });
 					return result as never;
@@ -332,6 +336,7 @@ describe("Basic project workflow", () => {
 		await router.load();
 		await dom.render(<RouterProvider router={router} />);
 		expect(seen.some((size) => size > 2)).toBe(true);
+		expect([...new Set(pageLimits)]).toEqual([16, 8, 4, 2]);
 		expect(seen.every((size) => size <= 4)).toBe(true);
 		expect(
 			dom.container.querySelectorAll('[data-workspace-message-id="subtitle"]'),
