@@ -84,13 +84,18 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 	const tokens = useQuery(api.apiTokens.list, { projectId: convexProjectId });
 	const createToken = useMutation(api.apiTokens.create);
 	const revoke = useMutation(api.apiTokens.revoke);
-	const [name, setName] = useState("brickit-workspace");
+	const [name, setName] = useState("translation-agent");
 	const [selectedScopes, setSelectedScopes] =
 		useState<TokenScope[]>(workspaceScopes);
 	const [showAdvancedScopes, setShowAdvancedScopes] = useState(false);
 	const [isReviewer, setIsReviewer] = useState(false);
 	const [issuedReviewerToken, setIssuedReviewerToken] = useState(false);
-	const effectiveScopes = isReviewer ? reviewerScopes : selectedScopes;
+	const effectiveScopes = isReviewer
+		? reviewerScopes
+		: selectedScopes.filter(
+				(scope) =>
+					project?.type === "repository" || scope !== "snapshot-submission",
+			);
 	const isOwner = project?.role === "owner";
 	const [rawToken, setRawToken] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
@@ -118,7 +123,7 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 			});
 			setRawToken(result.token);
 			setIssuedReviewerToken(isReviewer);
-			setName(isReviewer ? "independent-reviewer" : "brickit-workspace");
+			setName(isReviewer ? "independent-reviewer" : "translation-agent");
 			toast.success("Token created — copy it now");
 		} catch (error) {
 			toast.error(
@@ -182,10 +187,12 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 						<CardHeader>
 							<CardTitle>Create API token</CardTitle>
 							<CardDescription>
-								Workspace credentials let local commands sync snapshots and
-								deliver reviewed bundles, and agents propose translations.
-								Reviewer credentials belong to a separate agent, with catalog
-								search and access to authorized candidate reviews.
+								Workspace credentials let agents search and propose
+								translations.
+								{project?.type === "repository" &&
+									" They also support local repository sync and delivery."}{" "}
+								Reviewer credentials belong to a separate agent and grant access
+								to authorized candidate reviews.
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -202,7 +209,7 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 												setName(
 													checked === true
 														? "independent-reviewer"
-														: "brickit-workspace",
+														: "translation-agent",
 												);
 											}}
 										/>
@@ -286,32 +293,38 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 										</div>
 										{showAdvancedScopes && !isReviewer ? (
 											<div className="mt-3 flex flex-wrap gap-3 rounded-md border bg-muted/30 p-3">
-												{scopes.map((scope) => {
-													const id = `scope-${scope}`;
-													const checked = selectedScopes.includes(scope);
-													return (
-														<label
-															key={scope}
-															htmlFor={id}
-															className={cn(
-																"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
-																checked
-																	? "border-brand/40 bg-brand/5 text-foreground"
-																	: "border-input text-muted-foreground hover:text-foreground",
-															)}
-														>
-															<Checkbox
-																id={id}
-																checked={checked}
-																disabled={isCreating}
-																onCheckedChange={(value) =>
-																	toggleScope(scope, value === true)
-																}
-															/>
-															<span className="capitalize">{scope}</span>
-														</label>
-													);
-												})}
+												{scopes
+													.filter(
+														(scope) =>
+															project?.type === "repository" ||
+															scope !== "snapshot-submission",
+													)
+													.map((scope) => {
+														const id = `scope-${scope}`;
+														const checked = selectedScopes.includes(scope);
+														return (
+															<label
+																key={scope}
+																htmlFor={id}
+																className={cn(
+																	"flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs transition-colors",
+																	checked
+																		? "border-brand/40 bg-brand/5 text-foreground"
+																		: "border-input text-muted-foreground hover:text-foreground",
+																)}
+															>
+																<Checkbox
+																	id={id}
+																	checked={checked}
+																	disabled={isCreating}
+																	onCheckedChange={(value) =>
+																		toggleScope(scope, value === true)
+																	}
+																/>
+																<span className="capitalize">{scope}</span>
+															</label>
+														);
+													})}
 											</div>
 										) : null}
 									</Field>
@@ -403,8 +416,8 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 					<CardHeader>
 						<CardTitle>Agent connection</CardTitle>
 						<CardDescription>
-							The same workspace connection can be handed to an agent through
-							your chat or used by the local sync and delivery commands.
+							Use a workspace token for translation work and a separate reviewer
+							token for authorized reviews.
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="flex flex-col gap-3">
@@ -452,8 +465,7 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 							</EmptyMedia>
 							<EmptyTitle>No tokens yet</EmptyTitle>
 							<EmptyDescription>
-								Create a scoped connection for repository sync or reviewable
-								agent proposals.
+								Create a scoped connection for your agent.
 							</EmptyDescription>
 						</EmptyHeader>
 					</Empty>

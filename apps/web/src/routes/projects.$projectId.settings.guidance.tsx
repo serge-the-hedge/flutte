@@ -1,11 +1,15 @@
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { ProjectDictionaryConnection } from "@/components/localization/project-dictionary-connection";
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
-import { TranslationGuidanceEditor } from "@/components/localization/translation-guidance-editor";
+import {
+	DictionaryEditor,
+	TranslationGuidanceEditor,
+} from "@/components/localization/translation-guidance-editor";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/settings/guidance")({
@@ -19,12 +23,17 @@ function GuidanceRoute() {
 	const id = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: id });
 	const locales = useQuery(api.locales.list, { projectId: id });
-	const introductions = useQuery(api.localeIntroductionTargets.list, {
+	const introductions = useQuery(
+		api.localeIntroductionTargets.list,
+		project?.type === "repository" ? { projectId: id } : "skip",
+	);
+	const legacy = useQuery(api.dictionaries.legacyProjectTerms, {
+		projectId: id,
+	});
+	const connection = useQuery(api.dictionaries.projectConnection, {
 		projectId: id,
 	});
 	const guidance = useQuery(api.translationGuidance.list, { projectId: id });
-	const saveTerm = useMutation(api.translationGuidance.saveTerm);
-	const removeTerm = useMutation(api.translationGuidance.removeTerm);
 	const saveVoiceGuide = useMutation(api.translationGuidance.saveVoiceGuide);
 	const saveProjectVoiceGuide = useMutation(
 		api.translationGuidance.saveProjectVoiceGuide,
@@ -45,14 +54,7 @@ function GuidanceRoute() {
 			});
 		}
 	}
-	for (const code of [
-		...(guidance?.guides.map((guide) => guide.localeCode) ?? []),
-		...(guidance?.terms.flatMap(({ term }) =>
-			term.kind === "translated"
-				? term.renderings.map((rendering) => rendering.localeCode)
-				: [],
-		) ?? []),
-	]) {
+	for (const code of guidance?.guides.map((guide) => guide.localeCode) ?? []) {
 		if (!targets.some((locale) => locale.code === code))
 			targets.push({ code, label: code, active: false });
 	}
@@ -62,21 +64,59 @@ function GuidanceRoute() {
 				title="Translation guidance"
 				description="The project’s terminology and voice, shared by translators and independent reviewers."
 			/>
-			{project && guidance && locales && introductions ? (
-				<TranslationGuidanceEditor
-					key={projectId}
-					guidance={guidance}
-					locales={targets}
-					canEdit={project.role === "owner" || project.role === "editor"}
-					onSaveTerm={(input) => saveTerm({ projectId: id, ...input })}
-					onRemoveTerm={(input) => removeTerm({ projectId: id, ...input })}
-					onSaveProjectVoiceGuide={(input) =>
-						saveProjectVoiceGuide({ projectId: id, ...input })
-					}
-					onSaveVoiceGuide={(input) =>
-						saveVoiceGuide({ projectId: id, ...input })
-					}
-				/>
+			{project &&
+			guidance &&
+			locales &&
+			legacy &&
+			connection &&
+			(project.type === "basic" || introductions) ? (
+				<>
+					<ProjectDictionaryConnection
+						key={projectId}
+						projectId={projectId}
+						projectName={project.name}
+						canEdit={project.role === "owner"}
+						legacyRevision={legacy.revision}
+						legacyTermCount={legacy.terms.length}
+					/>
+					<TranslationGuidanceEditor
+						key={projectId}
+						guidance={guidance}
+						locales={targets}
+						canEdit={project.role === "owner" || project.role === "editor"}
+						onSaveProjectVoiceGuide={(input) =>
+							saveProjectVoiceGuide({ projectId: id, ...input })
+						}
+						onSaveVoiceGuide={(input) =>
+							saveVoiceGuide({ projectId: id, ...input })
+						}
+					/>
+					<DictionaryEditor
+						guidance={guidance}
+						locales={targets}
+						canEdit={false}
+						onSaveTerm={async () => {}}
+						onRemoveTerm={async () => {}}
+					/>
+					{connection.dictionaryId && legacy.terms.length > 0 ? (
+						<details>
+							<summary className="cursor-pointer text-muted-foreground text-sm">
+								Retained project terms · {legacy.terms.length}
+							</summary>
+							<p className="my-3 text-muted-foreground text-sm">
+								These terms remain in project history. The connected dictionary
+								supplies active terminology.
+							</p>
+							<DictionaryEditor
+								guidance={legacy}
+								locales={targets}
+								canEdit={false}
+								onSaveTerm={async () => {}}
+								onRemoveTerm={async () => {}}
+							/>
+						</details>
+					) : null}
+				</>
 			) : (
 				<Skeleton className="h-64 w-full" />
 			)}

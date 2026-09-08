@@ -258,7 +258,28 @@ const contractTransformCode = v.union(
 );
 
 export default defineSchema({
+	collectionProjectMoves: defineTable({
+		sourceProjectId: v.id("projects"),
+		destinationProjectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		status: v.union(
+			v.literal("moving"),
+			v.literal("failed"),
+			v.literal("complete"),
+		),
+		phase: v.string(),
+		cursor: v.optional(v.string()),
+		proposalCursor: v.optional(v.string()),
+		proposalId: v.optional(v.id("agentTranslationProposals")),
+		error: v.optional(v.string()),
+		createdAt: v.number(),
+		completedAt: v.optional(v.number()),
+	})
+		.index("by_collection", ["collectionId"])
+		.index("by_source", ["sourceProjectId"]),
+
 	contentCollections: defineTable({
+		movingToProjectId: v.optional(v.id("projects")),
 		projectId: v.id("projects"),
 		name: v.string(),
 		membershipRevision: v.number(),
@@ -313,6 +334,7 @@ export default defineSchema({
 		updatedAt: v.number(),
 	})
 		.index("by_value", ["collectionId", "messageId", "localeId"])
+		.index("by_collection", ["collectionId"])
 		.index("by_locale", ["localeId"]),
 	managedTargetRevisions: defineTable({
 		projectId: v.id("projects"),
@@ -326,9 +348,14 @@ export default defineSchema({
 		actor,
 		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
 		createdAt: v.number(),
-	}).index("by_value", ["collectionId", "messageId", "localeId"]),
+	})
+		.index("by_value", ["collectionId", "messageId", "localeId"])
+		.index("by_collection", ["collectionId"]),
 
 	projects: defineTable({
+		type: v.optional(v.union(v.literal("basic"), v.literal("repository"))),
+		managedCollectionId: v.optional(v.id("contentCollections")),
+		migrationPending: v.optional(v.boolean()),
 		name: v.string(),
 		slug: v.string(),
 		// The Repository Adapter establishes this on its first submission. It is
@@ -386,28 +413,58 @@ export default defineSchema({
 
 	// Authored translation references are independent of release truth.
 	// Heads bound current reads; immutable revisions keep old citations useful.
-	translationGuidanceStates: defineTable({
+	dictionaries: defineTable({
+		name: v.string(),
+		ownerUserId: v.string(),
+		legacyProjectId: v.optional(v.id("projects")),
+		legacyTermKeys: v.optional(v.array(v.string())),
+		legacyRevision: v.optional(v.number()),
+	}).index("by_owner", ["ownerUserId"]),
+	dictionaryEditors: defineTable({
+		dictionaryId: v.id("dictionaries"),
+		userId: v.string(),
+	})
+		.index("by_dictionary_user", ["dictionaryId", "userId"])
+		.index("by_user", ["userId"]),
+	projectDictionaryConnections: defineTable({
 		projectId: v.id("projects"),
+		dictionaryId: v.union(v.id("dictionaries"), v.null()),
+		revision: v.number(),
+		agentWriteEnabled: v.boolean(),
+	})
+		.index("by_project", ["projectId"])
+		.index("by_dictionary", ["dictionaryId"]),
+	translationGuidanceStates: defineTable({
+		projectId: v.optional(v.id("projects")),
+		dictionaryId: v.optional(v.id("dictionaries")),
 		revision: v.number(),
 		termCount: v.number(),
 		guideCount: v.number(),
 		byteLength: v.number(),
-	}).index("by_project", ["projectId"]),
+	})
+		.index("by_project", ["projectId"])
+		.index("by_dictionary", ["dictionaryId"]),
 
 	translationGuidanceEntries: defineTable({
-		projectId: v.id("projects"),
+		projectId: v.optional(v.id("projects")),
+		dictionaryId: v.optional(v.id("dictionaries")),
 		key: v.string(),
 		content: guidanceContentValidator,
 		revisionId: v.id("translationGuidanceRevisions"),
 		...guidanceAuthorshipFields,
-	}).index("by_project_and_key", ["projectId", "key"]),
+	})
+		.index("by_project_and_key", ["projectId", "key"])
+		.index("by_dictionary_and_key", ["dictionaryId", "key"]),
 
 	translationGuidanceRevisions: defineTable({
-		projectId: v.id("projects"),
+		projectId: v.optional(v.id("projects")),
+		dictionaryId: v.optional(v.id("dictionaries")),
 		key: v.string(),
 		content: v.union(guidanceContentValidator, v.null()),
 		...guidanceAuthorshipFields,
-	}).index("by_project_and_revision", ["projectId", "revision"]),
+	})
+		.index("by_project_and_revision", ["projectId", "revision"])
+		.index("by_dictionary_and_revision", ["dictionaryId", "revision"]),
 
 	locales: defineTable({
 		projectId: v.id("projects"),
@@ -1862,7 +1919,8 @@ export default defineSchema({
 			"createdByTokenId",
 			"localeProposalTaskScope.localeProposalId",
 		])
-		.index("by_project_and_updatedAt", ["projectId", "updatedAt"]),
+		.index("by_project_and_updatedAt", ["projectId", "updatedAt"])
+		.index("by_collection", ["target.collectionId"]),
 
 	// A Translation Task freezes a small, human-legible key/Locale scope without
 	// copying the catalog into one reactive document. Reads resolve each target's

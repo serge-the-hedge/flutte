@@ -24,6 +24,12 @@ export async function authorizeProjectIngestion(
 	projectId: Id<"projects">,
 	actor?: RepositoryAdapterActor,
 ) {
+	const project = await assertProjectExists(ctx, projectId);
+	if (project.type === "basic")
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "Repository sync belongs to a repository project.",
+		});
 	if (!actor) {
 		const { userId } = await requireEditor(ctx, projectId);
 		return { kind: "user" as const, id: userId };
@@ -62,7 +68,13 @@ export async function requireProjectRole(
 	minimumRole: Role,
 ): Promise<{ userId: string; member: Doc<"projectMembers"> }> {
 	const user = await requireUser(ctx);
-	await assertProjectExists(ctx, projectId);
+	const project = await assertProjectExists(ctx, projectId);
+	if (project.migrationPending && minimumRole !== "viewer")
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Project content is still moving. Editing is available after completion.",
+		});
 	const member = await getMembership(ctx, projectId, user.id);
 	if (!member || !hasMinimumRole(member.role, minimumRole)) {
 		throw new ConvexError({

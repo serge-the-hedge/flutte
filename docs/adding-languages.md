@@ -1,5 +1,10 @@
 # Adding a language
 
+Basic projects add target languages directly in Strings; they need no catalog
+file or repository delivery. See [Projects and Dictionaries](projects-and-dictionaries.md).
+The repository workflow below applies to Repository Projects.
+
+
 Use the same workflow for each language: configure it, prepare a Translation
 Task, review the complete catalog, deliver it through Git, and bind the observed
 file. Configuration and proposals do not activate a language.

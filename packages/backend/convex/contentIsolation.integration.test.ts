@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
+	createLegacyCollection,
 	createProject,
 } from "../test/support";
 import { api } from "./_generated/api";
@@ -18,7 +19,7 @@ async function setup() {
 		projectId,
 		code: "de",
 	});
-	const collectionId = await owner.mutation(api.contentCollections.create, {
+	const collectionId = await createLegacyCollection(t, {
 		projectId,
 		name: "Store",
 		localeIds: [french],

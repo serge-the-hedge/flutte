@@ -8,6 +8,8 @@ import {
 import { isReviewOnlyToken } from "./agentReviewModel";
 import { hashToken } from "./apiTokens";
 import { MAX_PROJECTED_LOCALES } from "./catalogProjection";
+import { collectionMemberships } from "./contentCollections";
+import { projectDictionaryConnection } from "./dictionaryAccess";
 import {
 	isRepositoryLocale,
 	type TokenScope,
@@ -37,8 +39,17 @@ export async function authenticateAgent(
 			message: "Invalid or insufficient API token.",
 		});
 	}
-	await assertProjectExists(ctx, token.projectId);
-	return token;
+	const project = await assertProjectExists(ctx, token.projectId);
+	if (project.migrationPending)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "Project content is still moving. Retry after completion.",
+		});
+	return {
+		...token,
+		projectType: project.type ?? ("repository" as const),
+		managedCollectionId: project.managedCollectionId,
+	};
 }
 
 export const authenticateToken = internalQuery({
@@ -77,6 +88,7 @@ export const currentProject = internalQuery({
 	handler: async (ctx, args) => {
 		const token = await authenticateAgent(ctx, args.token, "read");
 		const project = await assertProjectExists(ctx, token.projectId);
+		const dictionary = await projectDictionaryConnection(ctx, token.projectId);
 		const sourceLocale = project.sourceLocaleId
 			? await ctx.db.get(project.sourceLocaleId)
 			: null;
@@ -101,15 +113,34 @@ export const currentProject = internalQuery({
 				catalogPath,
 				runtimeLocale,
 			}));
+		const basicLocaleIds =
+			project.type === "basic" && project.managedCollectionId
+				? new Set(
+						(await collectionMemberships(ctx, project.managedCollectionId))
+							.filter((m) => m.active)
+							.map((m) => m.localeId),
+					)
+				: null;
 		return {
 			projectId: token.projectId,
 			name: project.name,
+			type: project.type ?? "repository",
+			managedCollectionId: project.managedCollectionId ?? null,
 			sourceLocale: sourceLocale?.code ?? null,
-			locales: locales.filter(isRepositoryLocale).map((locale) => locale.code),
+			locales: locales
+				.filter((locale) =>
+					project.type === "basic"
+						? locale.archivedAt === undefined &&
+							(locale.isSource || basicLocaleIds?.has(locale._id))
+						: isRepositoryLocale(locale),
+				)
+				.map((locale) => locale.code),
 			tokenScopes: token.scopes,
 			localeIntroductionTargets: introductionTargets,
 			capabilities: {
-				collections: true,
+				collections: project.type === undefined,
+				format: project.type === "basic" ? "plain" : "icu",
+				download: project.type === "basic",
 				search: {
 					engine: "literal",
 					fields: ["key", "source", "target"],
@@ -133,7 +164,12 @@ export const currentProject = internalQuery({
 				dictionary: {
 					batchWrites: true,
 					writeScope: "dictionary-write",
-					canWrite: token.scopes.includes("dictionary-write"),
+					canWrite:
+						token.scopes.includes("dictionary-write") &&
+						(dictionary?.dictionaryId
+							? dictionary.agentWriteEnabled
+							: project.type === undefined),
+					id: dictionary?.dictionaryId ?? null,
 				},
 			},
 		};

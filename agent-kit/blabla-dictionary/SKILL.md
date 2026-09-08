@@ -1,6 +1,6 @@
 ---
 name: blabla-dictionary
-description: Fill or maintain a Blabla project's Dictionary under an explicit terminology assignment. Use for shared definitions, preferred Locale renderings, and untranslatable terms with dictionary-write access.
+description: Fill or maintain a Blabla project’s connected shared Dictionary under an explicit terminology assignment. Use for shared definitions, preferred Locale renderings, and untranslatable terms with dictionary-write access.
 ---
 
 # Maintain the Dictionary
@@ -21,7 +21,8 @@ permission.
    and evidence. Frequency alone is not policy. Keep voice-guide editing with
    the human; the general guide and optional Locale add-ons remain live context.
 4. [Save a bounded batch](../_blabla/references/dictionary-api.md#post-dictionaryterms) with
-   the read `expectedRevision`. An existing term is replaced in full: preserve
+   the read `expectedRevision` and, when connected, Dictionary identity and
+   connection revision. An existing term is replaced in full: preserve
    its definition and other Locale renderings unless the assignment changes
    them. An untranslatable term has no Locale renderings. Remove a term only when
    removal is part of the assignment.

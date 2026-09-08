@@ -26,20 +26,12 @@ basis remain live on the server:
 }
 ```
 
-Managed copy uses the same selected-message task with a collection target:
-
-```json
-{
-  "clientTaskKey": "store-de-v1",
-  "target": { "kind": "managedLocale", "collectionId": "<id>", "localeCode": "de" },
-  "scope": { "kind": "selectedMessages", "messageIds": ["store.subtitle"] }
-}
-```
-
-Choose an enabled Locale from [collection discovery](collection-api.md#discovery).
-Managed tasks expose `collectionId` and `format: "plain"`; Source context notes
-are included. They use the same candidate and review endpoints, with live
-revision checks and no Snapshot or repository path requirement.
+Basic projects use the same `existingLocale` target and `selectedMessages` scope.
+Their task/review metadata includes `format: "plain"`; Source context notes are
+included. The server resolves the project’s content store and revision basis.
+An explicit `managedLocale` target with `collectionId` remains a compatibility
+shape for older clients. Project promotion preserves tasks and authorship but
+requires credentials scoped to the new project.
 
 The original top-level `"localeCode": "de"` and `"messageIds"` request remains
 readable for compatibility. New clients should use explicit target and scope.

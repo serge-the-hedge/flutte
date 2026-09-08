@@ -1,35 +1,31 @@
-# Managed collection API
+# Basic project API
 
 ## Discovery
 
-`GET /collections` (`read`) lists the project’s collections. `app` identifies the
-repository collection: use the existing `/workspace` endpoints for it. Managed
-collections have durable IDs and independent key namespaces.
-
-`GET /collections/:id` (`read`) returns collection identity, membership revision,
-source Locale, enabled target Locales, and `syntax: "plain"`. Choose languages
-from this response; `/projects/current.locales` describes App file bindings.
-Managed source authoring and membership changes currently use the editor.
+`GET /projects/current` identifies the token’s project and its `type`: `basic`
+or `repository`. A Basic project owns one plain-text workspace. Its enabled
+languages come from `locales`; source authoring and language setup use the editor.
+Project-scoped routes below need no collection selector or extra credential.
 
 ## Search
 
-`GET /collections/:id/search` (`search`) accepts `q`, `localeCode`, `searchIn`
+`GET /workspace/search` (`search`) accepts `q`, `localeCode`, `searchIn`
 (`all`, `key`, `source`, `target`), `match` (`substring`, `exact`), `keyPrefix`,
 `quality` (`all`, `confirmed`), `limit` (1–50), and `cursor`.
 
-Hits carry collection/key/Locale identity, Source and target values, fingerprints,
+Hits carry project content/key/Locale identity, Source and target values, fingerprints,
 revision basis, value state, matching fields, and confirmation attribution.
 Plain text is searched literally, including braces. Search scans at most 64
 key/Locale pairs per page and caps result payload at 1 MiB; a short or empty page
 can have `nextCursor`. The terminal helper supports this endpoint with `scan`.
 
-Cursors bind the collection, filters, and membership revision. Changed membership
+Cursors bind the project’s content, filters, and language membership revision. Changed membership
 or filters require a fresh scan. `consistency: "live"` means values can change
 between pages; finish repair work with a fresh verification pass.
 
 ## Exact context
 
-`POST /collections/:id/context` (`read`):
+`POST /workspace/context` (`read`):
 
 ```json
 { "keys": ["store.subtitle"], "locales": ["de", "fr"] }
@@ -42,7 +38,7 @@ guidance also enforces its own text budget. Braces are ordinary text.
 
 ## Download
 
-`POST /collections/:id/download` (`read`) accepts the same `keys`/`locales` and
+`POST /workspace/download` (`read`) accepts the same `keys`/`locales` and
 `mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text` keyed by
 message then Locale, omissions, and revision evidence for that read.
 
@@ -58,8 +54,16 @@ No Git delivery scope is required.
 ## Translation and review
 
 Use the shared [Translation Task API](translation-api.md#post-translation-tasks)
-with `target.kind: "managedLocale"`, the collection ID, and enabled Locale code.
+with `target.kind: "existingLocale"` and an enabled Locale code. The project type
+selects the implementation.
 Candidate submission and independent review retain their existing authorization
 rules. Managed task and review metadata include `collectionId` and
 `format: "plain"`; review acceptance applies through the same managed edit rules
 as the editor. Source, target, or membership changes invalidate stale candidates.
+
+## Compatibility addresses
+
+Existing `/collections` discovery and `/collections/:id/{search,context,download}`
+addresses retain their explicit content-store IDs for older clients and citations.
+They do not create nested collections. New assignments use the project workspace
+routes above; project promotion requires a new project-scoped credential.

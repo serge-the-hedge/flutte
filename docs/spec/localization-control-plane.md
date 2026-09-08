@@ -17,7 +17,7 @@ when a product decision changes.
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
-| Managed content collections | Direct source authoring, shared Strings/tasks/review, collection search and JSON downloads implemented; see [content collections](../content-collections.md) |
+| Project types and shared Dictionaries | Basic/Repository projects with stable navigation, shared terminology, plain-text authoring and downloads; existing collection promotion preserves history. See [Projects and Dictionaries](../projects-and-dictionaries.md) |
 
 Charted by [Wayfinder: Make Blabla Brickit's trusted localization control
 plane](https://github.com/serge-the-hedge/flutte/issues/4) and locked by [Lock
@@ -42,8 +42,8 @@ The first supported surface is the six-file Flutter ARB catalog in
 `zh`, at `packages/brickit_generated/lib/l10n/`. 1,434 keys, 7,170 target
 values across five target Locales (8,604 values including English), one translator.
 
-The following properties govern the repository-backed App collection.
-[Managed collections](../content-collections.md) own source text directly and
+The following properties govern the Repository Project.
+[Basic projects](../projects-and-dictionaries.md) own source text directly and
 share translation/review policy without participating in Git delivery.
 
 **Git writes English; Blabla writes the rest.** Message identifiers, English
@@ -1125,7 +1125,7 @@ answered differently later.
   [capacity and storage trade-offs](../adding-languages.md#several-languages-and-capacity);
   structural guards do not establish latency or quota guarantees for 50 or
   100 full-size languages.
-- **Other external content connections.** [Managed collections](../content-collections.md)
+- **Other external content connections.** [Basic projects](../projects-and-dictionaries.md)
   support directly authored marketing text. Database connectors and additional
   repository formats remain unspecified. Store Listing Content stays outside
   ARB snapshots, release bundles, and reconciliation.

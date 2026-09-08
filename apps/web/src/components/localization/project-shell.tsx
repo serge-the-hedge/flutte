@@ -1,3 +1,4 @@
+import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import { Separator } from "@blabla/ui/components/separator";
 import {
@@ -11,6 +12,7 @@ import {
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { cn } from "@blabla/ui/lib/utils";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import {
 	BookOpen,
 	Bot,
@@ -25,6 +27,8 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { api, convexId } from "@/lib/convex-api";
+import { LegacyContentProjects } from "./legacy-content-projects";
 
 type NavItem = { label: string; to: string; icon: LucideIcon };
 type NavGroup = { label: string; items: NavItem[] };
@@ -78,8 +82,7 @@ const navGroups: NavGroup[] = [
 ];
 
 function ProjectNavigation({
-	collectionId,
-	managed,
+	type,
 	projectId,
 	pathname,
 	onNavigate,
@@ -87,8 +90,7 @@ function ProjectNavigation({
 	projectId: string;
 	pathname: string;
 	onNavigate?: () => void;
-	managed?: boolean;
-	collectionId?: string;
+	type?: "basic" | "repository";
 }) {
 	return (
 		<nav
@@ -103,7 +105,8 @@ function ProjectNavigation({
 					{group.items
 						.filter(
 							(item) =>
-								!managed || (item.label !== "Sync" && item.label !== "Release"),
+								type === "repository" ||
+								(item.label !== "Sync" && item.label !== "Release"),
 						)
 						.map((item) => {
 							const resolvedHref = item.to.replace("$projectId", projectId);
@@ -113,11 +116,7 @@ function ProjectNavigation({
 									key={item.to}
 									to={item.to as never}
 									params={{ projectId } as never}
-									search={
-										(item.label === "Strings" && collectionId
-											? { collection: collectionId }
-											: {}) as never
-									}
+									search={{} as never}
 									onClick={onNavigate}
 									className={cn(
 										"group flex items-center gap-2 rounded-md px-2 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -137,7 +136,13 @@ function ProjectNavigation({
 	);
 }
 
-function ProjectIdentity({ title }: { title: string }) {
+function ProjectIdentity({
+	title,
+	type,
+}: {
+	title: string;
+	type?: "basic" | "repository";
+}) {
 	return (
 		<div className="flex flex-col gap-3 border-b p-4">
 			<Link
@@ -154,13 +159,16 @@ function ProjectIdentity({ title }: { title: string }) {
 			) : (
 				<Skeleton className="h-5 w-3/4" />
 			)}
+			{type && (
+				<Badge variant="outline" className="w-fit">
+					{type === "basic" ? "Basic" : "Repository"}
+				</Badge>
+			)}
 		</div>
 	);
 }
 
 export function ProjectShell({
-	collectionId,
-	managed,
 	projectId,
 	title,
 	children,
@@ -168,9 +176,10 @@ export function ProjectShell({
 	projectId: string;
 	title: string;
 	children: ReactNode;
-	managed?: boolean;
-	collectionId?: string;
 }) {
+	const project = useQuery(api.projects.get, {
+		projectId: convexId<"projects">(projectId),
+	});
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
@@ -179,12 +188,11 @@ export function ProjectShell({
 	return (
 		<div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[232px_1fr]">
 			<aside className="hidden min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
-				<ProjectIdentity title={title} />
+				<ProjectIdentity title={title} type={project?.type} />
 				<ProjectNavigation
 					projectId={projectId}
 					pathname={pathname}
-					managed={managed}
-					collectionId={collectionId}
+					type={project?.type}
 				/>
 			</aside>
 			<div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
@@ -211,10 +219,9 @@ export function ProjectShell({
 									Navigate within {title || "this project"}.
 								</SheetDescription>
 							</SheetHeader>
-							<ProjectIdentity title={title} />
+							<ProjectIdentity title={title} type={project?.type} />
 							<ProjectNavigation
-								managed={managed}
-								collectionId={collectionId}
+								type={project?.type}
 								projectId={projectId}
 								pathname={pathname}
 								onNavigate={() => setMobileNavOpen(false)}
@@ -222,9 +229,23 @@ export function ProjectShell({
 						</SheetContent>
 					</Sheet>
 					<span className="min-w-0 truncate font-medium text-sm">{title}</span>
+					{project && (
+						<Badge variant="outline">
+							{project.type === "basic" ? "Basic" : "Repository"}
+						</Badge>
+					)}
 				</div>
 				<div className="min-w-0 flex-1 overflow-auto">
 					<div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-6">
+						{project?.type === "repository" &&
+							(pathname.endsWith("/strings") ||
+								pathname.endsWith("/sync") ||
+								pathname.includes("/settings/")) && (
+								<LegacyContentProjects
+									projectId={projectId}
+									canPromote={project.role === "owner"}
+								/>
+							)}
 						{children}
 					</div>
 				</div>

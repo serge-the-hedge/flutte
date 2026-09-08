@@ -12,7 +12,7 @@ import { act } from "react";
 import { createDomTest } from "@/test/dom";
 import { ManagedStrings } from "./managed-strings";
 
-describe("Managed collection workflow", () => {
+describe("Basic project workflow", () => {
 	const dom = createDomTest();
 	const client = new ConvexReactClient("https://example.convex.cloud");
 	const basis = {
@@ -138,7 +138,7 @@ describe("Managed collection workflow", () => {
 						projectId="project"
 						collectionId="marketing"
 						search={{
-							collection: "marketing",
+							collection: undefined,
 							cursor: "previous-page",
 							q: "old search",
 						}}
@@ -187,7 +187,7 @@ describe("Managed collection workflow", () => {
 		});
 		pendingCreate = undefined;
 		expect(searches.at(-1)).toEqual({
-			collection: "marketing",
+			collection: undefined,
 			key: "new_line",
 			locales: undefined,
 		});
@@ -325,7 +325,7 @@ describe("Managed collection workflow", () => {
 					<ManagedStrings
 						projectId="project"
 						collectionId="marketing"
-						search={{ collection: "marketing" }}
+						search={{}}
 						onSearch={() => {}}
 					/>
 				</ConvexProvider>

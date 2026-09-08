@@ -6,21 +6,26 @@ release authority.
 
 ## Language
 
-**Content Collection**:
-A named set of messages sharing one source owner and a target-Locale selection
-inside a project. Keys are unique within a collection; languages and guidance
-are shared across the project.
-_Avoid_: project clone, folder, pipeline
+**Project**:
+An independently accessible body of localization work with its own languages,
+voice guidance, translation tasks and review policy. Its type defines where
+source text is authored and how reviewed output is delivered.
+_Avoid_: collection, folder, Dictionary
+
+**Basic Project**:
+A Project whose source text is authored directly in Blabla and whose reviewed
+translations are copied or downloaded.
+_Avoid_: managed collection, fake Snapshot
+
+**Repository Project**:
+A Project whose source definitions and release truth belong to a connected
+application repository, with snapshot-based translation and delivery.
+_Avoid_: collection, repository folder
 
 **Managed Content**:
-Source text authored directly in Blabla, with reviewed target values for copy or
-download. Its source revisions are independent of repository Snapshots.
+Plain-text Source authored directly in a Basic Project, with revision history
+independent of repository Snapshots.
 _Avoid_: fake Snapshot, ARB import
-
-**Collection Membership**:
-A Locale's participation in a Content Collection, independent of any repository
-file binding. Removing membership preserves its retained translation history.
-_Avoid_: project Locale deletion, file binding
 
 **Source Contract**:
 The exact source-language localization definition: a message identifier, source
@@ -62,7 +67,7 @@ evidence; catalog state exposes only the workflow facts derived from it.
 _Avoid_: message table, editable metadata
 
 **Catalog Message**:
-A stable message identifier within a Content Collection, joining one Source
+A stable message identifier within a Project, joining one Source
 Contract to its target-Locale values and history. The identifier is the key; each Locale's text is a value,
 so neither should be called the string when the distinction matters.
 _Avoid_: string, translation row
@@ -131,8 +136,8 @@ _Avoid_: catalog locale, ARB locale
 
 **Locale Variant**:
 A distinct Locale with its own canonical code because its translatable content
-differs by script or region. Its collection membership is deliberate; only a
-repository collection requires a corresponding catalog file.
+differs by script or region. Its project membership is deliberate; only a
+Repository Project requires a corresponding catalog file.
 _Avoid_: runtime fallback, compatibility alias
 
 **Locale Introduction Target**:
@@ -418,10 +423,9 @@ it: an undecided value blocks its Locale instead.
 _Avoid_: empty translation, copied source, approved deviation
 
 **Dictionary**:
-A Blabla-owned, project-scoped, translator-facing record of how particular
-terms are handled, including definitions and chosen Locale renderings. It guides
-wording, explains Source Echoes, and identifies Dictionary Conflicts without
-becoming catalog content or release authority.
+An independently maintained terminology reference that can be connected to many
+Projects. It records definitions and chosen Locale renderings while its owner
+controls editing access. Each Project connects at most one Dictionary.
 _Avoid_: ARB metadata, translation memory, glossary export
 
 **Voice Guide**:

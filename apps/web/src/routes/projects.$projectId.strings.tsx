@@ -10,7 +10,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ContentCollectionSelector } from "@/components/localization/content-collection-selector";
+import { LegacyContentLink } from "@/components/localization/legacy-content-projects";
 import { ManagedStrings } from "@/components/localization/managed-strings";
 import {
 	PageHeader,
@@ -85,30 +85,36 @@ function StringsRoute() {
 		projectId: convexId<"projects">(projectId),
 	});
 	return (
-		<ProjectShell
-			projectId={projectId}
-			title={project?.name ?? "Project"}
-			managed={!!search.collection}
-			collectionId={search.collection}
-		>
-			<ContentCollectionSelector
-				projectId={projectId}
-				value={search.collection}
-				canEdit={project?.role === "owner" || project?.role === "editor"}
-				onChange={(collection) => {
-					void navigate({ search: { collection } });
-				}}
-			/>
+		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			{search.collection ? (
-				<ManagedStrings
-					key={search.collection}
+				<LegacyContentLink
 					projectId={projectId}
 					collectionId={search.collection}
 					search={search}
-					onSearch={(next) => {
-						void navigate({ search: next });
-					}}
 				/>
+			) : !project ? (
+				<p role="status">Loading project…</p>
+			) : project.migrationPending ? (
+				<p role="status" className="text-muted-foreground text-sm">
+					Moving content into this project. Strings will be available when the
+					move finishes.
+				</p>
+			) : project.type === "basic" ? (
+				project.managedCollectionId ? (
+					<ManagedStrings
+						key={projectId}
+						projectId={projectId}
+						collectionId={project.managedCollectionId}
+						search={search}
+						onSearch={(next) => {
+							void navigate({ search: next });
+						}}
+					/>
+				) : (
+					<p role="alert">
+						This project’s content is unavailable. Reload to try again.
+					</p>
+				)
 			) : (
 				<RepositoryStrings />
 			)}
@@ -351,7 +357,7 @@ function RepositoryStrings() {
 		async (input: CatalogWorkspaceCommit) => {
 			try {
 				if (input.basis.kind !== "repository")
-					throw new Error("Wrong collection for this save.");
+					throw new Error("This value does not belong to the repository.");
 				const receipt = await commitWorkspaceValue({
 					projectId: convexProjectId,
 					messageId: input.messageId,

@@ -14,8 +14,8 @@ recorded review establishes otherwise.
    exclusively with a separate reviewer agent.
 2. Resume the assigned task. If the assignment requires a new task, read
    [task creation](../_blabla/references/translation-api.md#post-translation-tasks): existing
-   App and managed
-   Locales use collection-scoped selected message ids; a configured new Locale uses the complete
+   repository and Basic
+   projects use project-scoped selected message ids; a configured new Locale uses the complete
    catalog scope. The server owns the task's basis.
 3. Read one [task page](../_blabla/references/translation-api.md#get-translation-tasksid),
    including Source, current target, applicable guidance, newest candidate, and

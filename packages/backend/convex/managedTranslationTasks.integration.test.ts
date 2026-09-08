@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
+	createLegacyCollection,
 	createProject,
 } from "../test/support";
 import { api, internal } from "./_generated/api";
@@ -15,7 +16,7 @@ async function setup() {
 		projectId,
 		code: "de",
 	});
-	const collectionId = await owner.mutation(api.contentCollections.create, {
+	const collectionId = await createLegacyCollection(t, {
 		projectId,
 		name: "Website",
 		localeIds: [localeId],
@@ -264,10 +265,11 @@ test("managed tasks enforce collection membership, frozen scope, and exact batch
 		projectId: otherProject,
 		code: "de",
 	});
-	const foreignCollection = await f.owner.mutation(
-		api.contentCollections.create,
-		{ projectId: otherProject, name: "Other", localeIds: [otherLocale] },
-	);
+	const foreignCollection = await createLegacyCollection(f.t, {
+		projectId: otherProject,
+		name: "Other",
+		localeIds: [otherLocale],
+	});
 	await expect(
 		f.owner.mutation(api.agentTranslationProposals.createTask, {
 			projectId: f.projectId,

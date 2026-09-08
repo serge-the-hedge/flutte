@@ -66,7 +66,13 @@ export const projectVoiceGuideEvidenceValidator = v.object({
 	...guidanceCitationFields,
 });
 
+export const dictionaryContextValidator = v.object({
+	id: v.id("dictionaries"),
+	revision: v.number(),
+	connectionRevision: v.number(),
+});
 export const guidanceListValidator = v.object({
+	dictionary: v.optional(dictionaryContextValidator),
 	revision: v.number(),
 	terms: v.array(v.object(dictionaryTermEvidenceFields)),
 	guides: v.array(voiceGuideEvidenceValidator),
@@ -74,6 +80,7 @@ export const guidanceListValidator = v.object({
 });
 
 export const guidanceContextValidator = v.object({
+	dictionary: v.optional(dictionaryContextValidator),
 	revision: v.number(),
 	terms: v.array(
 		v.object({
