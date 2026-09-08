@@ -46,6 +46,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import { toast } from "sonner";
 
 import { IcuMessageSegmentEditor } from "@/components/localization/icu-message-segment-editor";
 import { readMessageSegments } from "@/lib/icu-message-segments";
@@ -57,6 +58,7 @@ import type {
 	StringsCatalogKey,
 } from "@/lib/strings-catalog";
 import {
+	catalogValueEditBasis,
 	createCatalogWorkspaceDraft,
 	editCatalogWorkspaceDraft,
 	refreshCatalogWorkspaceDraft,
@@ -166,10 +168,6 @@ type MoveCatalogWorkspaceFocus = (request: WorkspaceFocusRequest) => boolean;
 
 type EditableCatalogWorkspaceValue = CatalogWorkspaceValue & {
 	localeId: string;
-	gitValueFingerprint: string;
-	gitValueRevision: number;
-	workspaceRevision: number;
-	expectedSourceFingerprint: string;
 };
 
 type CatalogWorkspaceEditorInput = {
@@ -177,6 +175,13 @@ type CatalogWorkspaceEditorInput = {
 	canEdit: boolean;
 	onCommitValue: CommitCatalogValue | undefined;
 };
+
+type CatalogControls = {
+	searchPlaceholder?: string;
+	onManageKey?: (key: StringsCatalogKey) => void;
+	onSelectionChange?: (ids: readonly string[]) => void;
+};
+const CatalogControlsContext = createContext<CatalogControls>({});
 
 const CatalogDraftsContext = createContext<CatalogEditorDrafts | null>(null);
 
@@ -192,10 +197,7 @@ function isEditableCatalogWorkspaceValue(
 		input.canEdit &&
 		input.onCommitValue !== undefined &&
 		value.localeId !== undefined &&
-		value.gitValueFingerprint !== undefined &&
-		value.gitValueRevision !== undefined &&
-		value.workspaceRevision !== undefined &&
-		value.expectedSourceFingerprint !== undefined
+		catalogValueEditBasis(value) !== undefined
 	);
 }
 
@@ -228,7 +230,8 @@ function ValueRow({
 				)}
 			/>
 			<span
-				className="w-7 shrink-0 pt-1.5 font-medium font-mono text-[11px] text-muted-foreground/60"
+				className="max-w-[25%] shrink-0 break-all pt-1.5 font-medium font-mono text-[11px] text-muted-foreground/60"
+				style={{ width: "var(--locale-gutter, 3ch)" }}
 				title={localeCode}
 			>
 				{localeCode}
@@ -314,22 +317,12 @@ function EditableCatalogValue({
 	onCommitValue: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
 }) {
-	const currentDraftSource = useMemo<CatalogWorkspaceDraftSource>(
-		() => ({
-			value: value.value,
-			expectedSourceFingerprint: value.expectedSourceFingerprint,
-			expectedGitValueFingerprint: value.gitValueFingerprint,
-			expectedGitValueRevision: value.gitValueRevision,
-			expectedWorkspaceRevision: value.workspaceRevision,
-		}),
-		[
-			value.expectedSourceFingerprint,
-			value.gitValueFingerprint,
-			value.gitValueRevision,
-			value.value,
-			value.workspaceRevision,
-		],
-	);
+	const currentDraftSource = useMemo<CatalogWorkspaceDraftSource>(() => {
+		const basis = catalogValueEditBasis(value);
+		if (!basis) throw new Error("Editable value has no concurrency basis.");
+		return { value: value.value, basis };
+	}, [value]);
+	const basis = currentDraftSource.basis;
 	const drafts = useContext(CatalogDraftsContext);
 	if (!drafts) throw new Error("Catalog editors require a draft owner.");
 	const session = drafts.get(
@@ -426,10 +419,7 @@ function EditableCatalogValue({
 					messageId,
 					localeId: value.localeId,
 					intent,
-					expectedGitValueFingerprint: commitDraft.expectedGitValueFingerprint,
-					expectedGitValueRevision: commitDraft.expectedGitValueRevision,
-					expectedWorkspaceRevision: commitDraft.expectedWorkspaceRevision,
-					expectedSourceFingerprint: commitDraft.expectedSourceFingerprint,
+					basis: commitDraft.basis,
 				});
 				// Start the write before moving focus. The current editor is the only
 				// disabled field; the rest of the catalog remains available while the
@@ -443,8 +433,7 @@ function EditableCatalogValue({
 				const nextSource: CatalogWorkspaceDraftSource = {
 					...commitDraft,
 					value: intent.kind === "intentionalBlank" ? "" : commitDraft.value,
-					expectedSourceFingerprint: receipt.sourceFingerprint,
-					expectedWorkspaceRevision: receipt.workspaceRevision,
+					basis: receipt.basis,
 				};
 				session.set("optimisticSource", (current) => {
 					const known = current?.known ?? [];
@@ -582,7 +571,22 @@ function EditableCatalogValue({
 			: isSaving
 				? undefined
 				: presentation.phrase;
-	const speaks = presentation.affordances.length > 0 || error !== null;
+	const copyKind = isDirty
+		? "draft"
+		: value.isSource
+			? "source"
+			: value.valueState === "settled"
+				? "reviewed"
+				: value.valueState === "stale"
+					? "stale"
+					: "draft";
+	const canCopy =
+		basis.kind !== "repository" &&
+		(isFocused || isDirty) &&
+		draft.value.length > 0 &&
+		!isSaving;
+	const speaks =
+		presentation.affordances.length > 0 || error !== null || canCopy;
 	const blankReasonId = `${messageId}-${value.localeId}-blank-reason`;
 	const showsBlankReason =
 		value.intentionalBlankReason !== undefined && !isDirty && !isRecordingBlank;
@@ -609,6 +613,7 @@ function EditableCatalogValue({
 				</button>
 			) : (
 				<IcuMessageSegmentEditor
+					format={basis.kind === "repository" ? "icu" : "plain"}
 					messageId={messageId}
 					localeId={value.localeId}
 					localeCode={value.localeCode}
@@ -662,13 +667,34 @@ function EditableCatalogValue({
 					{presentation.commitHint ? (
 						<span>⌘↵ {presentation.commitHint}</span>
 					) : null}
-					{value.isSource && isDirty ? (
+					{value.isSource && isDirty && basis.kind === "repository" ? (
 						<span>editing the source proposes a change to Git</span>
 					) : null}
 					{presentation.echoesSource ? (
 						<span>
 							identical to the source — saving records that as the decision
 						</span>
+					) : null}
+					{canCopy ? (
+						<button
+							type="button"
+							className="underline underline-offset-2 hover:text-foreground"
+							onMouseDown={(event) => event.preventDefault()}
+							onClick={async () => {
+								try {
+									await navigator.clipboard.writeText(draft.value);
+									toast.success(
+										`${copyKind[0]?.toUpperCase()}${copyKind.slice(1)} text copied`,
+									);
+								} catch {
+									toast.error(
+										"Could not copy text. Select the value and copy it manually.",
+									);
+								}
+							}}
+						>
+							Copy {copyKind} text
+						</button>
 					) : null}
 					{presentation.affordances.includes("confirm") ? (
 						<Button
@@ -745,6 +771,11 @@ function CatalogWorkspaceValueField({
 }
 
 function hasMultipleIcuArms(catalogKey: StringsCatalogKey): boolean {
+	if (
+		catalogKey.source.editBasis &&
+		catalogKey.source.editBasis.kind !== "repository"
+	)
+		return false;
 	const message = readMessageSegments({
 		value: catalogKey.source.value,
 		localeCode: catalogKey.source.localeCode,
@@ -781,11 +812,17 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 	// The key's own facts, said once. The change that left five Locales waiting
 	// is one fact, and repeating it under every value was the noise the
 	// prototype's second round was rejected for.
+	const controls = useContext(CatalogControlsContext);
 	const keyPresentation = presentCatalogKey(catalogKey.targets);
 	const hasMultiArmIcu = hasMultipleIcuArms(catalogKey);
 	return (
 		<section
 			data-highlighted={highlighted || undefined}
+			style={
+				{
+					"--locale-gutter": `${Math.max(3, catalogKey.source.localeCode.length, ...catalogKey.targets.map((target) => target.localeCode.length))}ch`,
+				} as React.CSSProperties
+			}
 			className={cn(
 				"group/key flex flex-col gap-2 border-b py-4",
 				selected && "-mx-2 bg-muted/25 px-2",
@@ -793,7 +830,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 			)}
 		>
 			<header className="flex items-baseline gap-2">
-				{canEdit ? (
+				{canEdit || controls.onSelectionChange ? (
 					<Checkbox
 						checked={selected}
 						onCheckedChange={(checked) =>
@@ -816,6 +853,15 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 				>
 					{catalogKey.id}
 				</button>
+				{controls.onManageKey ? (
+					<Button
+						variant="ghost"
+						size="xs"
+						onClick={() => controls.onManageKey?.(catalogKey)}
+					>
+						Details
+					</Button>
+				) : null}
 				{hasMultiArmIcu ? (
 					<span
 						role="img"
@@ -846,6 +892,9 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 					</span>
 				) : null}
 			</header>
+			{catalogKey.context ? (
+				<p className="text-muted-foreground text-xs">{catalogKey.context}</p>
+			) : null}
 			<div className="-ml-0.5 flex flex-col">
 				<CatalogWorkspaceValueField
 					messageId={catalogKey.id}
@@ -1147,8 +1196,11 @@ function CatalogSearch({
 							query: event.target.value,
 						})
 					}
-					placeholder="Search keys and every Locale value"
-					aria-label="Search the Baseline Catalog"
+					placeholder={
+						useContext(CatalogControlsContext).searchPlaceholder ??
+						"Search keys and every Locale value"
+					}
+					aria-label="Search strings"
 					className="pl-8"
 				/>
 			</div>
@@ -1776,6 +1828,10 @@ function StringsCatalogNavigator({
 	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const controls = useContext(CatalogControlsContext);
+	useEffect(() => {
+		controls.onSelectionChange?.([...selectedMessageIds]);
+	}, [controls.onSelectionChange, selectedMessageIds]);
 	const onSelectedMessageChange = useCallback(
 		(messageId: string, selected: boolean) => {
 			setSelectedMessageIds((current) => {
@@ -1925,7 +1981,9 @@ function StringsCatalogContent({
 	onStartNavigationBackfill,
 	workHandoff,
 	onCreateTranslationTask,
+	emptyContent,
 }: {
+	emptyContent?: React.ReactNode;
 	navigation: StringsNavigationRead | undefined;
 	navigationState: StringsCatalogNavigationState;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
@@ -1950,7 +2008,7 @@ function StringsCatalogContent({
 		(navigation.keys?.length ?? 0) === 0 &&
 		(navigation.keyCount ?? 0) === 0
 	) {
-		return <EmptyBaselineCatalog />;
+		return emptyContent ?? <EmptyBaselineCatalog />;
 	}
 
 	return (
@@ -1974,19 +2032,22 @@ function StringsCatalogContent({
 /** The route keys this owner by project. A new projection or a filtered-out
  * row must not replace the editing session that holds its concurrency basis. */
 export function StringsCatalogView(
-	props: React.ComponentProps<typeof StringsCatalogContent> & {
-		onUnsavedWorkChange?: (hasUnsavedWork: boolean) => void;
-	},
+	props: React.ComponentProps<typeof StringsCatalogContent> &
+		CatalogControls & {
+			onUnsavedWorkChange?: (hasUnsavedWork: boolean) => void;
+		},
 ) {
 	const [drafts] = useState(() => new CatalogEditorDrafts());
 	return (
-		<CatalogDraftsContext value={drafts}>
-			<CatalogDraftRecovery
-				drafts={drafts}
-				navigation={props.navigation}
-				onUnsavedWorkChange={props.onUnsavedWorkChange}
-			/>
-			<StringsCatalogContent {...props} />
-		</CatalogDraftsContext>
+		<CatalogControlsContext value={props}>
+			<CatalogDraftsContext value={drafts}>
+				<CatalogDraftRecovery
+					drafts={drafts}
+					navigation={props.navigation}
+					onUnsavedWorkChange={props.onUnsavedWorkChange}
+				/>
+				<StringsCatalogContent {...props} />
+			</CatalogDraftsContext>
+		</CatalogControlsContext>
 	);
 }

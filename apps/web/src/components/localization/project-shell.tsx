@@ -78,6 +78,8 @@ const navGroups: NavGroup[] = [
 ];
 
 function ProjectNavigation({
+	collectionId,
+	managed,
 	projectId,
 	pathname,
 	onNavigate,
@@ -85,6 +87,8 @@ function ProjectNavigation({
 	projectId: string;
 	pathname: string;
 	onNavigate?: () => void;
+	managed?: boolean;
+	collectionId?: string;
 }) {
 	return (
 		<nav
@@ -96,27 +100,37 @@ function ProjectNavigation({
 					<div className="px-2 pb-1 font-medium text-[10px] text-muted-foreground uppercase tracking-wider">
 						{group.label}
 					</div>
-					{group.items.map((item) => {
-						const resolvedHref = item.to.replace("$projectId", projectId);
-						const active = pathname.startsWith(resolvedHref);
-						return (
-							<Link
-								key={item.to}
-								to={item.to as never}
-								params={{ projectId } as never}
-								onClick={onNavigate}
-								className={cn(
-									"group flex items-center gap-2 rounded-md px-2 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-									active
-										? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-										: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
-								)}
-							>
-								<item.icon aria-hidden="true" className="size-3.5" />
-								{item.label}
-							</Link>
-						);
-					})}
+					{group.items
+						.filter(
+							(item) =>
+								!managed || (item.label !== "Sync" && item.label !== "Release"),
+						)
+						.map((item) => {
+							const resolvedHref = item.to.replace("$projectId", projectId);
+							const active = pathname.startsWith(resolvedHref);
+							return (
+								<Link
+									key={item.to}
+									to={item.to as never}
+									params={{ projectId } as never}
+									search={
+										(item.label === "Strings" && collectionId
+											? { collection: collectionId }
+											: {}) as never
+									}
+									onClick={onNavigate}
+									className={cn(
+										"group flex items-center gap-2 rounded-md px-2 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+										active
+											? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+											: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+									)}
+								>
+									<item.icon aria-hidden="true" className="size-3.5" />
+									{item.label}
+								</Link>
+							);
+						})}
 				</div>
 			))}
 		</nav>
@@ -145,6 +159,8 @@ function ProjectIdentity({ title }: { title: string }) {
 }
 
 export function ProjectShell({
+	collectionId,
+	managed,
 	projectId,
 	title,
 	children,
@@ -152,6 +168,8 @@ export function ProjectShell({
 	projectId: string;
 	title: string;
 	children: ReactNode;
+	managed?: boolean;
+	collectionId?: string;
 }) {
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
@@ -162,7 +180,12 @@ export function ProjectShell({
 		<div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[232px_1fr]">
 			<aside className="hidden min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
 				<ProjectIdentity title={title} />
-				<ProjectNavigation projectId={projectId} pathname={pathname} />
+				<ProjectNavigation
+					projectId={projectId}
+					pathname={pathname}
+					managed={managed}
+					collectionId={collectionId}
+				/>
 			</aside>
 			<div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
 				<div className="flex h-11 shrink-0 items-center gap-3 border-b bg-sidebar px-3 md:hidden">
@@ -190,6 +213,8 @@ export function ProjectShell({
 							</SheetHeader>
 							<ProjectIdentity title={title} />
 							<ProjectNavigation
+								managed={managed}
+								collectionId={collectionId}
 								projectId={projectId}
 								pathname={pathname}
 								onNavigate={() => setMobileNavOpen(false)}

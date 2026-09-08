@@ -24,12 +24,25 @@ export function sameDraftSource(
 	left: CatalogWorkspaceDraftSource,
 	right: CatalogWorkspaceDraftSource,
 ): boolean {
+	const a = left.basis;
+	const b = right.basis;
+	if (left.value !== right.value || a.kind !== b.kind) return false;
+	if (a.kind === "repository" && b.kind === "repository")
+		return (
+			a.expectedSourceFingerprint === b.expectedSourceFingerprint &&
+			a.expectedGitValueFingerprint === b.expectedGitValueFingerprint &&
+			a.expectedGitValueRevision === b.expectedGitValueRevision &&
+			a.expectedWorkspaceRevision === b.expectedWorkspaceRevision
+		);
+	if (a.kind === "repository" || b.kind === "repository") return false;
 	return (
-		left.value === right.value &&
-		left.expectedSourceFingerprint === right.expectedSourceFingerprint &&
-		left.expectedGitValueFingerprint === right.expectedGitValueFingerprint &&
-		left.expectedGitValueRevision === right.expectedGitValueRevision &&
-		left.expectedWorkspaceRevision === right.expectedWorkspaceRevision
+		a.collectionId === b.collectionId &&
+		a.sourceRevision === b.sourceRevision &&
+		a.sourceFingerprint === b.sourceFingerprint &&
+		a.membershipRevision === b.membershipRevision &&
+		(a.kind !== "managed" ||
+			b.kind !== "managed" ||
+			a.targetRevision === b.targetRevision)
 	);
 }
 

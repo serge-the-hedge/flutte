@@ -44,8 +44,6 @@ test("preserves unexpected errors", () => {
 
 test("partitions both request dimensions before subscribing", () => {
 	const batches = initialWindowBatches({
-		projectId: convexId<"projects">("project"),
-		expectedProjectionId: convexId<"catalogProjections">("projection"),
 		messageIds: Array.from({ length: 33 }, (_, index) => String(index)),
 		localeIds: Array.from({ length: 9 }, (_, index) =>
 			convexId<"locales">(String(index)),

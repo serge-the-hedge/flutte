@@ -1,7 +1,8 @@
 # Blabla skills for coding agents
 
 A portable skill bundle for agents with terminal access. It uses the existing
-HTTP Agent API; no MCP server or hosted agent runtime is required.
+HTTP Agent API for App translations and directly authored content collections;
+no MCP server or hosted agent runtime is required.
 
 | Skill | Assignment |
 | --- | --- |

@@ -17,7 +17,8 @@ return the assignment for an independent reviewer.
    A recorded result needs no new verdict. Otherwise inspect the returned Source,
    current target, candidate, blank reason, basis, permission, guidance, and
    opaque `reviewToken`.
-3. Evaluate meaning, the executable message contract, and project wording.
+3. Evaluate meaning and project wording. Apply the executable contract for App
+   messages; managed `format: "plain"` text treats braces literally.
    Follow [retrieval](../_blabla/references/retrieval.md) independently for related
    examples.
 4. Accept exact candidate bytes or reject with a concrete reason using the

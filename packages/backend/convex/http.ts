@@ -187,6 +187,11 @@ function translationTaskCandidateItems(body: Record<string, unknown>) {
 }
 
 type TranslationTaskTargetInput =
+	| {
+			kind: "managedLocale";
+			collectionId: Id<"contentCollections">;
+			localeCode: string;
+	  }
 	| { kind: "existingLocale"; localeCode: string }
 	| { kind: "newLocale"; localeCode: string };
 
@@ -206,10 +211,21 @@ function translationTaskTarget(
 		throw new Error("target must be an object with a kind and localeCode.");
 	}
 	const localeCode = requiredJsonString(target, "localeCode");
+	if (target.kind === "managedLocale")
+		return {
+			kind: "managedLocale",
+			localeCode,
+			collectionId: requiredJsonString(
+				target,
+				"collectionId",
+			) as Id<"contentCollections">,
+		};
 	if (target.kind === "existingLocale" || target.kind === "newLocale") {
 		return { kind: target.kind, localeCode };
 	}
-	throw new Error("target.kind must be existingLocale or newLocale.");
+	throw new Error(
+		"target.kind must be existingLocale, managedLocale, or newLocale.",
+	);
 }
 
 function translationTaskMessageIds(
@@ -998,6 +1014,131 @@ http.route({
 });
 
 http.route({
+	path: "/api/agent/v1/collections",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", (token) =>
+					ctx.runQuery(internalApi.agentContent.list, { token }),
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/collections/",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const url = new URL(request.url);
+			const match =
+				/^\/api\/agent\/v1\/collections\/([^/]+)(?:\/(search))?$/.exec(
+					url.pathname,
+				);
+			if (!match) return json({ error: "Unknown collection route." }, 404);
+			const collectionId = match[1] as Id<"contentCollections">;
+			const search = match[2] === "search";
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					search ? "search" : "read",
+					search ? "agentSearch" : "agentRead",
+					async (token) => {
+						if (search)
+							return ctx.runQuery(internalApi.agentContent.search, {
+								token,
+								collectionId,
+								q: url.searchParams.get("q") ?? undefined,
+								keyPrefix: url.searchParams.get("keyPrefix") ?? undefined,
+								localeCode: url.searchParams.get("localeCode") ?? undefined,
+								limit: Number(url.searchParams.get("limit") ?? 16),
+								cursor: url.searchParams.get("cursor") ?? undefined,
+								searchIn: searchChoice(url.searchParams, "searchIn", [
+									"all",
+									"key",
+									"source",
+									"target",
+								] as const),
+								match: searchChoice(url.searchParams, "match", [
+									"substring",
+									"exact",
+								] as const),
+								quality: searchChoice(url.searchParams, "quality", [
+									"all",
+									"confirmed",
+								] as const),
+							});
+						return ctx.runQuery(internalApi.agentContent.detail, {
+							token,
+							collectionId,
+						});
+					},
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404, STALE_BASIS: 409 });
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/collections/",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const match =
+				/^\/api\/agent\/v1\/collections\/([^/]+)\/(context|download)$/.exec(
+					new URL(request.url).pathname,
+				);
+			if (!match) return json({ error: "Unknown collection route." }, 404);
+			const collectionId = match[1] as Id<"contentCollections">;
+			const body = await jsonObject(request);
+			if (!isStringArray(body.keys) || !isStringArray(body.locales))
+				throw new Error("keys and locales must be string arrays.");
+			const keys = body.keys;
+			const locales = body.locales;
+			const mode = body.mode ?? "reviewed";
+			if (
+				match[2] === "download" &&
+				mode !== "reviewed" &&
+				mode !== "partial" &&
+				mode !== "draft"
+			)
+				throw new Error("mode must be reviewed, partial, or draft.");
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", async (token) =>
+					match[2] === "context"
+						? ctx.runQuery(internalApi.agentContent.context, {
+								token,
+								collectionId,
+								keys,
+								locales,
+							})
+						: ctx.runQuery(internalApi.agentContent.download, {
+								token,
+								collectionId,
+								keys,
+								locales,
+								mode: mode as "reviewed" | "partial" | "draft",
+							}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, {
+				NOT_FOUND: 404,
+				NEEDS_REVIEW: 409,
+				STALE_BASIS: 409,
+			});
+		}
+	}),
+});
+
+http.route({
 	path: "/api/agent/v1/workspace/search",
 	method: "GET",
 	handler: httpAction(async (ctx, request) => {
@@ -1299,6 +1440,9 @@ http.route({
 				throw new Error("texts and locales must be string arrays.");
 			const texts = body.texts;
 			const localeCodes = body.locales;
+			const syntax = body.syntax ?? "icu";
+			if (syntax !== "plain" && syntax !== "icu")
+				throw new Error("syntax must be plain or icu.");
 			return agentJson(
 				await withAgent(
 					ctx,
@@ -1310,6 +1454,7 @@ http.route({
 							token,
 							texts,
 							localeCodes,
+							syntax,
 						}),
 				),
 			);
@@ -1465,13 +1610,17 @@ http.route({
 					["read", "propose"],
 					"agentTranslationProposal",
 					async (token, actor) => {
-						if (target.kind === "existingLocale") {
+						if (target.kind !== "newLocale") {
 							return await ctx.runMutation(
 								internalApi.agentTranslationProposals.createTaskForAgent,
 								{
 									token,
 									clientTaskKey,
 									localeCode: target.localeCode,
+									collectionId:
+										target.kind === "managedLocale"
+											? target.collectionId
+											: undefined,
 									messageIds,
 								},
 							);
@@ -1538,7 +1687,7 @@ http.route({
 							internalApi.agentTranslationProposals.taskDescriptorForAgent,
 							{ token, taskId },
 						);
-						if (descriptor.kind === "existingLocale") {
+						if (descriptor.kind !== "newLocale") {
 							return await ctx.runQuery(
 								internalApi.agentTranslationProposals.taskForAgent,
 								{ token, taskId, cursor, limit },

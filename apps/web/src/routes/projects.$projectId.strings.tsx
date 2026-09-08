@@ -10,6 +10,8 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentCollectionSelector } from "@/components/localization/content-collection-selector";
+import { ManagedStrings } from "@/components/localization/managed-strings";
 import {
 	PageHeader,
 	ProjectShell,
@@ -31,6 +33,7 @@ import {
 	previousStringsPages,
 	type StringsPageHistory,
 } from "@/lib/strings-page-history";
+import type { StringsSearch } from "@/lib/strings-search";
 import {
 	createStringsWindowCardCache,
 	type StringsWindowCards,
@@ -42,14 +45,6 @@ import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
 
-type StringsSearch = {
-	locales?: string[];
-	after?: number;
-	q?: string;
-	key?: string;
-	scope?: CatalogValueScope;
-	release?: string;
-};
 const EMPTY_STRINGS_WINDOW_CARDS: StringsWindowCards = new Map();
 const EMPTY_STRINGS_WINDOW_MESSAGE_IDS: string[] = [];
 
@@ -64,6 +59,11 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	validateSearch: (search: Record<string, unknown>): StringsSearch => ({
+		collection:
+			typeof search.collection === "string" && search.collection !== "app"
+				? search.collection
+				: undefined,
+		cursor: typeof search.cursor === "string" ? search.cursor : undefined,
 		locales: stringsLanguagesFromSearch(search),
 		after:
 			Number.isSafeInteger(Number(search.after)) && Number(search.after) >= -1
@@ -78,13 +78,51 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 });
 
 function StringsRoute() {
+	const { projectId } = Route.useParams();
+	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const project = useQuery(api.projects.get, {
+		projectId: convexId<"projects">(projectId),
+	});
+	return (
+		<ProjectShell
+			projectId={projectId}
+			title={project?.name ?? "Project"}
+			managed={!!search.collection}
+			collectionId={search.collection}
+		>
+			<ContentCollectionSelector
+				projectId={projectId}
+				value={search.collection}
+				canEdit={project?.role === "owner" || project?.role === "editor"}
+				onChange={(collection) => {
+					void navigate({ search: { collection } });
+				}}
+			/>
+			{search.collection ? (
+				<ManagedStrings
+					key={search.collection}
+					projectId={projectId}
+					collectionId={search.collection}
+					search={search}
+					onSearch={(next) => {
+						void navigate({ search: next });
+					}}
+				/>
+			) : (
+				<RepositoryStrings />
+			)}
+		</ProjectShell>
+	);
+}
+
+function RepositoryStrings() {
 	const [hasUnsavedWork, setHasUnsavedWork] = useState(false);
 	useCatalogNavigationGuard(hasUnsavedWork);
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
 	const search = useSearch({ from: "/projects/$projectId/strings" });
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
 	const convexProjectId = convexId<"projects">(projectId);
-	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
 	const targets = (locales ?? []).filter(
 		(locale) =>
@@ -312,16 +350,25 @@ function StringsRoute() {
 	const onCommitValue = useCallback(
 		async (input: CatalogWorkspaceCommit) => {
 			try {
-				return await commitWorkspaceValue({
+				if (input.basis.kind !== "repository")
+					throw new Error("Wrong collection for this save.");
+				const receipt = await commitWorkspaceValue({
 					projectId: convexProjectId,
 					messageId: input.messageId,
 					localeId: convexId<"locales">(input.localeId),
 					intent: input.intent,
-					expectedGitValueFingerprint: input.expectedGitValueFingerprint,
-					expectedGitValueRevision: input.expectedGitValueRevision,
-					expectedWorkspaceRevision: input.expectedWorkspaceRevision,
-					expectedSourceFingerprint: input.expectedSourceFingerprint,
+					expectedGitValueFingerprint: input.basis.expectedGitValueFingerprint,
+					expectedGitValueRevision: input.basis.expectedGitValueRevision,
+					expectedWorkspaceRevision: input.basis.expectedWorkspaceRevision,
+					expectedSourceFingerprint: input.basis.expectedSourceFingerprint,
 				});
+				return {
+					basis: {
+						...input.basis,
+						expectedWorkspaceRevision: receipt.workspaceRevision,
+						expectedSourceFingerprint: receipt.sourceFingerprint,
+					},
+				};
 			} catch (cause) {
 				toast.error(
 					cause instanceof Error ? cause.message : "Could not save value.",
@@ -402,7 +449,7 @@ function StringsRoute() {
 
 	const keyCount = overview?.kind === "ready" ? overview.keyCount : 0;
 	return (
-		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
+		<>
 			<PageHeader
 				title="Strings"
 				description="Your working catalog, composed from the accepted Baseline Snapshot."
@@ -534,6 +581,6 @@ function StringsRoute() {
 					</Button>
 				</div>
 			) : null}
-		</ProjectShell>
+		</>
 	);
 }

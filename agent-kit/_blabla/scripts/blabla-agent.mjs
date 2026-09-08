@@ -88,7 +88,8 @@ function options(argv) {
 				(/^\/(workspace\/(search|work|ordinary-confirmations)|dictionary)$/.test(
 					path,
 				) ||
-					/^\/translation-tasks\/[A-Za-z0-9_-]+$/.test(path))) ||
+					/^\/translation-tasks\/[A-Za-z0-9_-]+$/.test(path) ||
+					/^\/collections\/[A-Za-z0-9_-]+\/search$/.test(path))) ||
 			(method === "POST" && path === "/proposal-examples/search")
 		)
 	)
@@ -441,7 +442,7 @@ Set BLABLA_AGENT_URL to an HTTPS origin and BLABLA_AGENT_TOKEN in the environmen
 Paths are relative to /api/agent/v1. HTTP is allowed only for loopback testing.
 JSON files carry exact data; one file may be '-' for stdin. Redirects are rejected.
 request prints successful API JSON unchanged. No operation is automatically retried.
-scan permits GET search/work/dictionary/ordinary-confirmations/task-detail and
+scan permits GET workspace or collection search, work/dictionary/ordinary-confirmations/task-detail and
 POST /proposal-examples/search. Task inbox listing is request-only.
 Scans preserve complete pages and opaque cursors, including empty intermediate pages.
 Defaults: 4 pages (max 32), 1 MiB response bytes (max 8 MiB), 15000 ms per request

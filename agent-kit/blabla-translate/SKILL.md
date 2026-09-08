@@ -14,7 +14,8 @@ recorded review establishes otherwise.
    exclusively with a separate reviewer agent.
 2. Resume the assigned task. If the assignment requires a new task, read
    [task creation](../_blabla/references/translation-api.md#post-translation-tasks): existing
-   Locales use selected message ids; a configured new Locale uses the complete
+   App and managed
+   Locales use collection-scoped selected message ids; a configured new Locale uses the complete
    catalog scope. The server owns the task's basis.
 3. Read one [task page](../_blabla/references/translation-api.md#get-translation-tasksid),
    including Source, current target, applicable guidance, newest candidate, and
@@ -24,7 +25,8 @@ recorded review establishes otherwise.
    correcting a rejection. Preserve already reviewed values unless the assignment
    explicitly calls for further edits.
 4. Apply the [translation rules](../_blabla/references/translation-api.md#translation-rules)
-   to every candidate. Preserve the executable message contract and exact
+   to every candidate. Use returned `format`: managed `plain` text treats braces literally; App
+   messages preserve their executable contract. Preserve exact
    intentional formatting. Resolve contextual ambiguity from evidence or the
    human's assignment; absent guidance is not invented project policy.
 5. Submit up to 16 decisions through

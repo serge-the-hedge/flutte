@@ -7,7 +7,7 @@ import {
 	query,
 } from "./_generated/server";
 import { normalizeCatalogPath } from "./catalogPaths";
-import { normalizeLocaleCode, now } from "./lib";
+import { isRepositoryLocale, normalizeLocaleCode, now } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 
 export const MAX_LOCALE_INTRODUCTION_TARGETS = 128;
@@ -102,25 +102,30 @@ export const save = mutation({
 					"This Flutter adapter needs a language-only catalog code (2–3 letters), a label, an ARB path, and an explicit runtime locale (language, optional Script and REGION).",
 			});
 		}
-		const locales = await ctx.db
-			.query("locales")
-			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-			.take(MAX_LOCALE_INTRODUCTION_TARGETS + 1);
-		if (locales.length > MAX_LOCALE_INTRODUCTION_TARGETS)
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: "Locale setup exceeds its configuration envelope.",
-			});
-		assertIntroductionCatalogPath(
-			catalogPath,
-			locales.find((locale) => locale.isSource)?.catalogPath,
-		);
+		const [source, existingLocale, pathClaim] = await Promise.all([
+			ctx.db
+				.query("locales")
+				.withIndex("by_project_source", (q) =>
+					q.eq("projectId", args.projectId).eq("isSource", true),
+				)
+				.unique(),
+			ctx.db
+				.query("locales")
+				.withIndex("by_project_code", (q) =>
+					q.eq("projectId", args.projectId).eq("code", localeCode),
+				)
+				.unique(),
+			ctx.db
+				.query("locales")
+				.withIndex("by_project_catalogPath", (q) =>
+					q.eq("projectId", args.projectId).eq("catalogPath", catalogPath),
+				)
+				.unique(),
+		]);
+		assertIntroductionCatalogPath(catalogPath, source?.catalogPath);
 		if (
-			locales.some(
-				(locale) =>
-					(locale.code === localeCode && locale.archivedAt === undefined) ||
-					(locale.catalogPath === catalogPath && locale.code !== localeCode),
-			)
+			(existingLocale && isRepositoryLocale(existingLocale)) ||
+			(pathClaim && pathClaim.code !== localeCode)
 		) {
 			throw new ConvexError({
 				code: "CONFLICT",

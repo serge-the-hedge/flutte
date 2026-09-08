@@ -2,8 +2,9 @@
 
 ## Translation Rules
 
-- Preserve ICU syntax, placeholders, interpolation markers, meaningful
-  whitespace, and product terminology.
+- For App messages, preserve ICU syntax, placeholders, and interpolation
+  markers. Managed `format: "plain"` messages treat braces literally. Preserve
+  meaningful whitespace and product terminology in both.
 - Preserve casing, symbol spacing, and punctuation that may reflect UI
   composition unless the assignment requests formatting cleanup.
 - Source-copy changes require an explicit human assignment.
@@ -24,6 +25,21 @@ basis remain live on the server:
   }
 }
 ```
+
+Managed copy uses the same selected-message task with a collection target:
+
+```json
+{
+  "clientTaskKey": "store-de-v1",
+  "target": { "kind": "managedLocale", "collectionId": "<id>", "localeCode": "de" },
+  "scope": { "kind": "selectedMessages", "messageIds": ["store.subtitle"] }
+}
+```
+
+Choose an enabled Locale from [collection discovery](collection-api.md#discovery).
+Managed tasks expose `collectionId` and `format: "plain"`; Source context notes
+are included. They use the same candidate and review endpoints, with live
+revision checks and no Snapshot or repository path requirement.
 
 The original top-level `"localeCode": "de"` and `"messageIds"` request remains
 readable for compatibility. New clients should use explicit target and scope.

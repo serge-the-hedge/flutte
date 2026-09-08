@@ -675,6 +675,7 @@ export async function readGuidance(
 	input: {
 		texts: readonly string[];
 		localeCodes: readonly string[];
+		syntax?: "plain" | "icu";
 	},
 ): Promise<Infer<typeof guidanceContextValidator>> {
 	await assertProjectExists(ctx, projectId);
@@ -692,7 +693,9 @@ export async function readGuidance(
 	);
 	await validateLocales(ctx, projectId, input.localeCodes);
 	const guidance = await currentGuidance(ctx, projectId);
-	const literalsByText = input.texts.map(messageLiteralParts);
+	const literalsByText = input.texts.map((text) =>
+		input.syntax === "plain" ? [text] : messageLiteralParts(text),
+	);
 	const localeCodes = new Set(input.localeCodes);
 	const result = {
 		revision: guidance.revision,

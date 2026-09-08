@@ -10,7 +10,9 @@ provenance and any unresolved ambiguity.
 
 1. Read [transport](../_blabla/references/transport.md) to use the configured
    project connection. Discover `/projects/current` once per assignment; use its
-   capabilities and active/configured Locale codes.
+   capabilities. Discover `/collections` when choosing a content scope; use
+   [managed collections](../_blabla/references/collection-api.md) for authored copy
+   and `/workspace` for App. Resolve Locale codes within that collection.
 2. Follow [retrieval](../_blabla/references/retrieval.md) for applicable guidance
    and established wording. If confirmed examples are insufficient, explicitly
    identify weaker evidence.

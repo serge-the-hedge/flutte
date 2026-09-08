@@ -37,6 +37,8 @@ function slugify(value: string) {
 function NewProjectRoute() {
 	const navigate = useNavigate();
 	const createProject = useMutation(api.projects.create);
+	const createCollection = useMutation(api.contentCollections.create);
+	const [managed, setManaged] = useState(false);
 	const [name, setName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [slugTouched, setSlugTouched] = useState(false);
@@ -52,6 +54,7 @@ function NewProjectRoute() {
 	async function submit(event: FormEvent) {
 		event.preventDefault();
 		setIsSubmitting(true);
+		let createdProjectId: Awaited<ReturnType<typeof createProject>> | undefined;
 		try {
 			const projectId = await createProject({
 				name,
@@ -59,13 +62,37 @@ function NewProjectRoute() {
 				sourceLocaleCode,
 				sourceLocaleLabel,
 			});
+			createdProjectId = projectId;
 			toast.success("Project created");
-			await navigate({
-				to: "/projects/$projectId/sync",
-				params: { projectId },
-				search: {},
-			});
+			if (managed) {
+				const collection = await createCollection({
+					projectId,
+					name: "Content",
+					localeIds: [],
+				});
+				await navigate({
+					to: "/projects/$projectId/strings",
+					params: { projectId },
+					search: { collection },
+				});
+			} else
+				await navigate({
+					to: "/projects/$projectId/sync",
+					params: { projectId },
+					search: {},
+				});
 		} catch (error) {
+			if (createdProjectId) {
+				toast.error(
+					"Project created, but content setup could not finish. Create a collection from Strings to continue.",
+				);
+				await navigate({
+					to: "/projects/$projectId/strings",
+					params: { projectId: createdProjectId },
+					search: {},
+				});
+				return;
+			}
 			toast.error(
 				error instanceof Error
 					? `Could not create project: ${error.message}`
@@ -88,8 +115,7 @@ function NewProjectRoute() {
 				</Link>
 				<h1 className="font-semibold text-2xl tracking-tight">New project</h1>
 				<p className="text-muted-foreground text-sm">
-					Name the workspace and its source Locale. The next screen connects the
-					repository catalogs.
+					Name the workspace and choose its source language.
 				</p>
 			</div>
 			<Card>
@@ -153,6 +179,14 @@ function NewProjectRoute() {
 									/>
 								</Field>
 							</div>
+							<label className="flex items-center gap-2 text-sm">
+								<input
+									type="checkbox"
+									checked={managed}
+									onChange={(event) => setManaged(event.target.checked)}
+								/>
+								Write content here, without a repository
+							</label>
 							<div className="flex gap-2">
 								<Button type="submit" disabled={!name.trim() || isSubmitting}>
 									{isSubmitting ? "Creating project…" : "Create project"}

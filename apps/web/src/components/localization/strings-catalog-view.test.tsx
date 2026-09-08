@@ -597,10 +597,7 @@ describe("StringsCatalogView", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
-				onCommitValue={async () => ({
-					workspaceRevision: 0,
-					sourceFingerprint: "source",
-				})}
+				onCommitValue={async (input) => ({ basis: input.basis })}
 				{...windowedProps({
 					canEdit: true,
 					keys: [
@@ -650,10 +647,7 @@ describe("StringsCatalogView", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
-				onCommitValue={async () => ({
-					workspaceRevision: 0,
-					sourceFingerprint: "source",
-				})}
+				onCommitValue={async (input) => ({ basis: input.basis })}
 				{...windowedProps({
 					canEdit: true,
 					keys: [
@@ -698,10 +692,7 @@ describe("StringsCatalogView", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
-				onCommitValue={async () => ({
-					workspaceRevision: 1,
-					sourceFingerprint: "source-greeting",
-				})}
+				onCommitValue={async (input) => ({ basis: input.basis })}
 				{...windowedProps({
 					canEdit: true,
 					keys: [
@@ -741,10 +732,7 @@ describe("StringsCatalogView", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
-				onCommitValue={async () => ({
-					workspaceRevision: 0,
-					sourceFingerprint: "source",
-				})}
+				onCommitValue={async (input) => ({ basis: input.basis })}
 				{...windowedProps({
 					canEdit: true,
 					keys: [
@@ -845,10 +833,7 @@ describe("StringsCatalogView", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
-				onCommitValue={async () => ({
-					workspaceRevision: 0,
-					sourceFingerprint: "source",
-				})}
+				onCommitValue={async (input) => ({ basis: input.basis })}
 				{...windowedProps({
 					canEdit: true,
 					keys: [
