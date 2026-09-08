@@ -10,14 +10,12 @@ import {
 function digest(input: {
 	messageId: string;
 	catalogIndex: number;
-	corpus: string[];
 	targetStates?: string[];
 	introductionReviewPending?: number;
 }): StringsNavigationDigest {
 	return {
 		messageId: input.messageId,
 		catalogIndex: input.catalogIndex,
-		searchCorpus: input.corpus,
 		introductionReviewPending: input.introductionReviewPending ?? 0,
 		source: {
 			localeId: "source-locale",
@@ -46,97 +44,34 @@ const navigation = {
 		digest({
 			messageId: "account_title",
 			catalogIndex: 0,
-			corpus: ["account_title", "account settings", "kontoeinstellungen"],
 			targetStates: ["settled"],
 		}),
 		digest({
 			messageId: "billing_title",
 			catalogIndex: 1,
-			corpus: [
-				"billing_title",
-				"billing settings",
-				"paramètres de facturation",
-			],
 			targetStates: ["waiting"],
 		}),
 		digest({
 			messageId: "приветствие",
 			catalogIndex: 2,
-			corpus: ["приветствие", "hello", "привет"],
 			targetStates: ["unconfirmedImport", "stale"],
 		}),
 	],
 };
 
 describe("navigateStringsDigests", () => {
-	test("matches the message identifier case-insensitively", () => {
-		const result = navigateStringsDigests(navigation, { query: "BILLING" });
-		expect(result.matchingDigests.map((d) => d.messageId)).toEqual([
-			"billing_title",
-		]);
-	});
-
-	test("matches every effective Locale value through the folded corpus", () => {
-		expect(
-			navigateStringsDigests(navigation, {
-				query: "kontoeinstellungen",
-			}).matchingDigests.map((d) => d.messageId),
-		).toEqual(["account_title"]);
-		expect(
-			navigateStringsDigests(navigation, {
-				query: "привет",
-			}).matchingDigests.map((d) => d.messageId),
-		).toEqual(["приветствие"]);
-	});
-
-	test("combines search and scope as AND over whole keys", () => {
-		const both = navigateStringsDigests(navigation, {
-			query: "title",
-			scope: "waiting",
-		});
-		expect(both.matchingDigests.map((d) => d.messageId)).toEqual([
-			"billing_title",
-		]);
-		const scopeOnly = navigateStringsDigests(navigation, {
-			query: "",
-			scope: "stale",
-		});
-		expect(scopeOnly.matchingDigests.map((d) => d.messageId)).toEqual([
-			"приветствие",
-		]);
-	});
-
-	test("matches introduced provenance independently of target value state", () => {
-		const introduced = digest({
-			messageId: "new_populated_key",
-			catalogIndex: 3,
-			corpus: ["new_populated_key", "placeholder"],
-			targetStates: ["unconfirmedImport"],
-			introductionReviewPending: 1,
-		});
-		const result = navigateStringsDigests(
-			{ ...navigation, keys: [...navigation.keys, introduced] },
-			{ query: "", scope: "introduced" },
-		);
-		expect(result.matchingDigests.map((item) => item.messageId)).toEqual([
-			"new_populated_key",
-		]);
-	});
-
-	test("combines a frozen hand-off with search and scope without changing Catalog Order", () => {
+	test("keeps frozen hand-off membership without changing page order", () => {
 		const result = navigateStringsDigests(navigation, {
-			query: "title",
-			scope: "waiting",
 			handoffMessageIds: ["приветствие", "billing_title"],
 		});
 		expect(result.matchingDigests.map((digest) => digest.messageId)).toEqual([
 			"billing_title",
+			"приветствие",
 		]);
 	});
 
 	test("preserves Catalog Order and targets permalinks inside the result", () => {
 		const result = navigateStringsDigests(navigation, {
-			query: "",
 			key: "приветствие",
 		});
 		expect(result.matchingDigests.map((d) => d.catalogIndex)).toEqual([
@@ -147,7 +82,6 @@ describe("navigateStringsDigests", () => {
 
 	test("an unknown permalink stays harmless", () => {
 		const result = navigateStringsDigests(navigation, {
-			query: "",
 			key: "no_such_key",
 		});
 		expect(result.target).toBeUndefined();
@@ -167,11 +101,11 @@ describe("translationTaskLocales", () => {
 			firstReviewPending: false,
 		});
 		const first = {
-			...digest({ messageId: "first", catalogIndex: 0, corpus: [] }),
+			...digest({ messageId: "first", catalogIndex: 0 }),
 			targets: [target("de-id", "de"), target("fr-id", "fr")],
 		};
 		const second = {
-			...digest({ messageId: "second", catalogIndex: 1, corpus: [] }),
+			...digest({ messageId: "second", catalogIndex: 1 }),
 			targets: [target("de-id", "de")],
 		};
 

@@ -65,13 +65,11 @@ export function nextCatalogWorkspaceFocusTarget(
 	return undefined;
 }
 
-/** One compact key digest of the Navigation read: identity, Catalog Order
- * position, the case-folded search corpus, and the per-target state facts
- * Catalog Scopes need. Carried without any full Locale value. */
+/** One key on the server-filtered browse page: its position and target state
+ * facts, without full Locale values. */
 export type StringsNavigationDigest = {
 	messageId: string;
 	catalogIndex: number;
-	searchCorpus: readonly string[];
 	introductionReviewPending: number;
 	source: {
 		localeId: string;
@@ -91,7 +89,6 @@ export type StringsNavigationDigest = {
 };
 
 export type StringsNavigationRead = {
-	serverFiltered?: boolean;
 	kind: "noBaseline" | "incomplete" | "ready";
 	projectionId?: string;
 	canEdit?: boolean;
@@ -141,46 +138,22 @@ export function translationTaskLocales(
 		.map(({ localeId, localeCode }) => ({ localeId, localeCode }));
 }
 
-function matchesDigestQuery(digest: StringsNavigationDigest, query: string) {
-	return digest.searchCorpus.some((corpusEntry) => corpusEntry.includes(query));
-}
-
-function matchesDigestScope(
-	digest: StringsNavigationDigest,
-	scope: CatalogValueScope | undefined,
-) {
-	return (
-		scope === undefined ||
-		(scope === "introduced" && digest.introductionReviewPending > 0) ||
-		digest.targets.some((target) => target.valueState === scope)
-	);
-}
-
-/** Apply the local Strings navigation state to the compact Navigation digests
- * without changing Catalog Order. Search and Catalog Scopes stay local over
- * the digests — typing never executes a server query — and a key permalink
- * still selects a card in the current result rather than becoming a filter.
- * A whole key is selected: scopes match when any target carries the state. */
+/** Preserve page order and release membership while locating a permalink.
+ * The browse query owns search and scope filtering. */
 export function navigateStringsDigests(
 	navigation: StringsNavigationRead,
-	state: StringsCatalogNavigationState,
+	state: Pick<StringsCatalogNavigationState, "key" | "handoffMessageIds">,
 ): {
 	matchingDigests: readonly StringsNavigationDigest[];
 	target?: { id: string; index: number };
 } {
 	const keys = navigation.keys ?? [];
-	const query = (state.query ?? "").trim().toLowerCase();
 	const handoff = state.handoffMessageIds
 		? new Set(state.handoffMessageIds)
 		: undefined;
-	const matchingDigests = keys.filter(
-		(digest) =>
-			(handoff === undefined || handoff.has(digest.messageId)) &&
-			(navigation.serverFiltered || matchesDigestScope(digest, state.scope)) &&
-			(navigation.serverFiltered ||
-				query.length === 0 ||
-				matchesDigestQuery(digest, query)),
-	);
+	const matchingDigests = handoff
+		? keys.filter((digest) => handoff.has(digest.messageId))
+		: keys;
 	const targetKey = state.key;
 	const targetIndex = targetKey
 		? matchingDigests.findIndex((digest) => digest.messageId === targetKey)

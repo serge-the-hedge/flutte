@@ -170,7 +170,6 @@ function StringsRoute() {
 						...overview,
 						keys: page.keys,
 						valueStateCounts: page.counts,
-						serverFiltered: true,
 					}
 				: undefined
 			: overview;

@@ -52,7 +52,6 @@ function props({
 				messageId,
 				catalogIndex: index,
 				introductionReviewPending: 0,
-				searchCorpus: [messageId],
 				source: { localeId: "en", gitValueFingerprint: sourceFingerprint },
 				targets: [
 					{
@@ -156,7 +155,9 @@ describe("Catalog editor draft lifecycle", () => {
 		await render({ ...props({ onCommitValue }), navigation: undefined });
 		await render(props({ onCommitValue }));
 		expect(field().value).toBe("Mon brouillon");
-		await render(props({ query: "other", onCommitValue }));
+		await render(
+			props({ query: "other", messageIds: ["other"], onCommitValue }),
+		);
 		expect(
 			testDom.container.querySelector('[data-workspace-message-id="welcome"]'),
 		).toBeNull();
@@ -192,7 +193,9 @@ describe("Catalog editor draft lifecycle", () => {
 		await render(props({ onCommitValue }));
 		await type("Keep this");
 		await commit();
-		await render(props({ query: "other", onCommitValue }));
+		await render(
+			props({ query: "other", messageIds: ["other"], onCommitValue }),
+		);
 		await render(props({ onCommitValue }));
 		expect(field().disabled).toBe(true);
 		await commit();
@@ -205,7 +208,9 @@ describe("Catalog editor draft lifecycle", () => {
 		expect(testDom.container.textContent).toContain(
 			"Workspace changed; reload before saving.",
 		);
-		await render(props({ query: "other", onCommitValue }));
+		await render(
+			props({ query: "other", messageIds: ["other"], onCommitValue }),
+		);
 		await render(props({ onCommitValue }));
 		expect(field().value).toBe("Keep this");
 		expect(testDom.container.textContent).toContain(
@@ -219,7 +224,9 @@ describe("Catalog editor draft lifecycle", () => {
 		await render(props({ onCommitValue }));
 		await type("Saved offscreen");
 		await commit();
-		await render(props({ query: "other", onCommitValue }));
+		await render(
+			props({ query: "other", messageIds: ["other"], onCommitValue }),
+		);
 		await act(async () =>
 			request.resolve({ workspaceRevision: 1, sourceFingerprint: "source-1" }),
 		);
@@ -237,6 +244,7 @@ describe("Catalog editor draft lifecycle", () => {
 		await render(
 			props({
 				query: "other",
+				messageIds: ["other"],
 				value: "Saved offscreen",
 				revision: 1,
 				onCommitValue,
@@ -273,7 +281,9 @@ describe("Catalog editor draft lifecycle", () => {
 			return input;
 		};
 		await type("No label is needed here", reason());
-		await render(props({ query: "other", onCommitValue }));
+		await render(
+			props({ query: "other", messageIds: ["other"], onCommitValue }),
+		);
 		await render(
 			props({ value: "Concurrent wording", revision: 2, onCommitValue }),
 		);
@@ -300,7 +310,7 @@ describe("Catalog editor draft lifecycle", () => {
 				new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
 			);
 		});
-		await render(props({ query: "other" }));
+		await render(props({ query: "other", messageIds: ["other"] }));
 		await render(props({ value: "Refreshed", revision: 2 }));
 		expect(field().value).toBe("Refreshed");
 		await type("Removed draft");
@@ -364,7 +374,10 @@ describe("Catalog editor draft lifecycle", () => {
 			return (
 				<StringsCatalogView
 					key={projectId}
-					{...props({ query: q })}
+					{...props({
+						query: q,
+						messageIds: q ? ["other"] : ["welcome", "other"],
+					})}
 					onUnsavedWorkChange={setHasUnsavedWork}
 				/>
 			);

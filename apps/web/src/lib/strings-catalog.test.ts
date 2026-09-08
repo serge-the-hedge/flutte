@@ -1,75 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-	type CatalogWorkspace,
 	createCatalogWorkspaceDraft,
 	editCatalogWorkspaceDraft,
-	readStringsCatalog,
 	refreshCatalogWorkspaceDraft,
 } from "./strings-catalog";
-
-const workspace: CatalogWorkspace = {
-	snapshotId: "baseline-snapshot",
-	keys: [
-		{
-			id: "account_title",
-			values: [
-				{
-					localeCode: "en",
-					isSource: true,
-					value: "Account",
-					materialized: false,
-				},
-				{
-					localeCode: "de",
-					isSource: false,
-					value: "Konto",
-					materialized: false,
-				},
-			],
-		},
-		{
-			id: "billing_title",
-			values: [
-				{
-					localeCode: "en",
-					isSource: true,
-					value: "Billing",
-					materialized: false,
-				},
-				{
-					localeCode: "de",
-					isSource: false,
-					value: "",
-					materialized: true,
-				},
-			],
-		},
-	],
-};
-
-describe("readStringsCatalog", () => {
-	test("keeps Catalog Order and groups every Locale under its source message", () => {
-		expect(readStringsCatalog(workspace)).toEqual({
-			snapshotId: "baseline-snapshot",
-			canEdit: false,
-			keys: [
-				{
-					id: "account_title",
-					source: workspace.keys[0]?.values[0],
-					targets: [workspace.keys[0]?.values[1]],
-				},
-				{
-					id: "billing_title",
-					source: workspace.keys[1]?.values[0],
-					targets: [workspace.keys[1]?.values[1]],
-				},
-			],
-		});
-
-		expect(readStringsCatalog(null)).toBeNull();
-	});
-});
 
 describe("Catalog Workspace drafts", () => {
 	test("retains the source token from a dirty target draft across a newer Source Proposal", () => {

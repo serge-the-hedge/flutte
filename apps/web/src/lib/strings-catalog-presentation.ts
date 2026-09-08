@@ -8,8 +8,8 @@ import type { CatalogWorkspaceValue } from "./strings-catalog";
  */
 export type ValuePhrase =
 	| "needs a value"
-	| "English changed"
-	| "English, not chosen";
+	| "Source changed"
+	| "Source, not chosen";
 
 /**
  * How loudly a value speaks. The accent is spent only on what stops a release;
@@ -30,7 +30,7 @@ export type ValuePresentation = {
 	affordances: readonly ValueAffordance[];
 	/** The live commit label: it relabels as the draft becomes dirty. */
 	commitHint?: "save" | "still correct";
-	/** The draft currently reads exactly as its English, with content in it. */
+	/** The draft currently reads exactly as its source, with content in it. */
 	echoesSource: boolean;
 };
 
@@ -68,7 +68,7 @@ function isIntentionalBlank(value: CatalogWorkspaceValue) {
 }
 
 /**
- * Git authors the Source Contract, so English is never Waiting and never an
+ * Git authors the Source Contract, so the source is never Waiting and never an
  * Unconfirmed Import. Making it an editable peer row does not change who
  * writes it in the repository.
  */
@@ -103,7 +103,7 @@ export function presentCatalogWorkspaceValue(
 	const sourceValue = input.sourceValue ?? "";
 
 	// A Source Echo is identity with a source that has content. An empty target
-	// against an empty source is an absence, not a decision to keep English.
+	// against an empty source is an absence, not a decision to keep the source.
 	const echoesSource =
 		!value.isSource && draftValue.length > 0 && draftValue === sourceValue;
 
@@ -115,9 +115,9 @@ export function presentCatalogWorkspaceValue(
 	const phrase: ValuePhrase | undefined = waiting
 		? "needs a value"
 		: semanticStale
-			? "English changed"
+			? "Source changed"
 			: unconfirmed && echoesSource
-				? "English, not chosen"
+				? "Source, not chosen"
 				: undefined;
 
 	const tone: ValueTone = waiting
