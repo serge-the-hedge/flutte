@@ -8,7 +8,7 @@ import 'command_runner.dart';
 /// `dart compile exe --define=BLABLA_CLI_VERSION=<release version>`.
 const blablaCliVersion = String.fromEnvironment(
   'BLABLA_CLI_VERSION',
-  defaultValue: '0.1.0',
+  defaultValue: '0.2.0',
 );
 
 /// The wire-shape generation understood by this binary. The server may require

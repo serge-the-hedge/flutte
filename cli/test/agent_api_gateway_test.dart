@@ -5,6 +5,7 @@ import 'package:blabla_cli/agent_api_gateway.dart';
 import 'package:blabla_cli/cli_version.dart';
 import 'package:blabla_cli/locale_proposal_adapter.dart';
 import 'package:crypto/crypto.dart';
+import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -18,6 +19,7 @@ void main() {
       addTearDown(server.close);
       final seenPaths = <String>[];
       final warnings = <String>[];
+      final newerVersion = Version.parse(blablaCliVersion).nextMinor.toString();
       server.listen((request) async {
         expect(
           request.headers.value(HttpHeaders.authorizationHeader),
@@ -31,7 +33,10 @@ void main() {
           '$blablaCliProtocol',
         );
         request.response.headers.contentType = ContentType.json;
-        request.response.headers.set('X-Blabla-Minimum-CLI-Version', '0.2.0');
+        request.response.headers.set(
+          'X-Blabla-Minimum-CLI-Version',
+          newerVersion,
+        );
         switch (request.uri.path) {
           case '/api/agent/v1/locale-proposals':
             request.response.write(
@@ -101,7 +106,7 @@ void main() {
         ]),
       );
       expect(warnings, hasLength(1));
-      expect(warnings.single, contains('0.2.0'));
+      expect(warnings.single, contains(newerVersion));
     },
   );
 
