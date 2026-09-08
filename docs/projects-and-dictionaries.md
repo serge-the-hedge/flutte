@@ -15,18 +15,20 @@ project from **Projects**. Project types are not an in-place format conversion.
 
 ## Basic projects
 
-Write source text in the inline composer, then press **Add string** or
-**Cmd/Ctrl+Enter**. The editor clears and stays focused for the next string;
+Write source text and any translations in the new string’s inline rows, then
+press **Save string** or **Cmd/Ctrl+Enter** to save them together. Empty target
+fields remain untranslated. The editor clears and stays focused for the next string;
 Enter inserts a line break. Failed saves keep the draft, and adding does not
 change your search or page. Name and context are optional details.
 
 Names accept spaces and Unicode, can repeat, and can be changed or cleared from
-**Details**. Unnamed strings need no invented label. Stable IDs are assigned
+**Details**. Unnamed strings show their text without a placeholder name. Stable IDs are assigned
 automatically and remain unchanged in links, tasks and exports. Existing keys
 initially appear as names. Strings stay in creation order when renamed; search
 finds names and source text. Large text pages automatically use smaller batches.
 
-Choose project languages to start translating.
+Add or remove project languages from **Languages**; each change applies immediately.
+Removing a language retains its translations and history; adding it again restores them.
 The source/target editor and Translation Tasks use the same review policy as
 repository work. Braces and line breaks are literal plain text. Source edits are
 direct and revision-checked; translations become stale when their source content
@@ -49,6 +51,7 @@ accepts at most 50 keys, 20 languages and 128 pairs; downloads accept 128 keys,
 1,000 languages and 1,024 pairs. Both enforce byte budgets. Larger selections
 must be divided; nothing is silently truncated. Values are limited to 256 KiB,
 context notes to 8 KiB, and retained language memberships to 1,000 per Basic project.
+Creating a string accepts up to 128 initial translations within a 1 MiB payload.
 
 ## Shared Dictionaries
 

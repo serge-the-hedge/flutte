@@ -52,6 +52,89 @@ async function setup() {
 }
 
 describe("managed content", () => {
+	test("creates a source and its initial translations as one human save", async () => {
+		const s = await setup();
+		const french = await s.owner.mutation(api.locales.create, {
+			projectId: s.projectId,
+			code: "fr",
+		});
+		await s.owner.mutation(api.contentCollections.setLocales, {
+			...s.address,
+			localeIds: [s.localeId, french],
+			expectedMembershipRevision: 1,
+		});
+		const messageId = await s.owner.mutation(api.managedContent.createMessage, {
+			...s.address,
+			sourceValue: "Hello {there}",
+			translations: [
+				{ localeId: s.localeId, value: "Olá {aí}" },
+				{ localeId: french, value: "Bonjour" },
+			],
+		});
+		const current = await s.owner.query(api.managedContent.context, {
+			...s.address,
+			messageIds: [messageId],
+			localeIds: [s.localeId, french],
+		});
+		expect(current.items.map((item) => item.value)).toEqual([
+			"Olá {aí}",
+			"Bonjour",
+		]);
+		for (const item of current.items) {
+			expect(item.valueState).toBe("settled");
+			expect(item.basis).toMatchObject({
+				sourceRevision: 1,
+				targetRevision: 1,
+				membershipRevision: 2,
+			});
+		}
+		const revisions = await s.t.run(async (ctx) =>
+			ctx.db
+				.query("managedTargetRevisions")
+				.withIndex("by_collection", (q) => q.eq("collectionId", s.collectionId))
+				.collect(),
+		);
+		expect(revisions).toHaveLength(2);
+		expect(revisions.every((revision) => revision.actor.kind === "user")).toBe(
+			true,
+		);
+	});
+
+	test("rejects an invalid initial translation without creating a partial string", async () => {
+		const s = await setup();
+		const disabled = await s.owner.mutation(api.locales.create, {
+			projectId: s.projectId,
+			code: "fr",
+		});
+		await expect(
+			s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key: "atomic",
+				sourceValue: "Hello",
+				translations: [
+					{ localeId: s.localeId, value: "Olá" },
+					{ localeId: disabled, value: "Bonjour" },
+				],
+			}),
+		).rejects.toThrow("not enabled");
+		await expect(
+			s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key: "atomic",
+				sourceValue: "Hello",
+				translations: [
+					{ localeId: s.localeId, value: "Olá" },
+					{ localeId: s.localeId, value: "Again" },
+				],
+			}),
+		).rejects.toThrow("once");
+		const page = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			focusKey: "atomic",
+		});
+		expect(page.items).toEqual([]);
+	});
+
 	test("browses creation order independently of keys or renames and never repeats name matches", async () => {
 		const s = await setup();
 		for (const key of ["zeta", "alpha", "middle"])

@@ -73,6 +73,65 @@ export const list = query({
 	},
 });
 
+/** Create or revive a Locale identity without assigning a repository binding. Caller authorizes project editing. */
+export async function createLocaleIdentity(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		code: string;
+		label?: string;
+		isSource?: boolean;
+	},
+) {
+	const project = await assertProjectExists(ctx, args.projectId);
+	const code = normalizeLocaleCode(args.code);
+	const existing = await ctx.db
+		.query("locales")
+		.withIndex("by_project_code", (q) =>
+			q.eq("projectId", args.projectId).eq("code", code),
+		)
+		.unique();
+	if (existing && existing.archivedAt === undefined) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message: "Locale already exists.",
+		});
+	}
+	if (args.isSource && project.sourceLocaleId !== undefined) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Project already has a source locale.",
+		});
+	}
+	const isSource =
+		args.isSource === true || project.sourceLocaleId === undefined;
+	const timestamp = now();
+	const localeId =
+		existing && existing.archivedAt !== undefined
+			? existing._id
+			: await ctx.db.insert("locales", {
+					projectId: args.projectId,
+					code,
+					label: args.label?.trim() || code,
+					isSource,
+					createdAt: timestamp,
+				});
+	if (existing && existing.archivedAt !== undefined) {
+		await ctx.db.patch(existing._id, {
+			label: args.label?.trim() || code,
+			isSource,
+			archivedAt: undefined,
+		});
+	}
+	if (isSource) {
+		await ctx.db.patch(args.projectId, {
+			sourceLocaleId: localeId,
+			updatedAt: timestamp,
+		});
+	}
+	await advanceBindingRevision(ctx, args.projectId);
+	return localeId;
+}
 export const create = mutation({
 	args: {
 		projectId: v.id("projects"),
@@ -82,54 +141,7 @@ export const create = mutation({
 	},
 	handler: async (ctx, args) => {
 		await requireEditor(ctx, args.projectId);
-		const project = await assertProjectExists(ctx, args.projectId);
-		const code = normalizeLocaleCode(args.code);
-		const existing = await ctx.db
-			.query("locales")
-			.withIndex("by_project_code", (q) =>
-				q.eq("projectId", args.projectId).eq("code", code),
-			)
-			.unique();
-		if (existing && existing.archivedAt === undefined) {
-			throw new ConvexError({
-				code: "CONFLICT",
-				message: "Locale already exists.",
-			});
-		}
-		if (args.isSource && project.sourceLocaleId !== undefined) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Project already has a source locale.",
-			});
-		}
-		const isSource =
-			args.isSource === true || project.sourceLocaleId === undefined;
-		const timestamp = now();
-		const localeId =
-			existing && existing.archivedAt !== undefined
-				? existing._id
-				: await ctx.db.insert("locales", {
-						projectId: args.projectId,
-						code,
-						label: args.label?.trim() || code,
-						isSource,
-						createdAt: timestamp,
-					});
-		if (existing && existing.archivedAt !== undefined) {
-			await ctx.db.patch(existing._id, {
-				label: args.label?.trim() || code,
-				isSource,
-				archivedAt: undefined,
-			});
-		}
-		if (isSource) {
-			await ctx.db.patch(args.projectId, {
-				sourceLocaleId: localeId,
-				updatedAt: timestamp,
-			});
-		}
-		await advanceBindingRevision(ctx, args.projectId);
-		return localeId;
+		return await createLocaleIdentity(ctx, args);
 	},
 });
 

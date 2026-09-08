@@ -7,6 +7,8 @@ import {
 	query,
 } from "./_generated/server";
 import { MAX_CONTENT_COLLECTIONS, MAX_MANAGED_LOCALES } from "./contentModel";
+import { normalizeLocaleCode } from "./lib";
+import { createLocaleIdentity } from "./locales";
 import { requireEditor, requireViewer } from "./permissions";
 
 type ReadCtx = QueryCtx | MutationCtx;
@@ -213,5 +215,131 @@ export const setLocales = mutation({
 		const revision = collection.membershipRevision + 1;
 		await ctx.db.patch(collection._id, { membershipRevision: revision });
 		return revision;
+	},
+});
+
+/** One language transition per transaction; concurrent edits never replace a whole selection. */
+export const addLocale = mutation({
+	args: {
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		code: v.string(),
+		label: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		await requireEditor(ctx, args.projectId);
+		const collection = await requireManagedCollection(
+			ctx,
+			args.projectId,
+			args.collectionId,
+		);
+		const code = normalizeLocaleCode(args.code);
+		if (code.length > 64 || !/^[a-z]{2,8}(?:-[A-Z0-9]{1,8})*$/.test(code))
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Enter a language code such as fr or pt-BR.",
+			});
+		if (
+			args.label !== undefined &&
+			(Array.from(args.label.trim()).length > 256 ||
+				Array.from(args.label).some((character) => {
+					const code = character.codePointAt(0) ?? 0;
+					return code < 32 || (code >= 127 && code <= 159);
+				}))
+		)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Language names support at most 256 characters without controls.",
+			});
+		const project = await ctx.db.get(args.projectId);
+		if (!project?.sourceLocaleId)
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "Configure the project's source language first.",
+			});
+		const existing = await ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", args.projectId).eq("code", code),
+			)
+			.unique();
+		if (existing?.isSource || existing?._id === project.sourceLocaleId)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "The source language is already included.",
+			});
+		const localeId =
+			existing && existing.archivedAt === undefined
+				? existing._id
+				: await createLocaleIdentity(ctx, {
+						projectId: args.projectId,
+						code,
+						label: args.label ?? existing?.label,
+					});
+		const membership = await ctx.db
+			.query("contentCollectionLocales")
+			.withIndex("by_collection_locale", (q) =>
+				q.eq("collectionId", args.collectionId).eq("localeId", localeId),
+			)
+			.unique();
+		if (membership?.active)
+			return { localeId, membershipRevision: collection.membershipRevision };
+		if (membership) await ctx.db.patch(membership._id, { active: true });
+		else {
+			const members = await collectionMemberships(ctx, args.collectionId);
+			if (members.length >= MAX_MANAGED_LOCALES)
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message:
+						"Collection language history exceeds its configuration bounds.",
+				});
+			await ctx.db.insert("contentCollectionLocales", {
+				projectId: args.projectId,
+				collectionId: args.collectionId,
+				localeId,
+				active: true,
+			});
+		}
+		const membershipRevision = collection.membershipRevision + 1;
+		await ctx.db.patch(collection._id, { membershipRevision });
+		return { localeId, membershipRevision };
+	},
+});
+/** Deactivation retains the language identity and all its translations for a later re-add. */
+export const removeLocale = mutation({
+	args: {
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		localeId: v.id("locales"),
+	},
+	handler: async (ctx, args) => {
+		await requireEditor(ctx, args.projectId);
+		const collection = await requireManagedCollection(
+			ctx,
+			args.projectId,
+			args.collectionId,
+		);
+		const locale = await ctx.db.get(args.localeId);
+		if (!locale || locale.projectId !== args.projectId || locale.isSource)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Choose a project target language.",
+			});
+		const membership = await ctx.db
+			.query("contentCollectionLocales")
+			.withIndex("by_collection_locale", (q) =>
+				q.eq("collectionId", args.collectionId).eq("localeId", args.localeId),
+			)
+			.unique();
+		if (!membership?.active)
+			return {
+				localeId: args.localeId,
+				membershipRevision: collection.membershipRevision,
+			};
+		await ctx.db.patch(membership._id, { active: false });
+		const membershipRevision = collection.membershipRevision + 1;
+		await ctx.db.patch(collection._id, { membershipRevision });
+		return { localeId: args.localeId, membershipRevision };
 	},
 });

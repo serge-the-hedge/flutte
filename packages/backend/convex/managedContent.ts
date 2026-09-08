@@ -76,7 +76,10 @@ async function sourceFor(
 		fail("NOT_FOUND", "Managed string is not active.");
 	return source;
 }
-async function targetMembership(ctx: ReadCtx, input: TargetAddress) {
+async function targetMembership(
+	ctx: ReadCtx,
+	input: CollectionAddress & { localeId: Id<"locales"> },
+) {
 	const [locale, membership] = await Promise.all([
 		ctx.db.get(input.localeId),
 		ctx.db
@@ -172,6 +175,22 @@ export async function commitManagedTarget(
 			"CONFLICT",
 			"Managed content changed. Reload before saving or reviewing.",
 		);
+	return writeManagedTarget(ctx, input, current);
+}
+
+/** Persist a validated human/reviewer decision; creation supplies its fresh basis directly. */
+async function writeManagedTarget(
+	ctx: MutationCtx,
+	input: TargetAddress & {
+		intent: ManagedIntent;
+		actor: Actor;
+		reviewAuthorization?: AgentReviewAuthorization;
+	},
+	current: Pick<
+		Awaited<ReturnType<typeof readManagedTarget>>,
+		"target" | "value" | "workspaceRevision" | "sourceFingerprint" | "basis"
+	>,
+) {
 	const value =
 		input.intent.kind === "save"
 			? input.intent.value
@@ -573,10 +592,44 @@ export const createMessage = mutation({
 		name: v.optional(v.union(v.string(), v.null())),
 		sourceValue: v.string(),
 		context: v.optional(v.string()),
+		translations: v.optional(
+			v.array(v.object({ localeId: v.id("locales"), value: v.string() })),
+		),
 	},
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		await requireManagedCollection(ctx, args.projectId, args.collectionId);
+		const collection = await requireManagedCollection(
+			ctx,
+			args.projectId,
+			args.collectionId,
+		);
+		const { translations = [], ...sourceInput } = args;
+		if (
+			translations.length > 128 ||
+			bytes(translations) > MAX_MANAGED_RESPONSE_BYTES
+		)
+			fail(
+				"LIMIT_EXCEEDED",
+				"Add at most 128 translations within 1 MiB with a new string.",
+			);
+		if (
+			new Set(translations.map((translation) => translation.localeId)).size !==
+			translations.length
+		)
+			fail("VALIDATION", "Choose each translation language once.");
+		for (const translation of translations) {
+			assertText(translation.value);
+			if (translation.value.length === 0)
+				fail(
+					"VALIDATION",
+					"Leave empty translation fields out of the new string.",
+				);
+			await targetMembership(ctx, {
+				projectId: args.projectId,
+				collectionId: args.collectionId,
+				localeId: translation.localeId,
+			});
+		}
 		assertText(args.sourceValue, args.context);
 		if (
 			args.key !== undefined &&
@@ -614,7 +667,7 @@ export const createMessage = mutation({
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const sourceRevision = 1;
 		const id = await ctx.db.insert("managedMessages", {
-			...args,
+			...sourceInput,
 			key: args.key ?? "",
 			name,
 			sourceRevision,
@@ -637,6 +690,33 @@ export const createMessage = mutation({
 			actor: { kind: "user", id: userId },
 			createdAt: timestamp,
 		});
+		for (const translation of translations) {
+			await writeManagedTarget(
+				ctx,
+				{
+					projectId: args.projectId,
+					collectionId: args.collectionId,
+					messageId: key,
+					localeId: translation.localeId,
+					intent: { kind: "save", value: translation.value },
+					actor: { kind: "user", id: userId },
+				},
+				{
+					target: null,
+					value: "",
+					workspaceRevision: 0,
+					sourceFingerprint,
+					basis: {
+						kind: "managed",
+						collectionId: args.collectionId,
+						sourceRevision,
+						targetRevision: 0,
+						sourceFingerprint,
+						membershipRevision: collection.membershipRevision,
+					},
+				},
+			);
+		}
 		return key;
 	},
 });

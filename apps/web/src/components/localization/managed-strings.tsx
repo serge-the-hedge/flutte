@@ -21,6 +21,7 @@ import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useManagedPage } from "@/lib/use-managed-page";
+import { ManagedLanguages } from "./managed-languages";
 import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
 import { StringsCatalogView } from "./strings-catalog-view";
@@ -157,12 +158,13 @@ export function ManagedStrings({
 	const saveSource = useMutation(api.managedContent.saveSource);
 	const createMessage = useMutation(api.managedContent.createMessage);
 	const archive = useMutation(api.managedContent.archiveMessage);
-	const setLocales = useMutation(api.contentCollections.setLocales);
-	const createLocale = useMutation(api.locales.create);
 	const createTask = useMutation(api.agentTranslationProposals.createTask);
 	const convex = useConvex();
 	const [hasUnsaved, setHasUnsaved] = useState(false);
 	const [composerDirty, setComposerDirty] = useState(false);
+	const [composerTargetDrafts, setComposerTargetDrafts] = useState<
+		readonly string[]
+	>([]);
 	const [form, setForm] = useState<{
 		messageId: string;
 		sourceRevision: number;
@@ -173,23 +175,18 @@ export function ManagedStrings({
 	const [formDirty, setFormDirty] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [languagesOpen, setLanguagesOpen] = useState(false);
-	const [languageDraft, setLanguageDraft] = useState<string[] | null>(null);
-	const [languageRevision, setLanguageRevision] = useState<number | null>(null);
-	const [newCode, setNewCode] = useState("");
-	const [newLabel, setNewLabel] = useState("");
+	const [languageDirty, setLanguageDirty] = useState(false);
 	const [selectedKeys, setSelectedKeys] = useState<readonly string[]>([]);
 	const [exportMode, setExportMode] = useState<
 		"reviewed" | "partial" | "draft"
 	>("reviewed");
 	const [exportNote, setExportNote] = useState("");
 	const [previous, setPrevious] = useState<Array<string | undefined>>([]);
-	const hasUnsavedForms =
-		composerDirty ||
-		formDirty ||
-		languageDraft !== null ||
-		newCode.length > 0 ||
-		newLabel.length > 0;
-	useCatalogNavigationGuard(hasUnsaved || hasUnsavedForms);
+	const hasUnsavedForms = composerDirty || formDirty || languageDirty;
+	useCatalogNavigationGuard(
+		hasUnsaved || hasUnsavedForms,
+		!hasUnsaved && !formDirty && !languageDirty,
+	);
 	useEffect(() => {
 		if (!hasUnsavedForms) return;
 		const warn = (event: BeforeUnloadEvent) => {
@@ -376,13 +373,11 @@ export function ManagedStrings({
 								variant="outline"
 								onClick={() => {
 									if (
-										languageDraft !== null &&
+										languageDirty &&
 										!window.confirm("Discard unsaved language choices?")
 									)
 										return;
 									setLanguagesOpen(!languagesOpen);
-									setLanguageDraft(null);
-									setLanguageRevision(collection?.membershipRevision ?? null);
 								}}
 							>
 								Languages
@@ -391,114 +386,20 @@ export function ManagedStrings({
 					) : undefined
 				}
 			/>
-			{languagesOpen && collection && (
-				<section className="mb-5 rounded-md border p-4">
-					<fieldset disabled={busy || !canEdit}>
-						<h2 className="mb-3 font-medium">Project languages</h2>
-						<div className="flex flex-wrap gap-4">
-							{(locales ?? [])
-								.filter(
-									(locale) =>
-										!locale.isSource && locale.archivedAt === undefined,
-								)
-								.map((locale) => (
-									<label
-										key={locale._id}
-										className="flex items-center gap-2 text-sm"
-									>
-										<input
-											type="checkbox"
-											checked={(languageDraft ?? collection.localeIds).includes(
-												locale._id,
-											)}
-											onChange={(event) => {
-												const ids = languageDraft ?? collection.localeIds;
-												setLanguageDraft(
-													event.target.checked
-														? [...ids, locale._id]
-														: ids.filter((id) => id !== locale._id),
-												);
-											}}
-										/>
-										{locale.label} · {locale.code}
-									</label>
-								))}
-						</div>
-						<div className="mt-4 flex flex-wrap gap-2">
-							<Input
-								aria-label="New language code"
-								placeholder="Locale code, e.g. pt-BR"
-								value={newCode}
-								onChange={(event) => setNewCode(event.target.value)}
-							/>
-							<Input
-								aria-label="New language name"
-								placeholder="Language name"
-								value={newLabel}
-								onChange={(event) => setNewLabel(event.target.value)}
-							/>
-							<Button
-								variant="outline"
-								disabled={busy || !newCode.trim() || !newLabel.trim()}
-								onClick={async () => {
-									setBusy(true);
-									try {
-										const id = await createLocale({
-											projectId: address.projectId,
-											code: newCode.trim(),
-											label: newLabel.trim(),
-										});
-										setLanguageDraft([
-											...(languageDraft ?? collection.localeIds),
-											id,
-										]);
-										setNewCode("");
-										setNewLabel("");
-									} catch (error) {
-										toast.error(
-											error instanceof Error
-												? error.message
-												: "Could not add language",
-										);
-									} finally {
-										setBusy(false);
-									}
-								}}
-							>
-								Add language
-							</Button>
-							<Button
-								disabled={busy || languageDraft === null}
-								onClick={async () => {
-									if (!languageDraft) return;
-									setBusy(true);
-									try {
-										await setLocales({
-											...address,
-											localeIds: languageDraft.map((id) =>
-												convexId<"locales">(id),
-											),
-											expectedMembershipRevision:
-												languageRevision ?? collection.membershipRevision,
-										});
-										setLanguageDraft(null);
-										setLanguagesOpen(false);
-									} catch (error) {
-										toast.error(
-											error instanceof Error
-												? error.message
-												: "Could not save languages",
-										);
-									} finally {
-										setBusy(false);
-									}
-								}}
-							>
-								Save languages
-							</Button>
-						</div>
-					</fieldset>
-				</section>
+			{languagesOpen && collection && locales && (
+				<ManagedLanguages
+					projectId={projectId}
+					collectionId={collectionId}
+					locales={locales}
+					enabledLocaleIds={collection.localeIds}
+					blockedLocaleIds={
+						hasUnsaved
+							? enabled.map((locale) => locale._id)
+							: composerTargetDrafts
+					}
+					disabled={busy || !canEdit}
+					onUnsavedWorkChange={setLanguageDirty}
+				/>
 			)}
 			{form && (
 				<form
@@ -630,17 +531,36 @@ export function ManagedStrings({
 						onChange={(codes) => changeSearch({ ...search, locales: codes })}
 					/>
 				</div>
-				<span className="text-muted-foreground text-sm">
-					Source always shown{context.loading ? " · Loading languages…" : ""}
-				</span>
+				{context.loading && (
+					<span className="text-muted-foreground text-sm" role="status">
+						Loading languages…
+					</span>
+				)}
 			</div>
-			{canEdit && (
+			{(canEdit || composerDirty) && sourceLocale && collection && (
 				<ManagedStringComposer
-					onCreate={(input) => createMessage({ ...address, ...input })}
-					onOpen={(messageId) =>
-						changeSearch({ locales: search.locales, key: messageId })
+					readOnly={!canEdit}
+					sourceLocale={{ id: sourceLocale._id, code: sourceLocale.code }}
+					enabledLocales={enabled.map((locale) => ({
+						id: locale._id,
+						code: locale.code,
+					}))}
+					visibleLocales={chosen.map((locale) => ({
+						id: locale._id,
+						code: locale.code,
+					}))}
+					onCreate={({ translations, ...input }) =>
+						createMessage({
+							...address,
+							...input,
+							translations: translations.map((translation) => ({
+								...translation,
+								localeId: convexId<"locales">(translation.localeId),
+							})),
+						})
 					}
 					onUnsavedWorkChange={setComposerDirty}
+					onTargetDraftsChange={setComposerTargetDrafts}
 				/>
 			)}
 			{context.error && (
