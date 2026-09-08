@@ -89,10 +89,15 @@ Release. Install the latest one with:
 curl -fsSL https://raw.githubusercontent.com/serge-the-hedge/flutte/main/cli/install.sh | sh
 ```
 
-Set `BLABLA_VERSION=v0.1.0` before that command to install a particular release,
-or `BLABLA_INSTALL_DIR` to choose a destination (the default is
-`~/.local/bin`). The script supports only the two published platforms and
-never installs a Dart package globally.
+Run the same command to update. Check the installed release with `blabla --version`.
+The executable is independent of your checkout: pulling Git changes does not
+update it. Installed binaries need no Dart SDK and updates preserve your login.
+
+From a checkout, install a particular release with
+`BLABLA_VERSION=v0.2.0 sh cli/install.sh`. Set `BLABLA_INSTALL_DIR` to choose a
+destination (the default is `~/.local/bin`). When piping the installer, put
+these environment variables on the `sh` command. The script supports only the
+two published platforms and never installs a Dart package globally.
 
 ## Configure and run
 
@@ -140,10 +145,21 @@ does not depend on a particular existing language or its position. Unfamiliar
 registration expressions and duplicate runtime mappings stop delivery.
 
 For local CLI development, use Dart **3.13.3**, matching the pinned CI and
-release toolchain, and run the same command from `cli/`:
+release toolchain. Download that exact version and your platform from the
+[official SDK archive](https://dart.dev/get-dart/archive), verify the archive's
+SHA-256 checksum, and extract it to a versioned directory. Keep this standalone
+SDK separate from Flutter's bundled Dart. For example, with the SDK extracted
+under `~/.local/share/blabla/dart-3.13.3/`, select it for the current shell:
 
 ```sh
-dart pub get
+export PATH="$HOME/.local/share/blabla/dart-3.13.3/dart-sdk/bin:$PATH"
+dart --version
+```
+
+Then run from `cli/`:
+
+```sh
+dart pub get --enforce-lockfile
 BLABLA_API_URL=https://your-blabla.example \
 BLABLA_TOKEN=... \
 dart run bin/blabla.dart deliver \
@@ -191,6 +207,21 @@ dart analyze
 dart test
 dart compile exe bin/blabla.dart -o dist/blabla
 ```
+
+To use that local build, run `install -m 755 dist/blabla "$HOME/.local/bin/blabla"`.
+For normal updates, prefer the published release so everyone gets the same build.
+
+## Publish a CLI release
+
+1. Update `pubspec.yaml` and the default version in `lib/cli_version.dart` together.
+2. Run the verification commands above and merge the change after Quality passes
+   on macOS arm64 and Linux x64.
+3. Publish a GitHub Release with a new `vX.Y.Z` tag targeting the verified commit
+   on `main`. Include the CLI changes since the previous release in its notes.
+4. Wait for **Release CLI** to succeed and attach both platform binaries. It builds
+   the tagged source using Dart 3.13.3 and stamps the tag version into the executable.
+5. Run the installer and verify `blabla --version`. Reusing a tag or replacing a
+   published release is unnecessary; fixes get a new version.
 
 `test/brickit_flutter_integration_test.dart` is the real-generator acceptance
 test for Italian, Japanese, and a Serbian script/region runtime mapping. It

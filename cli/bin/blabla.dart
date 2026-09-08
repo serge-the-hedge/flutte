@@ -23,6 +23,10 @@ Future<int> runCli(
   final effectiveEnvironment = environment ?? Platform.environment;
   final output = write ?? (String line) => stdout.writeln(line);
   final errorOutput = writeError ?? (String line) => stderr.writeln(line);
+  if (arguments.length == 1 && arguments.single == '--version') {
+    output('blabla $blablaCliVersion (protocol $blablaCliProtocol)');
+    return 0;
+  }
   if (arguments.isEmpty ||
       arguments.contains('--help') ||
       arguments.contains('-h')) {
@@ -331,6 +335,7 @@ String _requiredOption(Map<String, String> options, String key) {
 }
 
 const _usage = '''Usage:
+  blabla --version
   blabla sync [options]
   blabla deliver --release <release-record-id> [--locale-proposal <proposal-id>] [options]
   blabla deliver-locale --proposal <proposal-id> [options]
