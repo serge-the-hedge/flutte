@@ -55,14 +55,13 @@ export function ProjectDictionaryConnection({
 			<CardHeader>
 				<CardTitle>Dictionary</CardTitle>
 				<CardDescription>
-					Shared terms can be reused across projects. Voice guidance stays in
-					this project.
+					Share terms across projects; keep voice guidance local.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
 				{connection === undefined ? (
 					<p role="status" className="text-muted-foreground text-sm">
-						Loading dictionary connection…
+						Loading dictionary…
 					</p>
 				) : connection.dictionaryId ? (
 					<div className="flex flex-wrap items-center gap-3">
@@ -105,7 +104,7 @@ export function ProjectDictionaryConnection({
 					</div>
 				) : (
 					<p className="text-muted-foreground">
-						No shared dictionary connected.
+						No dictionary connected.
 						{!canEdit && " A project owner can connect one."}
 					</p>
 				)}
@@ -139,7 +138,7 @@ export function ProjectDictionaryConnection({
 							>
 								<Field className="min-w-0 flex-1 basis-48">
 									<FieldLabel htmlFor="project-dictionary">
-										Connect an existing dictionary
+										Existing dictionary
 									</FieldLabel>
 									<select
 										id="project-dictionary"
@@ -147,7 +146,7 @@ export function ProjectDictionaryConnection({
 										value={selected}
 										onChange={(event) => setSelected(event.target.value)}
 									>
-										<option value="">Choose a dictionary you can edit</option>
+										<option value="">Choose a dictionary</option>
 										{(dictionaries ?? [])
 											.filter(
 												(dictionary) =>
@@ -187,8 +186,8 @@ export function ProjectDictionaryConnection({
 									<Field className="min-w-0 flex-1 basis-48">
 										<FieldLabel htmlFor="promoted-dictionary">
 											{legacyTermCount
-												? `Keep all ${legacyTermCount} existing terms in a shared dictionary`
-												: "Create a dictionary for this project"}
+												? `New dictionary · keeps ${legacyTermCount} terms`
+												: "New dictionary name"}
 										</FieldLabel>
 										<Input
 											id="promoted-dictionary"

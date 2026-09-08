@@ -18,7 +18,6 @@ function ExportRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Export"
-			area="Legacy catalog export"
 		/>
 	);
 }

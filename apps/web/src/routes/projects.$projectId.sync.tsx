@@ -35,7 +35,7 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
-import { blablaCommand, blablaCommandPrefix } from "@/lib/blabla-command";
+import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/sync")({
@@ -100,22 +100,20 @@ function SyncCommand({
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<GitBranch className="size-4" />
-					Connect the local adapter
+					Sync your checkout
 				</CardTitle>
 				<CardDescription>
-					The adapter reads bound ARB files and discovers sibling catalogs. It
-					never edits, fetches, pushes, or opens a pull request.
+					Read ARB files from your checkout. Sync does not modify Git.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-3">
 				{repository ? (
 					<div className="text-muted-foreground text-xs">
-						Connected repository: <code>{repository}</code>
+						Repository: <code>{repository}</code>
 					</div>
 				) : null}
 				<div className="text-muted-foreground text-xs">
-					Integration branch: <code>{integrationBranch}</code>. Run sync and
-					delivery from this checkout branch.
+					Run sync and delivery from <code>{integrationBranch}</code>.
 				</div>
 				<div className="grid gap-3 md:grid-cols-2">
 					<div className="flex flex-col gap-2 rounded-md border p-3">
@@ -124,8 +122,7 @@ function SyncCommand({
 							<span className="font-medium text-sm">Connect this machine</span>
 						</div>
 						<p className="text-muted-foreground text-xs">
-							Create a workspace connection, then run the setup command shown
-							with its token. Skip this if you already connected the machine.
+							Create a workspace connection and run its setup command.
 							{import.meta.env.DEV
 								? " Run it from the Blabla repository."
 								: null}
@@ -150,9 +147,7 @@ function SyncCommand({
 							<span className="font-medium text-sm">Read the checkout</span>
 						</div>
 						<p className="text-muted-foreground text-xs">
-							Replace the example path with the real checkout path. Re-run the
-							same command after relevant Git commits change. The command is{" "}
-							<code>{blablaCommandPrefix}</code> in this environment.
+							Use your checkout path. Run again after new commits.
 						</p>
 						<div className="flex items-start gap-2 rounded-md bg-muted/50 p-2.5">
 							<code className="min-w-0 flex-1 break-all font-mono text-xs">
@@ -261,8 +256,8 @@ function BindingSetup({ setup }: { setup: SyncSetup }) {
 			<CardHeader>
 				<CardTitle>Catalog files</CardTitle>
 				<CardDescription>
-					Connect each Locale to its repository-relative ARB path. The source
-					and at least one target are required for the first accepted catalog.
+					Use repository-relative ARB paths. The first sync needs a source and
+					at least one target language.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
@@ -362,8 +357,8 @@ function BindingSetup({ setup }: { setup: SyncSetup }) {
 					</FieldGroup>
 					<p className="mt-2 text-muted-foreground text-xs">
 						Use the exact path from the checkout, for example{" "}
-						<code>lib/l10n/intl_en.arb</code>. An existing Locale code updates
-						that binding; a new code creates a target Locale.
+						<code>lib/l10n/intl_en.arb</code>. An existing language code updates
+						its binding; a new code adds a target language.
 					</p>
 				</form>
 			</CardContent>
@@ -389,7 +384,7 @@ function RepositorySyncRoute() {
 	if (setup === undefined) {
 		return (
 			<ProjectShell projectId={projectId} title="Project">
-				<PageHeader title="Sync" description="Connect the Brickit checkout." />
+				<PageHeader title="Sync" />
 				<Skeleton className="h-72 w-full" />
 			</ProjectShell>
 		);
@@ -400,7 +395,6 @@ function RepositorySyncRoute() {
 		<ProjectShell projectId={projectId} title={setup.project.name}>
 			<PageHeader
 				title="Sync"
-				description="Connect Brickit once, then keep the accepted catalog current."
 				action={
 					setup.baseline ? (
 						<Button
@@ -430,16 +424,7 @@ function RepositorySyncRoute() {
 							</ul>
 						</AlertDescription>
 					</Alert>
-				) : (
-					<Alert>
-						<Check className="size-4" />
-						<AlertTitle>Catalogs ready</AlertTitle>
-						<AlertDescription>
-							Bindings are ready. Run the one command below from the Brickit
-							checkout.
-						</AlertDescription>
-					</Alert>
-				)}
+				) : null}
 
 				<DiscoveredCatalogs projectId={projectId} />
 				<BindingSetup setup={setup} />
@@ -452,10 +437,6 @@ function RepositorySyncRoute() {
 				<Card size="sm">
 					<CardHeader>
 						<CardTitle>Accepted catalog</CardTitle>
-						<CardDescription>
-							Strings becomes available only after a Source Snapshot is accepted
-							as the Baseline.
-						</CardDescription>
 					</CardHeader>
 					<CardContent>
 						{setup.baseline ? (
@@ -469,8 +450,7 @@ function RepositorySyncRoute() {
 							</div>
 						) : (
 							<p className="text-muted-foreground text-sm">
-								No accepted snapshot yet. Sync the checkout to establish the
-								first baseline.
+								Sync the checkout to make its strings available.
 							</p>
 						)}
 					</CardContent>
@@ -481,7 +461,7 @@ function RepositorySyncRoute() {
 						<CardHeader>
 							<CardTitle className="flex items-center gap-2">
 								<RefreshCw className="size-4" />
-								Latest sync receipt
+								Latest sync
 								<Badge
 									variant={
 										setup.latestRun.status === "succeeded"
@@ -502,7 +482,7 @@ function RepositorySyncRoute() {
 								<div className="text-muted-foreground text-xs">
 									{setup.latestRun.unboundLocaleFileCount} unbound file(s) when
 									this snapshot was ingested,{" "}
-									{setup.latestRun.absentTargetLocaleCount} target Locale
+									{setup.latestRun.absentTargetLocaleCount} target language
 									file(s) absent in this commit.
 								</div>
 							) : null}

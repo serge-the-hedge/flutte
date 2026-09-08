@@ -118,8 +118,8 @@ describe("StringsCatalogView", () => {
 			/>,
 		);
 
-		expect(markup).toContain("No Baseline Catalog yet");
-		expect(markup).toContain("accepted Baseline Snapshot");
+		expect(markup).toContain("No catalog yet");
+		expect(markup).toContain("Sync your checkout");
 	});
 
 	test("lets an editor explicitly prepare an incomplete catalog index", () => {

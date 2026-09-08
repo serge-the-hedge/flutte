@@ -155,7 +155,7 @@ describe("Independent agent review controls", () => {
 		);
 		expect(dom.container.querySelector('[role="combobox"]')).toBeNull();
 		expect(button("Copy review URL").disabled).toBe(false);
-		expect(dom.container.textContent).toContain("project setting permits");
+		expect(dom.container.textContent).toContain("Project settings allow");
 	});
 
 	test("keeps selection on delegation failure and disables authorization for an edited or stale candidate", async () => {

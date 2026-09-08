@@ -26,7 +26,9 @@ import {
 	BookOpen,
 	Check,
 	CheckCheck,
+	Copy,
 	GitBranch,
+	Info,
 	Languages,
 	Link2,
 	ListChecks,
@@ -48,6 +50,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { IconButton } from "@/components/icon-button";
 import { IcuMessageSegmentEditor } from "@/components/localization/icu-message-segment-editor";
 import { readMessageSegments } from "@/lib/icu-message-segments";
 import type {
@@ -618,7 +621,7 @@ function EditableCatalogValue({
 						aria-keyshortcuts="Enter"
 					/>
 					<p className="text-[11px] text-muted-foreground/70">
-						The reason stays with the value. Enter to record, Esc to cancel.
+						Enter to save · Esc to cancel
 					</p>
 				</div>
 			) : null}
@@ -629,17 +632,16 @@ function EditableCatalogValue({
 						<span>⌘↵ {presentation.commitHint}</span>
 					) : null}
 					{value.isSource && isDirty && basis.kind === "repository" ? (
-						<span>editing the source proposes a change to Git</span>
+						<span>saves a source proposal for Git</span>
 					) : null}
 					{presentation.echoesSource ? (
-						<span>
-							identical to the source — saving records that as the decision
-						</span>
+						<span>matches source · saving confirms this wording</span>
 					) : null}
 					{canCopy ? (
-						<button
-							type="button"
-							className="underline underline-offset-2 hover:text-foreground"
+						<IconButton
+							label={`Copy ${copyKind} text`}
+							icon={Copy}
+							size="icon-xs"
 							onMouseDown={(event) => event.preventDefault()}
 							onClick={async () => {
 								try {
@@ -653,9 +655,7 @@ function EditableCatalogValue({
 									);
 								}
 							}}
-						>
-							Copy {copyKind} text
-						</button>
+						/>
 					) : null}
 					{presentation.affordances.includes("confirm") ? (
 						<Button
@@ -815,17 +815,15 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 					/>
 				) : null}
 				{title === null ? (
-					<Button
-						type="button"
-						variant="ghost"
+					<IconButton
+						label="Open string"
+						icon={Link2}
 						size="icon-xs"
 						onClick={() =>
 							onNavigationChange({ query: "", key: catalogKey.id })
 						}
 						aria-label={`Open ${accessibleTitle} permalink`}
-					>
-						<Link2 aria-hidden="true" />
-					</Button>
+					/>
 				) : (
 					<button
 						type="button"
@@ -844,14 +842,12 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 					</button>
 				)}
 				{controls.onManageKey ? (
-					<Button
-						variant="ghost"
-						size="xs"
+					<IconButton
+						label="Details"
+						icon={Info}
 						onClick={() => controls.onManageKey?.(catalogKey)}
 						aria-label={`Details for ${accessibleTitle}`}
-					>
-						Details
-					</Button>
+					/>
 				) : null}
 				{hasMultiArmIcu ? (
 					<span
@@ -922,10 +918,9 @@ function NoBaselineCatalog({ onConnect }: { onConnect: () => void }) {
 				<EmptyMedia variant="icon">
 					<BookOpen aria-hidden="true" />
 				</EmptyMedia>
-				<EmptyTitle>No Baseline Catalog yet</EmptyTitle>
+				<EmptyTitle>No catalog yet</EmptyTitle>
 				<EmptyDescription>
-					Strings becomes available after an accepted Baseline Snapshot is
-					published.
+					Sync your checkout to bring its strings here.
 				</EmptyDescription>
 				<Button type="button" onClick={onConnect}>
 					Connect checkout
@@ -942,10 +937,9 @@ function EmptyBaselineCatalog() {
 				<EmptyMedia variant="icon">
 					<Languages aria-hidden="true" />
 				</EmptyMedia>
-				<EmptyTitle>This Baseline Catalog has no messages</EmptyTitle>
+				<EmptyTitle>No strings in this catalog</EmptyTitle>
 				<EmptyDescription>
-					The accepted Source Snapshot is valid, but its Catalog Documents do
-					not contain any message values.
+					The synced files contain no strings.
 				</EmptyDescription>
 			</EmptyHeader>
 		</Empty>
@@ -959,9 +953,9 @@ function EmptySearchResult() {
 				<EmptyMedia variant="icon">
 					<Search aria-hidden="true" />
 				</EmptyMedia>
-				<EmptyTitle>No matching keys</EmptyTitle>
+				<EmptyTitle>No matching strings</EmptyTitle>
 				<EmptyDescription>
-					Try a key name or any Source Contract or target value.
+					Try a name, source text, or translation.
 				</EmptyDescription>
 			</EmptyHeader>
 		</Empty>
@@ -1030,20 +1024,18 @@ function BatchImportConfirmation({
 					</AlertDialogTitle>
 					<AlertDialogDescription>
 						<span className="block">
-							These are untouched, non-empty Baseline values that differ from
-							Source and do not repeat across another target Locale of the same
-							key.
+							These imported values are non-empty, unedited, and differ from the
+							source and every other translation of the same key.
 						</span>
 						<span className="mt-2 block">
 							{NUMBER_FORMAT.format(skippedFromCounts)} suspicious or already
-							edited values stay unconfirmed. The run walks the whole catalog in
-							order and re-checks the Baseline before recording each value.
+							edited values stay unconfirmed. This checks the whole catalog,
+							revalidating each value before confirming it.
 						</span>
 						{summary.introduced > 0 ? (
 							<span className="mt-2 block">
 								{NUMBER_FORMAT.format(summary.introduced)} values belong to keys
-								newly imported from Git. They require a deliberate first review
-								and are never included in this ordinary confirmation.
+								newly imported from Git and need a separate first review.
 							</span>
 						) : null}
 						{summary.run?.status === "done" ? (
@@ -1191,7 +1183,7 @@ function CatalogSearch({
 					}
 					placeholder={
 						useContext(CatalogControlsContext).searchPlaceholder ??
-						"Search keys and every Locale value"
+						"Search keys and translations"
 					}
 					aria-label="Search strings"
 					className="pl-8"
@@ -1672,7 +1664,7 @@ function TranslationTaskSelection({
 			setError(
 				cause instanceof Error
 					? cause.message
-					: "Could not create the Translation Task.",
+					: "Could not create the translation task.",
 			);
 		} finally {
 			setIsCreating(false);
@@ -1705,15 +1697,15 @@ function TranslationTaskSelection({
 				</AlertDialogTrigger>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Start a Translation Task</AlertDialogTitle>
+						<AlertDialogTitle>Start a translation task</AlertDialogTitle>
 						<AlertDialogDescription>
-							Freeze these strings for one existing Locale. An agent can prepare
-							candidates; nothing changes until you review them.
+							An agent prepares translations for these strings in one language.
+							Review them before applying.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<div className="flex flex-col gap-3">
 						<fieldset className="flex flex-wrap gap-1.5">
-							<legend className="sr-only">Target Locale</legend>
+							<legend className="sr-only">Target language</legend>
 							{locales.map((locale) => (
 								<Button
 									key={locale.localeId}
@@ -1870,7 +1862,7 @@ function StringsCatalogNavigator({
 						</p>
 						<p className="text-muted-foreground text-xs">
 							{progressLabel ??
-								"Blabla will build a compact index without loading every value into the page."}
+								"Prepare the catalog once to browse its strings."}
 						</p>
 					</div>
 					{navigation.canEdit && onStartNavigationBackfill ? (

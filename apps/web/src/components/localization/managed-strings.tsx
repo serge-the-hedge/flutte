@@ -4,8 +4,10 @@ import { Textarea } from "@blabla/ui/components/textarea";
 import { useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation, useQueries, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
+import { ChevronLeft, ChevronRight, Copy, Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { IconButton } from "@/components/icon-button";
 import {
 	advanceWindowBatches,
 	type CatalogWindowBatch,
@@ -364,7 +366,6 @@ export function ManagedStrings({
 		<>
 			<PageHeader
 				title="Strings"
-				description="Write source text here, translate, and review it in one place."
 				action={
 					canEdit ? (
 						<div className="flex gap-2">
@@ -643,7 +644,9 @@ export function ManagedStrings({
 			/>
 			<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
 				<div className="flex gap-2">
-					<Button
+					<IconButton
+						label="Previous page"
+						icon={ChevronLeft}
 						variant="outline"
 						disabled={!search.cursor}
 						onClick={() => {
@@ -651,10 +654,10 @@ export function ManagedStrings({
 							setPrevious(previous.slice(0, -1));
 							onSearch({ ...search, cursor });
 						}}
-					>
-						Previous
-					</Button>
-					<Button
+					/>
+					<IconButton
+						label="Next page"
+						icon={ChevronRight}
 						variant="outline"
 						disabled={!page?.nextCursor}
 						onClick={() => {
@@ -662,15 +665,13 @@ export function ManagedStrings({
 							setPrevious([...previous, search.cursor]);
 							onSearch({ ...search, cursor: page.nextCursor });
 						}}
-					>
-						Next
-					</Button>
+					/>
 				</div>
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="text-sm">
 						Export{" "}
 						{selectedKeys.length
-							? `${selectedKeys.length} selected keys`
+							? `${selectedKeys.length} selected`
 							: "this page"}
 					</span>
 					<select
@@ -681,11 +682,13 @@ export function ManagedStrings({
 						}
 						className="h-9 rounded-md border bg-background px-2 text-sm"
 					>
-						<option value="reviewed">Reviewed only (complete)</option>
-						<option value="partial">Reviewed only (allow omissions)</option>
-						<option value="draft">Include drafts and stale values</option>
+						<option value="reviewed">Reviewed · complete</option>
+						<option value="partial">Reviewed · allow omissions</option>
+						<option value="draft">All values · drafts and stale</option>
 					</select>
-					<Button
+					<IconButton
+						label="Copy JSON"
+						icon={Copy}
 						variant="outline"
 						disabled={
 							busy ||
@@ -695,10 +698,10 @@ export function ManagedStrings({
 							!page?.items.length
 						}
 						onClick={() => void exportValues(true)}
-					>
-						Copy JSON
-					</Button>
-					<Button
+					/>
+					<IconButton
+						label="Download JSON"
+						icon={Download}
 						variant="outline"
 						disabled={
 							busy ||
@@ -708,9 +711,7 @@ export function ManagedStrings({
 							!page?.items.length
 						}
 						onClick={() => void exportValues(false)}
-					>
-						Download JSON
-					</Button>
+					/>
 				</div>
 			</div>
 			{exportNote && (

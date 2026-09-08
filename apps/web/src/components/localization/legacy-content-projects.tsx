@@ -27,9 +27,8 @@ export function LegacyContentProjects({
 		>
 			<h2 className="font-medium text-sm">Existing content</h2>
 			<p className="mt-1 text-muted-foreground text-xs">
-				Move each content collection into a Basic project. Keeps text and review
-				history; copies current members and languages. Agent connections are
-				configured in the new project.
+				Move text and reviews into a Basic project; copy members and languages.
+				Set up agent access again.
 			</p>
 			<ul className="mt-3 grid gap-3">
 				{items.map((item) => (
@@ -136,7 +135,7 @@ export function LegacyContentLink({
 				? "Opening content…"
 				: destination
 					? "Opening the new project…"
-					: "This content needs to move into its own project. Use Existing content above, or ask a project owner to move it."}
+					: "Move this content using Existing content above, or ask a project owner."}
 		</p>
 	);
 }

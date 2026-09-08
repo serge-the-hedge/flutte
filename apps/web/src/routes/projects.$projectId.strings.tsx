@@ -8,8 +8,10 @@ import {
 	useSearch,
 } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { IconButton } from "@/components/icon-button";
 import { DiscoveredCatalogNotice } from "@/components/localization/discovered-catalogs";
 import { LegacyContentLink } from "@/components/localization/legacy-content-projects";
 import { ManagedStrings } from "@/components/localization/managed-strings";
@@ -462,7 +464,6 @@ function RepositoryStrings() {
 		<>
 			<PageHeader
 				title="Strings"
-				description="Your working catalog, composed from the accepted Baseline Snapshot."
 				action={
 					<div className="flex flex-wrap items-center gap-2">
 						{navigation?.kind === "ready" ? (
@@ -504,7 +505,7 @@ function RepositoryStrings() {
 					/>
 				</div>
 				<span className="text-muted-foreground text-sm">
-					Source always shown · counts for selected languages on this page
+					Counts reflect selected languages on this page
 				</span>
 			</div>
 			{loadingLanguages && navigation?.kind === "ready" ? (
@@ -543,7 +544,9 @@ function RepositoryStrings() {
 			/>
 			{overview?.kind === "ready" ? (
 				<div className="mt-4 flex items-center justify-between gap-3">
-					<Button
+					<IconButton
+						label="Previous page"
+						icon={ChevronLeft}
 						variant="outline"
 						disabled={page === undefined || search.after === undefined}
 						onClick={() => {
@@ -560,13 +563,13 @@ function RepositoryStrings() {
 								}),
 							});
 						}}
-					>
-						Previous page
-					</Button>
+					/>
 					<span className="text-muted-foreground text-sm">
-						{page?.keys.length ?? 0} matching keys on this page
+						{page?.keys.length ?? 0} strings on this page
 					</span>
-					<Button
+					<IconButton
+						label="Next page"
+						icon={ChevronRight}
 						variant="outline"
 						disabled={page?.nextAfter == null}
 						onClick={() => {
@@ -586,9 +589,7 @@ function RepositoryStrings() {
 								}),
 							});
 						}}
-					>
-						Next page
-					</Button>
+					/>
 				</div>
 			) : null}
 		</>

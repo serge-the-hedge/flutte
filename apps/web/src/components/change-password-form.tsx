@@ -60,9 +60,7 @@ export default function ChangePasswordForm() {
 		<Card size="sm">
 			<CardHeader>
 				<CardTitle>Password</CardTitle>
-				<CardDescription>
-					Changing it signs out your other browser sessions.
-				</CardDescription>
+				<CardDescription>Other sessions will be signed out.</CardDescription>
 			</CardHeader>
 			<CardContent>
 				<form

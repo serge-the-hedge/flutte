@@ -60,10 +60,7 @@ function GuidanceRoute() {
 	}
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<PageHeader
-				title="Translation guidance"
-				description="The project’s terminology and voice, shared by translators and independent reviewers."
-			/>
+			<PageHeader title="Guidance" />
 			{project &&
 			guidance &&
 			locales &&
@@ -104,8 +101,8 @@ function GuidanceRoute() {
 								Retained project terms · {legacy.terms.length}
 							</summary>
 							<p className="my-3 text-muted-foreground text-sm">
-								These terms remain in project history. The connected dictionary
-								supplies active terminology.
+								Historical terms. This project now uses the connected
+								dictionary.
 							</p>
 							<DictionaryEditor
 								guidance={legacy}

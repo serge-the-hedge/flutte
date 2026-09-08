@@ -48,7 +48,7 @@ const navGroups: NavGroup[] = [
 				icon: MessageSquareText,
 			},
 			{
-				label: "Translation tasks",
+				label: "Tasks",
 				to: "/projects/$projectId/proposals",
 				icon: Bot,
 			},
@@ -63,7 +63,7 @@ const navGroups: NavGroup[] = [
 		label: "Settings",
 		items: [
 			{
-				label: "Translation guidance",
+				label: "Guidance",
 				to: "/projects/$projectId/settings/guidance",
 				icon: BookOpen,
 			},
@@ -150,7 +150,7 @@ function ProjectIdentity({
 				className="inline-flex w-fit items-center gap-1 rounded-sm text-muted-foreground text-xs hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			>
 				<ChevronLeft aria-hidden="true" className="size-3" />
-				All projects
+				Projects
 			</Link>
 			{title ? (
 				<div className="truncate font-semibold text-base tracking-tight">

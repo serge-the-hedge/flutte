@@ -18,7 +18,6 @@ function TagsRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Tags"
-			area="Legacy tag management"
 		/>
 	);
 }

@@ -123,7 +123,7 @@ function RepositoryReleaseRoute() {
 			introductions.length > 0 ? (
 				<div className="flex flex-col gap-2">
 					<p className="text-muted-foreground text-sm">
-						Optionally include one reviewed new language in this delivery.
+						Include a new language (optional)
 					</p>
 					<LocaleSelector
 						locales={introductions.map((target) => ({
@@ -136,8 +136,8 @@ function RepositoryReleaseRoute() {
 					/>
 					{deliveryLocale && readyLocaleProposal === null ? (
 						<p className="text-muted-foreground text-sm">
-							This language has no ready proposal on the release’s Baseline.
-							Finish its translation task first.
+							Finish this language’s translation task on the release’s source
+							first.
 						</p>
 					) : null}
 				</div>
@@ -153,9 +153,9 @@ function RepositoryReleaseRoute() {
 						<EmptyMedia variant="icon">
 							<GitCommitHorizontal aria-hidden="true" />
 						</EmptyMedia>
-						<EmptyTitle>No Baseline to assess</EmptyTitle>
+						<EmptyTitle>Sync your source first</EmptyTitle>
 						<EmptyDescription>
-							Sync and accept the checkout before preparing a Release Record.
+							Sync the checkout before preparing a release.
 						</EmptyDescription>
 						<Button
 							nativeButton={false}
@@ -251,12 +251,12 @@ function RepositoryReleaseRoute() {
 									{record?.status === "failed"
 										? "Release assessment stopped"
 										: record
-											? "The Workspace changed"
-											: "Prepare a Release Record"}
+											? "The workspace changed"
+											: "Prepare a release"}
 								</span>
 								<p className="text-muted-foreground text-xs">
 									{record?.failure?.message ??
-										"Assess the exact current Baseline and Workspace before building a release."}
+										"Check the current source and translations before release."}
 								</p>
 							</div>
 						</div>
@@ -271,7 +271,7 @@ function RepositoryReleaseRoute() {
 							</div>
 						) : (
 							<p className="text-muted-foreground text-xs">
-								An editor must finish Catalog preparation in Strings first.
+								An editor must finish preparing the catalog in Strings first.
 							</p>
 						)}
 					</CardContent>

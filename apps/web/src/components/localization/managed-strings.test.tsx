@@ -124,7 +124,8 @@ describe("Basic project workflow", () => {
 	}
 	function button(text: string) {
 		const found = [...dom.container.querySelectorAll("button")].find(
-			(button) => button.textContent === text,
+			(button) =>
+				(button.getAttribute("aria-label") ?? button.textContent) === text,
 		);
 		if (!found) throw new Error(`Missing ${text}`);
 		return found;

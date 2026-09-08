@@ -43,7 +43,7 @@ function DictionaryList() {
 				<div>
 					<h1 className="font-semibold text-2xl">Dictionaries</h1>
 					<p className="text-muted-foreground text-sm">
-						Agreed terms shared by the projects you connect.
+						Shared terminology for your projects.
 					</p>
 				</div>
 				<Button disabled={busy} onClick={() => setAdding(!adding)}>
@@ -93,10 +93,7 @@ function DictionaryList() {
 			{dictionaries === undefined ? (
 				<Skeleton className="h-28 w-full" />
 			) : dictionaries.length === 0 ? (
-				<p className="text-muted-foreground">
-					No dictionaries yet. Create one here or turn a project’s existing
-					terms into a dictionary from Translation guidance.
-				</p>
+				<p className="text-muted-foreground">No dictionaries yet.</p>
 			) : (
 				<div className="grid gap-3 md:grid-cols-2">
 					{dictionaries.map((dictionary) => (
@@ -117,7 +114,7 @@ function DictionaryList() {
 											? "Owner"
 											: dictionary.canEdit
 												? "Editor"
-												: "Read access"}
+												: "Viewer"}
 									</p>
 								</CardContent>
 							</Card>

@@ -99,7 +99,6 @@ function ProposalsIndexRoute() {
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title="Translation tasks"
-				description="One review queue for manual work, agent candidates, and the next Locale."
 				action={
 					<Badge variant="secondary">
 						{page.results.length} loaded task
@@ -111,10 +110,6 @@ function ProposalsIndexRoute() {
 				<CardContent className="flex flex-col gap-3 py-4">
 					<div>
 						<p className="font-medium text-sm">Start a translation</p>
-						<p className="text-muted-foreground text-xs">
-							Choose the smallest useful task. Every agent result remains a
-							candidate until you review it here.
-						</p>
 					</div>
 					<div className="flex flex-wrap gap-2">
 						<Button
@@ -189,7 +184,7 @@ function ProposalsIndexRoute() {
 				<div
 					className="flex flex-col gap-3"
 					role="status"
-					aria-label="Loading proposals"
+					aria-label="Loading tasks"
 				>
 					<Skeleton className="h-24 w-full" />
 					<Skeleton className="h-24 w-full" />
@@ -203,11 +198,10 @@ function ProposalsIndexRoute() {
 						<EmptyTitle>
 							{filterCode
 								? "No matching tasks in the loaded history"
-								: "No Translation Tasks yet"}
+								: "No translation tasks yet"}
 						</EmptyTitle>
 						<EmptyDescription>
-							Select keys in Strings, choose one Locale, then let an agent
-							prepare reviewable candidates.
+							Select strings and a language in Strings to start a task.
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
@@ -249,7 +243,7 @@ function ProposalsIndexRoute() {
 									</div>
 									<div className="text-muted-foreground text-xs">
 										{proposal.localeProposalTaskScope
-											? `${proposal.localeProposalTaskScope.localeCode} · new Locale · ${proposal.candidateCount} of ${proposal.localeProposalTaskScope.targetCount} candidates`
+											? `${proposal.localeProposalTaskScope.localeCode} · new language · ${proposal.candidateCount} of ${proposal.localeProposalTaskScope.targetCount} candidates`
 											: proposal.taskScope
 												? `${proposal.taskScope.localeCode} · ${proposal.candidateCount} of ${proposal.taskScope.targetCount} candidates`
 												: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"}`}

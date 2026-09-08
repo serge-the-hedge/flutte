@@ -177,22 +177,18 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<PageHeader
-				title="API tokens"
-				description="Project-scoped connections for the local adapter and external agents."
-			/>
+			<PageHeader title="API tokens" />
 			<div className="flex flex-col gap-4">
 				{isOwner ? (
 					<Card size="sm">
 						<CardHeader>
 							<CardTitle>Create API token</CardTitle>
 							<CardDescription>
-								Workspace credentials let agents search and propose
-								translations.
+								Workspace tokens let agents search and propose translations.
 								{project?.type === "repository" &&
 									" They also support local repository sync and delivery."}{" "}
-								Reviewer credentials belong to a separate agent and grant access
-								to authorized candidate reviews.
+								Reviewer tokens are for a separate agent reviewing authorized
+								candidates.
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -214,15 +210,14 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											}}
 										/>
 										<FieldLabel htmlFor="reviewer-token">
-											Dedicated Reviewer credential
+											Reviewer token
 										</FieldLabel>
 									</Field>
 									{isReviewer ? (
 										<p className="text-muted-foreground text-xs">
-											Give this credential only to a separate reviewer agent. It
-											can search the catalog and review authorized candidates,
-											but cannot propose translations, submit snapshots, or
-											deliver changes.
+											Give this token only to a separate reviewer agent. It can
+											search and review authorized candidates, but cannot
+											propose translations, sync, or deliver changes.
 										</p>
 									) : null}
 									{!isReviewer ? (
@@ -237,12 +232,12 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											/>
 											<FieldContent>
 												<FieldLabel htmlFor="dictionary-write-token">
-													Allow Dictionary editing
+													Allow dictionary editing
 												</FieldLabel>
 												<FieldDescription>
-													Allows this agent to add, replace, and remove shared
-													Dictionary entries directly. Voice guidance remains
-													human-edited.
+													Add, edit, and remove terms when the connected
+													dictionary also allows it. Voice guidance requires a
+													human editor.
 												</FieldDescription>
 											</FieldContent>
 										</Field>

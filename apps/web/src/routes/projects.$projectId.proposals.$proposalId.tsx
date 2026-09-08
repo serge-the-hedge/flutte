@@ -85,8 +85,8 @@ function CandidateReviewContext({
 		return (
 			<Alert>
 				<AlertDescription>
-					The live source or target is no longer available. The candidate is
-					kept as evidence, but it cannot be accepted against this stale basis.
+					The source or target is no longer available. This candidate is kept
+					for reference and cannot be accepted.
 				</AlertDescription>
 			</Alert>
 		);
@@ -102,7 +102,7 @@ function CandidateReviewContext({
 			<div className="grid gap-3 md:grid-cols-2">
 				<div className="rounded-md border bg-muted/20 p-3">
 					<div className="mb-1 flex flex-wrap items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
-						Source Contract
+						Source
 						<Badge variant="outline" className="normal-case tracking-normal">
 							{context.source.icuType === "icu" ? "ICU" : "Plain text"}
 						</Badge>
@@ -143,7 +143,7 @@ function CandidateReviewContext({
 					{!context.source.argumentNamesComplete ||
 					!context.source.declaredPlaceholderNamesComplete ? (
 						<span>
-							Facts are truncated; server validation remains authoritative.
+							Some placeholders are hidden. Saving checks the complete value.
 						</span>
 					) : null}
 				</div>
@@ -152,8 +152,8 @@ function CandidateReviewContext({
 				<Alert>
 					<AlertDescription>
 						{context.reviewBasisIsCurrent
-							? "The agent authored this candidate against an earlier basis; your saved review is current."
-							: "The source or target changed after this candidate was authored. Review the live Source Contract, then save this value if it still fits or edit it first."}
+							? "This candidate predates the latest changes; your saved review is current."
+							: "The source or target changed. Check the current values before saving this review."}
 					</AlertDescription>
 				</Alert>
 			) : null}
@@ -440,7 +440,7 @@ function ProposalDetailContent() {
 			setNotice(
 				result.kind === "existingLocale"
 					? `Release ${result.releaseRecordId} is ${result.releaseStatus}. Open Release for its assessment and bundle hand-off.`
-					: "The new-Locale artifact is ready.",
+					: "The new language is ready to deliver.",
 			);
 		} catch (cause) {
 			setError(
@@ -463,8 +463,8 @@ function ProposalDetailContent() {
 				title={proposal.clientProposalKey}
 				description={
 					taskScope
-						? `${taskScope.localeCode} · ${proposal.candidateCount} of ${taskScope.targetCount} candidates prepared · ${proposal.revisionCount} immutable revision${proposal.revisionCount === 1 ? "" : "s"}`
-						: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"} · ${proposal.revisionCount} immutable revision${proposal.revisionCount === 1 ? "" : "s"}`
+						? `${taskScope.localeCode} · ${proposal.candidateCount} of ${taskScope.targetCount} candidates prepared · ${proposal.revisionCount} revision${proposal.revisionCount === 1 ? "" : "s"}`
+						: `${proposal.candidateCount} target${proposal.candidateCount === 1 ? "" : "s"} · ${proposal.revisionCount} revision${proposal.revisionCount === 1 ? "" : "s"}`
 				}
 				action={
 					<Button
@@ -497,11 +497,9 @@ function ProposalDetailContent() {
 				<Alert className="mb-4">
 					<AlertDescription className="flex flex-wrap items-center gap-3">
 						<span className="min-w-0 flex-1">
-							This task has a frozen {taskScope.localeCode} scope. Give an agent
-							with this project’s read/propose token the task id{" "}
-							<code className="break-all">{proposal._id}</code>. Agent
-							candidates remain inert until you or an authorized independent
-							reviewer decide them.
+							Give an agent with this project’s read/propose token the task ID{" "}
+							<code className="break-all">{proposal._id}</code>. Candidates need
+							your approval or an authorized independent review.
 						</span>
 						{exactBatchRevisionIds.length > 0 ? (
 							<Button
@@ -523,8 +521,8 @@ function ProposalDetailContent() {
 				<Alert className="mb-4">
 					<AlertDescription className="flex flex-wrap items-center gap-3">
 						<span className="min-w-0 flex-1">
-							Review is complete. Finalize this task to prepare its durable
-							Release hand-off; Git delivery remains a separate local command.
+							Review is complete. Prepare the release, then deliver it from your
+							checkout.
 						</span>
 						<Button
 							type="button"
@@ -625,7 +623,7 @@ function ProposalDetailContent() {
 						<CardContent className="grid gap-3 md:grid-cols-2">
 							<div className="rounded-md border bg-muted/20 p-3">
 								<div className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
-									Source Contract
+									Source
 								</div>
 								<p className="whitespace-pre-wrap text-sm">
 									{target.sourceValue}
