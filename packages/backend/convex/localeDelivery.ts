@@ -460,11 +460,8 @@ async function stageMatchingReviewedPairs(
 		if (candidates.isDone) return;
 		cursor = candidates.continueCursor;
 	}
-	if (remaining.size)
-		throw new ConvexError({
-			code: "LIMIT_EXCEEDED",
-			message: "Locale review matching exceeded its bounded proposal history.",
-		});
+	// Review reuse is opportunistic: exhausting its lookback must not reject a
+	// valid Git import. Values without matching evidence remain unresolved.
 }
 
 /** Observe only exact artifact bytes at the pinned path, with an unchanged

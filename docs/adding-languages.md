@@ -67,6 +67,8 @@ catalog bytes and path match the artifact and its Source Contract still matches.
 That whole-file observation is separate from translation review: formatting or
 an unrelated edit does not invalidate already reviewed Source/target pairs in
 the bound catalog at the configured path. Changed pairs remain unresolved.
+Per-value recovery checks the 512 most recent proposals at that path; exhausting
+that lookback leaves unmatched values unresolved and never rejects the import.
 Preview snapshots and similar-looking translations do not transfer approval.
 
 Return to the task and choose **Bind language**. This deliberate editor action
