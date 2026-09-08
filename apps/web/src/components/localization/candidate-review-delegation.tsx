@@ -147,8 +147,8 @@ export function CandidateReviewControls({
 		<div className="flex flex-col gap-2 border-t pt-3 text-xs">
 			<p className="text-muted-foreground">
 				{authorization.policy.enabled
-					? "The project setting permits a separate reviewer agent to review this exact candidate."
-					: "Delegate this exact revision to a named reviewer agent. This does not enable project-wide review or authorize later revisions."}
+					? "Project settings allow a separate agent to review this candidate."
+					: "Allow a separate agent to review this revision only. Later revisions need new permission."}
 			</p>
 			{authorization.canGrant && !authorization.policy.enabled ? (
 				authorization.reviewers.length > 0 ? (
@@ -191,8 +191,7 @@ export function CandidateReviewControls({
 					</FieldGroup>
 				) : (
 					<p className="text-muted-foreground">
-						An owner must first create a separate Reviewer credential in API
-						tokens.
+						An owner must create a separate reviewer token in API tokens first.
 					</p>
 				)
 			) : null}
@@ -227,8 +226,8 @@ export function CandidateReviewControls({
 			{authorized ? (
 				<>
 					<p className="text-muted-foreground">
-						Give this URL to a separate agent with its own Reviewer credential.
-						Keep the translator’s credential with the translator.
+						Give this URL and a separate reviewer token to an agent other than
+						the translator.
 					</p>
 					<code className="break-all">{reviewUrl}</code>
 					<Button

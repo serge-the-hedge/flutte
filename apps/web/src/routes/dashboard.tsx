@@ -1,7 +1,6 @@
 import {
 	Card,
 	CardContent,
-	CardDescription,
 	CardHeader,
 	CardTitle,
 } from "@blabla/ui/components/card";
@@ -28,14 +27,10 @@ function PrivateDashboardContent() {
 		<div className="mx-auto flex h-full max-w-3xl flex-col gap-6 overflow-auto px-6 py-8">
 			<div className="flex flex-col gap-1">
 				<h1 className="font-semibold text-2xl tracking-tight">Account</h1>
-				<p className="text-muted-foreground text-sm">
-					Your profile and workspace data.
-				</p>
 			</div>
 			<Card size="sm">
 				<CardHeader>
 					<CardTitle>Profile</CardTitle>
-					<CardDescription>Your signed-in account details.</CardDescription>
 				</CardHeader>
 				<CardContent>
 					{user === undefined ? (

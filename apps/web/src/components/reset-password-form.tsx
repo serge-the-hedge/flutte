@@ -69,18 +69,18 @@ export default function ResetPasswordForm({
 			<div className="flex flex-col items-center gap-3">
 				<BrandWordmark />
 				<h1 className="text-center font-semibold text-xl tracking-tight">
-					Choose a new password
+					Reset password
 				</h1>
 			</div>
 			<Card>
 				<CardHeader>
 					<CardTitle>
-						{invalid ? "This link is no longer valid" : "New password"}
+						{invalid ? "Link expired or invalid" : "New password"}
 					</CardTitle>
 					<CardDescription>
 						{invalid
-							? "Request a fresh recovery email to continue."
-							: "Resetting your password signs out your other sessions."}
+							? "Request a new reset link."
+							: "Other sessions will be signed out."}
 					</CardDescription>
 				</CardHeader>
 				{invalid ? null : (

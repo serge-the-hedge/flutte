@@ -1,7 +1,9 @@
 import { Button } from "@blabla/ui/components/button";
 import { Input } from "@blabla/ui/components/input";
 import { useMutation } from "convex/react";
+import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { IconButton } from "@/components/icon-button";
 import { api, convexId } from "@/lib/convex-api";
 
 type Language = {
@@ -70,8 +72,7 @@ export function ManagedLanguages({
 		>
 			<h2 className="font-medium text-sm">Languages</h2>
 			<p className="mt-1 text-muted-foreground text-xs">
-				Removing a language keeps its translations. Add it again to restore
-				them.
+				Removed languages keep their translations. Re-add to restore them.
 			</p>
 			<div className="mt-3 flex flex-col gap-2">
 				{locales
@@ -90,10 +91,9 @@ export function ManagedLanguages({
 								{locale.label}{" "}
 								<span className="text-muted-foreground">· {locale.code}</span>
 							</span>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
+							<IconButton
+								icon={X}
+								label={`Remove ${locale.label}`}
 								disabled={disabled || pending || blocked.has(locale._id)}
 								title={
 									blocked.has(locale._id)
@@ -112,9 +112,7 @@ export function ManagedLanguages({
 										}),
 									);
 								}}
-							>
-								Remove
-							</Button>
+							/>
 						</div>
 					))}
 			</div>

@@ -51,20 +51,18 @@ export default function ForgotPasswordForm() {
 			<div className="flex flex-col items-center gap-3">
 				<BrandWordmark />
 				<h1 className="text-center font-semibold text-xl tracking-tight">
-					Reset your password
+					Reset password
 				</h1>
 				<p className="text-center text-muted-foreground text-sm">
-					We’ll send a secure recovery link if the account exists.
+					We’ll email a reset link if an account uses this address.
 				</p>
 			</div>
 			<Card>
-				<CardHeader>
-					<CardTitle>{sent ? "Check your inbox" : "Account email"}</CardTitle>
-					<CardDescription>
-						{sent
-							? "The link is valid for one hour. You can close this page."
-							: "Use the email address attached to your Flutte account."}
-					</CardDescription>
+				<CardHeader className={sent ? undefined : "sr-only"}>
+					<CardTitle>{sent ? "Check your inbox" : "Reset link"}</CardTitle>
+					{sent && (
+						<CardDescription>The link expires in one hour.</CardDescription>
+					)}
 				</CardHeader>
 				{sent ? null : (
 					<CardContent>

@@ -126,10 +126,7 @@ function MembersRoute() {
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<PageHeader
-				title="Members"
-				description="Simple owner, editor, and viewer access."
-			/>
+			<PageHeader title="Members" />
 			<div className="flex flex-col gap-4">
 				<Card size="sm">
 					<CardContent>

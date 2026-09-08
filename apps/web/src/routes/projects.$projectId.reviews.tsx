@@ -19,7 +19,6 @@ function ReviewsRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Reviews"
-			area="Legacy Change Set review"
 		/>
 	);
 }

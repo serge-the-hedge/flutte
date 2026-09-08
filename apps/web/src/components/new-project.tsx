@@ -85,12 +85,9 @@ export function NewProject() {
 					className="inline-flex w-fit items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
 				>
 					<ArrowLeft className="size-3" />
-					Back to projects
+					Projects
 				</Link>
 				<h1 className="font-semibold text-2xl tracking-tight">New project</h1>
-				<p className="text-muted-foreground text-sm">
-					Name the workspace and choose its source language.
-				</p>
 			</div>
 			<Card>
 				<CardHeader className="sr-only">
@@ -110,12 +107,12 @@ export function NewProject() {
 											[
 												"basic",
 												"Basic",
-												"Write and translate content here. Copy or download the results.",
+												"Write, translate, and download content.",
 											],
 											[
 												"repository",
 												"Repository",
-												"Sync ARB files with GitHub and publish reviewed releases.",
+												"Sync ARB files with GitHub.",
 											],
 										] as const
 									).map(([value, label, description]) => (
@@ -147,7 +144,7 @@ export function NewProject() {
 										value={name}
 										onChange={(event) => handleNameChange(event.target.value)}
 										required
-										placeholder="Mobile App"
+										placeholder="Mobile app"
 									/>
 								</Field>
 								<Field>
@@ -162,14 +159,13 @@ export function NewProject() {
 										placeholder="mobile-app"
 									/>
 									<FieldDescription>
-										Used in URLs and the API. We'll slugify your name by
-										default.
+										Generated from the name. Used by the CLI and API.
 									</FieldDescription>
 								</Field>
 								<div className="grid grid-cols-2 gap-3">
 									<Field>
 										<FieldLabel htmlFor="project-locale-code">
-											Source locale
+											Source language code
 										</FieldLabel>
 										<Input
 											id="project-locale-code"
@@ -182,7 +178,7 @@ export function NewProject() {
 									</Field>
 									<Field>
 										<FieldLabel htmlFor="project-locale-label">
-											Locale label
+											Language name
 										</FieldLabel>
 										<Input
 											id="project-locale-label"

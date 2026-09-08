@@ -281,7 +281,7 @@ describe("Catalog editor draft lifecycle", () => {
 		});
 		try {
 			const copy = [...testDom.container.querySelectorAll("button")].find(
-				(button) => button.textContent === "Copy draft text",
+				(button) => button.getAttribute("aria-label") === "Copy draft text",
 			);
 			if (!copy) throw new Error("Missing draft copy action");
 			await act(async () => copy.click());

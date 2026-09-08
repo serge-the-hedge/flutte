@@ -150,12 +150,10 @@ export function DiscoveredCatalogFiles({
 	return (
 		<Card id="discovered-catalogs" size="sm">
 			<CardHeader>
-				<CardTitle>Discovered catalog files ({files.length})</CardTitle>
+				<CardTitle>Languages found in Git ({files.length})</CardTitle>
 				<CardDescription>
-					These files are in the accepted repository snapshot but are not
-					included in Strings. Add a language to import its messages now; no new
-					sync is needed. Imported translations still need review unless Blabla
-					already holds matching review evidence.
+					Add these languages to Strings without another sync. Imported
+					translations need review unless a matching review is already saved.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-3">
@@ -207,8 +205,9 @@ export function DiscoveredCatalogNotice({ projectId }: { projectId: string }) {
 		<Alert>
 			<AlertDescription>
 				<span>
-					{discovery.files.length} catalog file(s) found in Git are not yet
-					included in Strings.
+					{discovery.files.length} catalog{" "}
+					{discovery.files.length === 1 ? "file is" : "files are"} ready to add
+					to Strings.
 				</span>
 				<Link
 					className="underline underline-offset-4"
@@ -216,7 +215,7 @@ export function DiscoveredCatalogNotice({ projectId }: { projectId: string }) {
 					params={{ projectId }}
 					hash="discovered-catalogs"
 				>
-					Review discovered languages
+					Review languages
 				</Link>
 			</AlertDescription>
 		</Alert>

@@ -20,7 +20,7 @@ export function RepositoryProjectOnly({
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			{project ? (
 				<p className="text-sm">
-					This is a Basic project.{" "}
+					This page requires a repository project.{" "}
 					<Link
 						to="/projects/$projectId/strings"
 						params={{ projectId }}
@@ -28,8 +28,7 @@ export function RepositoryProjectOnly({
 						className="underline"
 					>
 						Open Strings
-					</Link>{" "}
-					to write, translate, or download content.
+					</Link>
 				</p>
 			) : (
 				<p role="status">Loading project…</p>

@@ -7,7 +7,6 @@ import {
 	CircleSlash,
 	GitCommitHorizontal,
 	LoaderCircle,
-	PackageCheck,
 	ShieldAlert,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -61,7 +60,7 @@ export function ReleaseDeliveryScope({
 			)}
 		>
 			<div className="bg-background p-3">
-				<p className="font-medium text-sm">Existing locales</p>
+				<p className="font-medium text-sm">Existing languages</p>
 				<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
 					{NUMBER_FORMAT.format(changeKeyCount)} changed key
 					{changeKeyCount === 1 ? "" : "s"} ·{" "}
@@ -72,7 +71,7 @@ export function ReleaseDeliveryScope({
 			{localeProposal ? (
 				<div className="border-border border-t bg-background p-3 sm:border-t-0 sm:border-l">
 					<p className="font-medium text-sm">
-						{localeProposal.localeCode} · new locale
+						{localeProposal.localeCode} · new language
 					</p>
 					<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
 						{NUMBER_FORMAT.format(localeProposal.valueCount)} catalog values
@@ -142,7 +141,7 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 				{record.commit.slice(0, 12)}
 			</span>
 			<span>
-				{NUMBER_FORMAT.format(record.deltaKeyCount)} delta key
+				{NUMBER_FORMAT.format(record.deltaKeyCount)} changed key
 				{record.deltaKeyCount === 1 ? "" : "s"} ·{" "}
 				{NUMBER_FORMAT.format(record.scopeValueCount)} target values
 			</span>
@@ -164,7 +163,7 @@ export function ReleaseDeliveryHandoff({
 	if (changeKeyCount === 0 && !localeProposal) {
 		return (
 			<p className="text-muted-foreground text-xs">
-				No reviewed catalog changes need delivery from this record.
+				No reviewed changes to deliver.
 			</p>
 		);
 	}
@@ -180,9 +179,7 @@ export function ReleaseDeliveryHandoff({
 				localeProposal={localeProposal}
 			/>
 			<p className="text-muted-foreground text-xs">
-				Ready. Run
-				{localeProposal ? " one combined delivery" : " the delivery"} from a
-				clean checkout:
+				Run from a clean checkout:
 			</p>
 			<code className="w-fit max-w-full overflow-x-auto border bg-muted/30 px-2 py-1.5 text-xs">
 				{command}
@@ -202,13 +199,11 @@ export function PreparingCard({ record }: { record: ReleaseSummary }) {
 						className="mt-0.5 size-4 animate-spin text-muted-foreground"
 					/>
 					<div className="flex flex-col gap-0.5">
-						<span className="font-medium text-sm">
-							Preparing Release Record
-						</span>
+						<span className="font-medium text-sm">Preparing release</span>
 						<span className="text-muted-foreground text-xs">
 							{NUMBER_FORMAT.format(progress)} of{" "}
 							{NUMBER_FORMAT.format(record.progress.expectedKeyCount)} catalog
-							keys assessed. You can leave this page; progress is durable.
+							keys checked. You can leave this page while preparation continues.
 						</span>
 					</div>
 				</div>
@@ -322,7 +317,7 @@ export function ReleaseRecordView({
 								count={record.blockedCount}
 								title="invalid for the contract"
 								spread={localeSpread(record, "blockedCount")}
-								explanation="Cannot be released and cannot be waived. Fix the value or its Source Contract."
+								explanation="Fix the value or source contract. These errors cannot be waived."
 								destructive
 							/>
 							<AssessmentRow
@@ -330,21 +325,10 @@ export function ReleaseRecordView({
 								count={record.needsDecisionCount}
 								title="values still needing a decision"
 								spread={localeSpread(record, "needsDecisionCount")}
-								explanation="Translate, deliberately use the Source wording, record an intentional blank, or revisit a semantic Source change."
+								explanation="Translate, confirm the source wording, record a blank reason, or review a source change."
 							/>
 						</div>
-					) : (
-						<div className="flex items-start gap-2 text-sm">
-							<PackageCheck
-								aria-hidden="true"
-								className="mt-0.5 size-4 text-emerald-600 dark:text-emerald-500"
-							/>
-							<p className="text-muted-foreground text-xs">
-								No Contract failures or unresolved decisions remain. This exact
-								assessment can now become an immutable Release Bundle.
-							</p>
-						</div>
-					)}
+					) : null}
 					{presentation.needsWork && workAction ? (
 						<div>{workAction}</div>
 					) : null}
@@ -357,33 +341,31 @@ export function ReleaseRecordView({
 			<Card size="sm" className="max-w-3xl">
 				<CardContent className="flex flex-col gap-2">
 					<span className="font-medium text-sm">
-						{presentation.needsWork
-							? "What this release is assessing"
-							: "What this release would ship"}
+						{presentation.needsWork ? "Release scope" : "Release contents"}
 					</span>
 					<p className="text-muted-foreground text-xs">
 						{NUMBER_FORMAT.format(record.scopeValueCount)} target{" "}
 						{presentation.needsWork ? "slots" : "values"} across{" "}
-						{NUMBER_FORMAT.format(record.deltaKeyCount)} complete delta keys.
+						{NUMBER_FORMAT.format(record.deltaKeyCount)} changed keys.
 					</p>
 					<ul className="flex flex-col gap-1 text-muted-foreground text-xs">
 						<li>
 							<span className="text-foreground tabular-nums">
 								{NUMBER_FORMAT.format(record.sourceIdenticalCount)}
 							</span>{" "}
-							deliberately identical to the Source wording
+							confirmed source wording
 						</li>
 						<li>
 							<span className="text-foreground tabular-nums">
 								{NUMBER_FORMAT.format(record.intentionalBlankCount)}
 							</span>{" "}
-							deliberately empty, each with a recorded reason
+							intentional blanks with reasons
 						</li>
 						<li>
 							<span className="text-foreground tabular-nums">
 								{NUMBER_FORMAT.format(record.unconfirmedImportCount)}
 							</span>{" "}
-							untouched imports are stated but do not gate this release
+							untouched imports (do not block this release)
 						</li>
 					</ul>
 					{hasEvidence ? (
@@ -408,7 +390,7 @@ export function ReleaseRecordView({
 						<Skeleton className="h-4 w-56" />
 					) : history.length === 0 ? (
 						<p className="text-muted-foreground text-xs">
-							This is the first Release Record for the project.
+							No earlier releases.
 						</p>
 					) : (
 						<ul className="flex flex-col gap-1">

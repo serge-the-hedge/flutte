@@ -26,10 +26,7 @@ function LanguagesRoute() {
 	const remove = useMutation(api.localeIntroductionTargets.remove);
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<PageHeader
-				title="Languages"
-				description="Configure each new language once, then prepare, review, and deliver its catalog."
-			/>
+			<PageHeader title="Languages" />
 			<DiscoveredCatalogs projectId={projectId} />
 			{project && targets && locales ? (
 				<LanguageIntroductionEditor

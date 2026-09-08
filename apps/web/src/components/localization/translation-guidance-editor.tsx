@@ -387,7 +387,7 @@ function TermEditor({
 							{renderingLocale ? (
 								<Field>
 									<FieldLabel htmlFor={`term-${renderingLocale}`}>
-										Preferred rendering · {renderingLocale}
+										Preferred translation · {renderingLocale}
 									</FieldLabel>
 									<Input
 										id={`term-${renderingLocale}`}
@@ -402,8 +402,8 @@ function TermEditor({
 								</Field>
 							) : null}
 							<FieldDescription>
-								Provide at least one preferred rendering. Switching Locales
-								keeps your edits. Leave a rendering blank to remove it.
+								Add at least one translation. Switching languages keeps edits;
+								clearing a translation removes it.
 							</FieldDescription>
 						</>
 					) : null}
@@ -484,7 +484,7 @@ function VoiceEditor({
 					<Field>
 						<FieldLabel htmlFor="voice-text">
 							{locale
-								? `Locale add-on · ${locale.label ?? locale.code}`
+								? `Language add-on · ${locale.label ?? locale.code}`
 								: "Project voice guidance"}
 						</FieldLabel>
 						<Textarea
@@ -495,8 +495,8 @@ function VoiceEditor({
 						/>
 						<FieldDescription>
 							{locale
-								? "Add only the conventions specific to this Locale. The project voice still applies."
-								: "Describe the audience, tone, and writing conventions that apply in every language."}
+								? "Language-specific conventions. The project voice still applies."
+								: "Applies to every language."}
 						</FieldDescription>
 					</Field>
 					{examples.map((example, index) => (
@@ -576,7 +576,7 @@ function VoiceEditor({
 						busy={busy}
 						canEdit={canEdit}
 						error={error}
-						label={locale ? "Save locale add-on" : "Save project voice guide"}
+						label={locale ? "Save language add-on" : "Save project voice guide"}
 					/>
 				</FieldGroup>
 			</fieldset>
@@ -653,8 +653,7 @@ export function TranslationGuidanceEditor({
 			{!canEdit ? (
 				<Alert>
 					<AlertDescription>
-						Editors and owners can manage translation guidance. You have read
-						access.
+						Read-only. Project editors and owners can change guidance.
 					</AlertDescription>
 				</Alert>
 			) : null}
@@ -667,8 +666,7 @@ export function TranslationGuidanceEditor({
 				<CardHeader>
 					<CardTitle>Project voice guide</CardTitle>
 					<CardDescription>
-						The shared voice for every language. Keep the audience, tone, and
-						writing conventions here.
+						Audience, tone, and writing conventions for every language.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="flex flex-col gap-4">
@@ -720,17 +718,16 @@ export function TranslationGuidanceEditor({
 					) : null}
 					<details>
 						<summary className="cursor-pointer text-muted-foreground text-sm">
-							Locale add-ons · {guidance.guides.length} configured
+							Language add-ons · {guidance.guides.length}
 						</summary>
 						<div className="flex flex-col gap-4 pt-4">
 							<p className="text-muted-foreground text-sm">
-								Optional exceptions and language conventions. The project voice
-								guide applies to every Locale.
+								Optional language-specific guidance.
 							</p>
 							<LocalePicker
 								id="voice-locale"
 								configuredCodes={guidance.guides.map((item) => item.localeCode)}
-								label="Locale add-on"
+								label="Language add-on"
 								locales={locales}
 								value={selectedLocale}
 								onChange={setSelectedLocale}
@@ -755,8 +752,8 @@ export function TranslationGuidanceEditor({
 										<SavedVoice guide={guide} localeCode={locale.code} />
 									) : (
 										<p className="text-muted-foreground">
-											No add-on for {locale.code}. The project voice guide is
-											enough unless this Locale needs specific instructions.
+											No add-on for {locale.code}. The project voice guide
+											applies.
 										</p>
 									)}
 									{canEdit ? (
@@ -838,10 +835,7 @@ export function DictionaryEditor({
 			<Card size="sm">
 				<CardHeader>
 					<CardTitle>Dictionary</CardTitle>
-					<CardDescription>
-						Agreed product terms and Locale renderings for translators and
-						reviewers.
-					</CardDescription>
+					<CardDescription>Agreed terms and translations.</CardDescription>
 				</CardHeader>
 				<CardContent className="flex flex-col gap-4">
 					{editingTerm !== undefined ? (
@@ -863,9 +857,9 @@ export function DictionaryEditor({
 					{guidance.terms.length === 0 ? (
 						<Empty>
 							<EmptyHeader>
-								<EmptyTitle>No Dictionary entries</EmptyTitle>
+								<EmptyTitle>No terms yet</EmptyTitle>
 								<EmptyDescription>
-									Add agreed terms and their preferred renderings.
+									Add terms and preferred translations.
 								</EmptyDescription>
 							</EmptyHeader>
 						</Empty>
@@ -880,11 +874,12 @@ export function DictionaryEditor({
 									{term.definition}
 								</p>
 								{term.kind === "untranslatable" ? (
-									<p>Keep unchanged in every Locale.</p>
+									<p>Keep unchanged in every language.</p>
 								) : (
 									<details>
 										<summary className="cursor-pointer text-muted-foreground text-sm">
-											{term.renderings.length} Locale renderings
+											{term.renderings.length} translation
+											{term.renderings.length === 1 ? "" : "s"}
 										</summary>
 										<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
 											{term.renderings.map((rendering) => (

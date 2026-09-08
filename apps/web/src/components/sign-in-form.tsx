@@ -68,11 +68,8 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 			<div className="flex flex-col items-center gap-3">
 				<BrandWordmark />
 				<h1 className="text-center font-semibold text-xl tracking-tight">
-					Welcome back
+					Sign in
 				</h1>
-				<p className="text-center text-muted-foreground text-sm">
-					Sign in to continue to your workspace.
-				</p>
 			</div>
 			<Card>
 				<CardHeader className="sr-only">
@@ -180,7 +177,7 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 							/>
 						}
 					>
-						Need an account? Sign up
+						Create account
 					</Button>
 				</CardFooter>
 			</Card>

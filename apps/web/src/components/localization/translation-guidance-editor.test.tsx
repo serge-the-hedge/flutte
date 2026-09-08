@@ -249,7 +249,7 @@ describe("Translation guidance editing", () => {
 		await chooseLocale("voice-locale", "pt");
 		await click("Add pt add-on");
 		await type("voice-text", "Use informal singular address.");
-		await click("Save locale add-on");
+		await click("Save language add-on");
 		expect(localeRequests).toEqual([
 			{
 				expectedRevision: 3,
@@ -368,7 +368,7 @@ describe("Translation guidance editing", () => {
 		if (!source || !target) throw new Error("Expected example fields.");
 		await type(source.id, "Start building");
 		await type(target.id, "Bau los");
-		await click("Save locale add-on");
+		await click("Save language add-on");
 		expect(requests[0]).toEqual({
 			expectedRevision: 2,
 			localeCode: "de",

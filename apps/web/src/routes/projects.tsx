@@ -3,7 +3,6 @@ import { Button } from "@blabla/ui/components/button";
 import {
 	Card,
 	CardContent,
-	CardDescription,
 	CardHeader,
 	CardTitle,
 } from "@blabla/ui/components/card";
@@ -42,9 +41,6 @@ function ProjectsHeader() {
 		<div className="flex flex-wrap items-end justify-between gap-3">
 			<div className="flex flex-col gap-1">
 				<h1 className="font-semibold text-2xl tracking-tight">Projects</h1>
-				<p className="text-muted-foreground text-sm">
-					Write content here or connect a repository.
-				</p>
 			</div>
 			<Button nativeButton={false} render={<Link to="/projects/new" />}>
 				<Plus data-icon="inline-start" />
@@ -80,7 +76,7 @@ function ProjectsContent() {
 						</EmptyMedia>
 						<EmptyTitle>No projects yet</EmptyTitle>
 						<EmptyDescription>
-							Create a project to start writing or translating content.
+							Write content here or connect a repository.
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
@@ -108,9 +104,6 @@ function ProjectsContent() {
 										</CardTitle>
 										<ArrowUpRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
 									</div>
-									<CardDescription className="truncate font-mono">
-										{project.slug}
-									</CardDescription>
 								</CardHeader>
 								<CardContent>
 									<div className="flex items-center gap-1.5">

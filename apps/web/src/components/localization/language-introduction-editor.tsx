@@ -34,7 +34,7 @@ const FIELDS = [
 		name: "localeCode",
 		label: "Catalog code",
 		placeholder: "ja",
-		description: "A language-only code (2–3 letters) declared in the ARB file.",
+		description: "2–3 letter language code in the ARB file.",
 	},
 	{ name: "label", label: "Language name", placeholder: "Japanese" },
 	{
@@ -48,7 +48,7 @@ const FIELDS = [
 		label: "Runtime locale",
 		placeholder: "ja-JP",
 		description:
-			"Explicit app selection: language, optional script and region, such as pt-BR or zh-Hant-TW.",
+			"App language code, including script or region if needed: pt-BR, zh-Hant-TW.",
 	},
 ] as const;
 
@@ -92,7 +92,7 @@ export function LanguageIntroductionEditor({
 			await onSave(draft);
 			clearDraft(draftKey);
 			setSelectedCode(draft.localeCode.trim().toLowerCase());
-			toast.success("Language configuration saved.");
+			toast.success("Language saved.");
 		} catch (cause) {
 			toast.error(
 				cause instanceof Error ? cause.message : "Could not save the language.",
@@ -129,8 +129,7 @@ export function LanguageIntroductionEditor({
 			<CardHeader>
 				<CardTitle>{selected ? selected.label : "Add a language"}</CardTitle>
 				<CardDescription>
-					Saved settings apply to future proposals. Prepared proposals retain
-					their original configuration.
+					Changes apply only to future proposals.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-5">
@@ -155,8 +154,7 @@ export function LanguageIntroductionEditor({
 				</div>
 				{alreadyActive ? (
 					<p className="text-muted-foreground text-sm">
-						This language is already a project Locale. Manage its catalog in
-						Sync.
+						Already added. Manage its catalog in Sync.
 					</p>
 				) : (
 					<form
@@ -222,8 +220,7 @@ export function LanguageIntroductionEditor({
 							</div>
 							{selected ? (
 								<FieldDescription>
-									Removing configuration keeps prepared proposals and their
-									review evidence.
+									Prepared proposals and reviews are kept.
 								</FieldDescription>
 							) : null}
 						</FieldGroup>

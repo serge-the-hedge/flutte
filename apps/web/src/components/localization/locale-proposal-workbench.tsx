@@ -660,7 +660,6 @@ export function LocaleProposalWorkbench({
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title={title}
-				description="Translate and review a complete catalog, then deliver it to your repository."
 				action={
 					<div className="flex flex-wrap items-center gap-2">
 						{showTaskNavigation ? (
@@ -812,8 +811,7 @@ export function LocaleProposalWorkbench({
 					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
 						<span>
 							All {detail.proposal.progress.total.toLocaleString()} values are
-							applied. Finalize once to seal this reviewed catalog into its
-							immutable delivery artifact and complete the task.
+							reviewed. Finalize the catalog to prepare it for delivery.
 						</span>
 						<Button
 							size="sm"
@@ -846,11 +844,10 @@ export function LocaleProposalWorkbench({
 					<AlertTitle>Continue on the current source</AlertTitle>
 					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
 						<span>
-							This work remains pinned and inspectable here. Carry every value
-							whose source is unchanged into a current proposal; only changed or
-							added source values will remain to translate.
+							Keep reviewed values whose source is unchanged. Continue with only
+							changed or new source values; this proposal stays available.
 							{dirtyItems.length > 0
-								? " Copy any unsaved visible edits you need, then discard them before continuing."
+								? " Copy any unsaved edits you need before discarding them."
 								: ""}
 						</span>
 						<div className="flex shrink-0 flex-wrap gap-2">
@@ -892,8 +889,7 @@ export function LocaleProposalWorkbench({
 						{detail.pendingReview.count === 1 ? " needs" : "s need"} review
 					</AlertTitle>
 					<AlertDescription>
-						They are now first in the review queue. Confirm or edit them before
-						finalizing this catalog.
+						Review these values before finalizing the catalog.
 					</AlertDescription>
 				</Alert>
 			) : null}
@@ -909,9 +905,8 @@ export function LocaleProposalWorkbench({
 						</EmptyMedia>
 						<EmptyTitle>Prepare a language</EmptyTitle>
 						<EmptyDescription>
-							Pin the proposal to the accepted Baseline Snapshot. You can then
-							fill values manually or have an agent submit candidates for
-							review.
+							Start from the accepted source, then translate here or ask an
+							agent.
 						</EmptyDescription>
 					</EmptyHeader>
 					<Button onClick={() => void prepare()} disabled={busy !== null}>
@@ -923,7 +918,7 @@ export function LocaleProposalWorkbench({
 				<Skeleton className="h-64 w-full" />
 			) : detail === null ? (
 				<Alert variant="destructive">
-					<AlertDescription>Locale Proposal not found.</AlertDescription>
+					<AlertDescription>Language proposal not found.</AlertDescription>
 				</Alert>
 			) : (
 				<div className="flex flex-col gap-4">
@@ -935,9 +930,10 @@ export function LocaleProposalWorkbench({
 									{detail.proposal.locale.runtimeLocale}
 								</CardTitle>
 								<p className="mt-1 text-muted-foreground text-sm">
-									Pinned to {detail.proposal.sourceSnapshot.commit}. Agent work
-									stays inert until a person or authorized independent reviewer
-									confirms exact candidate revisions below.
+									Source commit{" "}
+									<code title={detail.proposal.sourceSnapshot.commit}>
+										{detail.proposal.sourceSnapshot.commit.slice(0, 12)}
+									</code>
 								</p>
 							</div>
 							{taskId ? null : (
@@ -1145,7 +1141,7 @@ export function LocaleProposalWorkbench({
 															: message.facts.state}
 												</Badge>
 												{message.facts.sourceIdentical ? (
-													<Badge variant="outline">matches Source</Badge>
+													<Badge variant="outline">Matches source</Badge>
 												) : null}
 												{message.facts.icu ? (
 													<Badge variant="outline">ICU</Badge>
@@ -1154,7 +1150,7 @@ export function LocaleProposalWorkbench({
 													<Badge variant="outline">blank candidate</Badge>
 												) : null}
 												{message.facts.sourceEmpty ? (
-													<Badge variant="outline">empty Source</Badge>
+													<Badge variant="outline">Empty source</Badge>
 												) : null}
 												{message.facts.edgeWhitespaceMismatch ? (
 													<Badge variant="outline">edge whitespace</Badge>
@@ -1168,14 +1164,14 @@ export function LocaleProposalWorkbench({
 														}
 													>
 														{message.candidate?.review?.reviewBasisIsCurrent
-															? "Earlier Source"
+															? "Earlier source"
 															: "Source changed"}
 													</Badge>
 												) : null}
 											</div>
 											<div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
 												<p className="line-clamp-2 whitespace-pre-wrap text-muted-foreground">
-													{message.sourceValue || "Empty Source value"}
+													{message.sourceValue || "Empty source value"}
 												</p>
 												<p className="line-clamp-2 whitespace-pre-wrap">
 													{savedValue || "No candidate value"}
@@ -1207,7 +1203,7 @@ export function LocaleProposalWorkbench({
 										<div className="grid gap-4 border-t bg-muted/10 p-4 md:grid-cols-2">
 											<div className="rounded-md border bg-muted/20 p-3">
 												<div className="mb-1 flex items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
-													Source Contract
+													Source
 													{message.sourceIcuType === "icu" ? (
 														<Badge variant="outline">ICU</Badge>
 													) : null}
@@ -1384,8 +1380,8 @@ export function LocaleProposalWorkbench({
 													>
 														<TriangleAlert aria-hidden className="size-4" />
 														{message.candidate?.review?.reviewBasisIsCurrent
-															? "The agent authored this candidate against an earlier Source; your saved review is current."
-															: "The Source changed after this candidate. Review the value above, then save it if it still fits or edit it first."}
+															? "This candidate predates the source change; your saved review is current."
+															: "The source changed. Check this value before saving the review."}
 													</p>
 												) : null}
 											</div>
@@ -1415,7 +1411,7 @@ export function LocaleProposalWorkbench({
 						detail.messages.length > 0 ? (
 							<div className="flex items-center justify-end gap-3">
 								<span className="text-muted-foreground text-xs">
-									The queue will refill as you review these values.
+									More values load as you review.
 								</span>
 								<Button
 									size="sm"

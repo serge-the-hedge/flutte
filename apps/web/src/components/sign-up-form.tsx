@@ -71,11 +71,8 @@ export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
 			<div className="flex flex-col items-center gap-3">
 				<BrandWordmark />
 				<h1 className="text-center font-semibold text-xl tracking-tight">
-					Create your account
+					Create account
 				</h1>
-				<p className="text-center text-muted-foreground text-sm">
-					Start translating in your private workspace.
-				</p>
 			</div>
 			<Card>
 				<CardHeader className="sr-only">
@@ -187,7 +184,7 @@ export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
 							/>
 						}
 					>
-						Already have an account? Sign in
+						Sign in
 					</Button>
 				</CardFooter>
 			</Card>

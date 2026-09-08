@@ -18,7 +18,6 @@ function ImportRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Import"
-			area="Catalog import"
 		/>
 	);
 }

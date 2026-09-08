@@ -86,7 +86,7 @@ describe("Release Record UI", () => {
 		);
 
 		expect(markup).toContain("72 changed keys · 380 target values");
-		expect(markup).toContain("pt · new locale");
+		expect(markup).toContain("pt · new language");
 		expect(markup).toContain("1,549 catalog values");
 		expect(markup).not.toContain("deliver --release");
 	});
@@ -111,7 +111,7 @@ describe("Release Record UI", () => {
 		expect(markup).toContain(
 			"deliver --release release-record --locale-proposal portuguese-proposal",
 		);
-		expect(markup).toContain("one combined delivery");
+		expect(markup).toContain("Run from a clean checkout:");
 	});
 
 	test("still delivers a ready new Locale when the existing-Locale delta is empty", () => {
@@ -132,7 +132,7 @@ describe("Release Record UI", () => {
 		expect(markup).toContain(
 			"deliver --release release-record --locale-proposal portuguese-proposal",
 		);
-		expect(markup).not.toContain("No reviewed catalog changes need delivery");
+		expect(markup).not.toContain("No reviewed changes to deliver");
 	});
 
 	test("keeps the existing-Locale-only delivery command when no new Locale is ready", () => {
@@ -158,9 +158,11 @@ describe("Release Record UI", () => {
 		};
 		const markup = renderToStaticMarkup(<PreparingCard record={record} />);
 
-		expect(markup).toContain("Preparing Release Record");
-		expect(markup).toContain("64 of 1,434 catalog keys assessed");
-		expect(markup).toContain("progress is durable");
+		expect(markup).toContain("Preparing release");
+		expect(markup).toContain("64 of 1,434 catalog keys checked");
+		expect(markup).toContain(
+			"You can leave this page while preparation continues.",
+		);
 	});
 
 	test.each([

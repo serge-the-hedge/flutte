@@ -18,7 +18,6 @@ function LocalesRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Locales"
-			area="Locale Binding"
 		/>
 	);
 }

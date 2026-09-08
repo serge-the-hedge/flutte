@@ -40,16 +40,14 @@ export function AgentReviewPolicyCard({
 			<CardHeader>
 				<CardTitle>Agent review · {enabled ? "enabled" : "off"}</CardTitle>
 				<CardDescription>
-					Allow independent reviewer agents to accept or reject translation
-					candidates throughout this project. Each reviewer needs a separate
-					Reviewer credential, kept apart from the translator’s credential.
+					Allow a separate reviewer agent to accept or reject translations.
+					Never share its reviewer token with the translating agent.
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-3">
 				<p className="text-muted-foreground text-xs">
-					When this is off, editors can still delegate one exact candidate
-					revision to a named reviewer. Disabling this setting preserves
-					completed reviews and individual delegations.
+					When off, editors can still authorize individual candidate revisions.
+					Existing reviews and authorizations remain.
 				</p>
 				{isOwner ? (
 					<Button

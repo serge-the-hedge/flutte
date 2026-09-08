@@ -34,19 +34,19 @@ const settingsLinks = [
 	{
 		to: "/projects/$projectId/settings/languages" as const,
 		title: "Languages",
-		description: "Configure new languages and their catalog delivery.",
+		description: "Language setup and catalog files.",
 		icon: Languages,
 	},
 	{
 		to: "/projects/$projectId/settings/guidance" as const,
-		title: "Translation guidance",
-		description: "Dictionary terms and Locale voice guidance.",
+		title: "Guidance",
+		description: "Dictionary and voice guide.",
 		icon: BookOpen,
 	},
 	{
 		to: "/projects/$projectId/settings/api-tokens" as const,
 		title: "API tokens",
-		description: "Project-scoped credentials for external agents.",
+		description: "Agent access and permissions.",
 		icon: KeyRound,
 	},
 	{
@@ -73,7 +73,7 @@ function SettingsRoute() {
 
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
-			<PageHeader title="Settings" description="Project administration." />
+			<PageHeader title="Settings" />
 			<div className="grid gap-3 md:grid-cols-2">
 				{settingsLinks.map(({ to, title, description, icon: Icon }) => (
 					<Link

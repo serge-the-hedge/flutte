@@ -78,8 +78,7 @@ function DictionaryDetailContent({ dictionaryId }: { dictionaryId: string }) {
 					{detail.dictionary.name}
 				</h1>
 				<p className="text-muted-foreground text-sm">
-					Changes apply to every connected project. Project voice guides stay
-					separate.
+					Changes apply to every connected project.
 				</p>
 			</div>
 			<DictionaryEditor
@@ -97,14 +96,14 @@ function DictionaryDetailContent({ dictionaryId }: { dictionaryId: string }) {
 					<CardHeader>
 						<CardTitle>Connections and access</CardTitle>
 						<CardDescription>
-							Projects read this dictionary. Editing its terms requires
-							dictionary access.
+							Connected projects can read terms. Dictionary editors can change
+							them.
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="flex flex-col gap-4">
 						{detail.connections.length === 0 ? (
 							<p className="text-muted-foreground">
-								Connect a project from its Translation guidance settings.
+								Connect a project from Settings → Guidance.
 							</p>
 						) : (
 							detail.connections.map((connection) => (
@@ -136,7 +135,8 @@ function DictionaryDetailContent({ dictionaryId }: { dictionaryId: string }) {
 													);
 												}}
 											/>
-											Allow scoped project agents to edit terms
+											Allow project agents with dictionary editing permission to
+											edit terms
 										</label>
 									) : null}
 								</div>
@@ -218,7 +218,7 @@ function DictionaryDetailContent({ dictionaryId }: { dictionaryId: string }) {
 				</Card>
 			) : (
 				<p className="text-muted-foreground text-sm">
-					You have read access through a connected project.
+					Read-only access through a connected project.
 				</p>
 			)}
 		</div>

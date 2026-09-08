@@ -35,12 +35,12 @@ export default function EmailVerificationNotice({ email }: { email: string }) {
 
 	return (
 		<Alert>
-			<AlertTitle>Verify your email to join invited projects</AlertTitle>
+			<AlertTitle>Verify your email</AlertTitle>
 			<AlertDescription className="flex flex-wrap items-center justify-between gap-2">
 				<p>
 					{sent
-						? `Open the verification link sent to ${email}. If it expired, request a new one.`
-						: `Confirm that you own ${email} to accept project invitations.`}
+						? `Open the verification link sent to ${email}.`
+						: `Verify ${email} to accept project invitations.`}
 				</p>
 				<Button
 					variant="outline"

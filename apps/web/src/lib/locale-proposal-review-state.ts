@@ -38,7 +38,7 @@ export function localeProposalReviewState(input: {
 			badgeLabel: "Ready on previous source",
 			emptyTitle: "Ready on previous source",
 			emptyDescription:
-				"Carry compatible reviewed values forward and finish only the changed source residue.",
+				"Keep compatible reviewed values and continue with changed or new source values.",
 			canFinalize: false,
 		};
 	}
@@ -48,7 +48,7 @@ export function localeProposalReviewState(input: {
 			badgeLabel: "Finalized",
 			emptyTitle: "Catalog finalized",
 			emptyDescription:
-				"This task is complete and its immutable delivery artifact is ready.",
+				"This task is complete. Its catalog is ready to deliver.",
 			canFinalize: false,
 		};
 	}
@@ -58,7 +58,7 @@ export function localeProposalReviewState(input: {
 			badgeLabel: "Source changed",
 			emptyTitle: "Source changed",
 			emptyDescription:
-				"This proposal cannot be finalized against the current Source.",
+				"Continue on the current source before finalizing this proposal.",
 			canFinalize: false,
 		};
 	}
@@ -78,7 +78,7 @@ export function localeProposalReviewState(input: {
 			badgeLabel: `${input.pendingReview.count}${input.pendingReview.hasMore ? "+" : ""} to review`,
 			emptyTitle: "Review queue is loading",
 			emptyDescription:
-				"Agent-submitted values still need a human or authorized independent reviewer’s decision before this catalog can be finalized.",
+				"Agent candidates need your approval or an authorized independent review before finalizing.",
 			canFinalize: false,
 		};
 	}

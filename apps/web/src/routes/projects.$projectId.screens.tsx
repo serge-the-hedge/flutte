@@ -18,7 +18,6 @@ function ScreensRetirementRoute() {
 			projectId={projectId}
 			projectName={project?.name ?? "Project"}
 			title="Screens"
-			area="Legacy screen grouping"
 		/>
 	);
 }
