@@ -16,7 +16,8 @@ pushes to Git or opens a pull request on the developer's behalf.
   planned work.
 - [Agent review policy](docs/agent-review.md): human enablement and independent
   reviewer credentials.
-- [Agent API](docs/agent-api.md): workspace discovery and Translation Tasks.
+- [Agent skills](agent-kit/README.md): portable workflows and a bounded HTTP helper for coding agents.
+- [Agent API](docs/agent-api.md): endpoint reference and compatible documentation links.
 - [CLI](cli/README.md): installation, sync, delivery, and real-Flutter checks.
 - [Hosted setup](docs/hosted-auth-setup.md): Vercel, Convex, and account email.
 - [Domain glossary](CONTEXT.md): shared product vocabulary.
@@ -24,7 +25,8 @@ pushes to Git or opens a pull request on the developer's behalf.
 ## Local development
 
 Use Bun **1.3.13** (the version pinned in `package.json` and CI). The CLI also
-needs Dart; see its [toolchain requirements](cli/README.md).
+needs Dart; see its [toolchain requirements](cli/README.md). Agent-kit checks
+require Node.js **22+**.
 
 ```sh
 bun install --frozen-lockfile
