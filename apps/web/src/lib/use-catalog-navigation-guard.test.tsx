@@ -13,12 +13,33 @@ import { useCatalogNavigationGuard } from "./use-catalog-navigation-guard";
 describe("Strings draft navigation guard", () => {
 	const dom = createDomTest();
 	test.each([
-		{ entry: "/?locale=de", before: ["de"], after: ["fr"] },
-		{ entry: "/", before: undefined, after: ["de", "fr"] },
-		{ entry: "/?locales=%5B%5D", before: [], after: undefined },
+		{
+			entry: "/?locale=de",
+			before: ["de"],
+			after: ["fr"],
+			collection: undefined,
+		},
+		{
+			entry: "/",
+			before: undefined,
+			after: ["de", "fr"],
+			collection: undefined,
+		},
+		{
+			entry: "/?locales=%5B%5D",
+			before: [],
+			after: undefined,
+			collection: undefined,
+		},
+		{
+			entry: "/",
+			before: undefined,
+			after: undefined,
+			collection: "marketing",
+		},
 	])(
-		"protects drafts when changing languages from $entry",
-		async ({ entry, before, after }) => {
+		"protects drafts when changing languages or collection from $entry",
+		async ({ entry, before, after, collection }) => {
 			function View() {
 				useCatalogNavigationGuard(true);
 				return <p>Strings</p>;
@@ -27,6 +48,10 @@ describe("Strings draft navigation guard", () => {
 				component: View,
 				validateSearch: (search: Record<string, unknown>) => ({
 					locales: stringsLanguagesFromSearch(search),
+					collection:
+						typeof search.collection === "string"
+							? search.collection
+							: undefined,
 				}),
 			});
 			const router = createRouter({
@@ -47,20 +72,28 @@ describe("Strings draft navigation guard", () => {
 			});
 			try {
 				await act(async () => {
-					void router.navigate({ to: "/", search: { locales: after } });
+					void router.navigate({
+						to: "/",
+						search: { locales: after, collection },
+					});
 					await Promise.resolve();
 				});
 				expect(confirm).toHaveBeenCalledTimes(1);
+				expect(router.state.location.search.collection).toBeUndefined();
 				expect(router.state.location.search.locales).toEqual(
 					before === undefined ? undefined : [...before],
 				);
 				confirm.mockReturnValue(true);
 				await act(async () => {
-					await router.navigate({ to: "/", search: { locales: after } });
+					await router.navigate({
+						to: "/",
+						search: { locales: after, collection },
+					});
 				});
 				expect(router.state.location.search.locales).toEqual(
 					after === undefined ? undefined : [...after],
 				);
+				expect(router.state.location.search.collection).toBe(collection);
 			} finally {
 				if (originalConfirm)
 					Object.defineProperty(window, "confirm", originalConfirm);

@@ -12,6 +12,8 @@ export function useCatalogNavigationGuard(hasUnsavedWork: boolean) {
 		shouldBlockFn: useCallback(({ current, next }) => {
 			if (
 				current.pathname === next.pathname &&
+				(current.search as Record<string, unknown>).collection ===
+					(next.search as Record<string, unknown>).collection &&
 				stringsLanguageSelectionKey(current.search) ===
 					stringsLanguageSelectionKey(next.search)
 			)

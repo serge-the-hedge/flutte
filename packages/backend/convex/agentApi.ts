@@ -8,7 +8,11 @@ import {
 import { isReviewOnlyToken } from "./agentReviewModel";
 import { hashToken } from "./apiTokens";
 import { MAX_PROJECTED_LOCALES } from "./catalogProjection";
-import { type TokenScope, tokenScopeValidator } from "./lib";
+import {
+	isRepositoryLocale,
+	type TokenScope,
+	tokenScopeValidator,
+} from "./lib";
 import { configuredIntroductionTargets } from "./localeIntroductionTargets";
 import { assertProjectExists } from "./permissions";
 
@@ -88,8 +92,7 @@ export const currentProject = internalQuery({
 				(target) =>
 					!locales.some(
 						(locale) =>
-							locale.code === target.localeCode &&
-							locale.archivedAt === undefined,
+							locale.code === target.localeCode && isRepositoryLocale(locale),
 					),
 			)
 			.map(({ localeCode, label, catalogPath, runtimeLocale }) => ({
@@ -102,12 +105,11 @@ export const currentProject = internalQuery({
 			projectId: token.projectId,
 			name: project.name,
 			sourceLocale: sourceLocale?.code ?? null,
-			locales: locales
-				.filter((locale) => locale.archivedAt === undefined)
-				.map((locale) => locale.code),
+			locales: locales.filter(isRepositoryLocale).map((locale) => locale.code),
 			tokenScopes: token.scopes,
 			localeIntroductionTargets: introductionTargets,
 			capabilities: {
+				collections: true,
 				search: {
 					engine: "literal",
 					fields: ["key", "source", "target"],

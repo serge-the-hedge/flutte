@@ -10,10 +10,13 @@ describe("Catalog Workspace drafts", () => {
 	test("retains the source token from a dirty target draft across a newer Source Proposal", () => {
 		const firstSource = {
 			value: "Hallo",
-			expectedSourceFingerprint: "source-proposal-one",
-			expectedGitValueFingerprint: "git-one",
-			expectedGitValueRevision: 0,
-			expectedWorkspaceRevision: 0,
+			basis: {
+				kind: "repository" as const,
+				expectedSourceFingerprint: "source-proposal-one",
+				expectedGitValueFingerprint: "git-one",
+				expectedGitValueRevision: 0,
+				expectedWorkspaceRevision: 0,
+			},
 		};
 		const dirtyDraft = editCatalogWorkspaceDraft({
 			draft: createCatalogWorkspaceDraft(firstSource),
@@ -24,19 +27,25 @@ describe("Catalog Workspace drafts", () => {
 			dirtyDraft,
 			{
 				value: "Hallo",
-				expectedSourceFingerprint: "source-proposal-two",
-				expectedGitValueFingerprint: "git-one",
-				expectedGitValueRevision: 0,
-				expectedWorkspaceRevision: 1,
+				basis: {
+					kind: "repository" as const,
+					expectedSourceFingerprint: "source-proposal-two",
+					expectedGitValueFingerprint: "git-one",
+					expectedGitValueRevision: 0,
+					expectedWorkspaceRevision: 1,
+				},
 			},
 		);
 
 		expect(afterSourceProposalChanges).toEqual({
 			value: "Willkommen",
-			expectedSourceFingerprint: "source-proposal-one",
-			expectedGitValueFingerprint: "git-one",
-			expectedGitValueRevision: 0,
-			expectedWorkspaceRevision: 0,
+			basis: {
+				kind: "repository" as const,
+				expectedSourceFingerprint: "source-proposal-one",
+				expectedGitValueFingerprint: "git-one",
+				expectedGitValueRevision: 0,
+				expectedWorkspaceRevision: 0,
+			},
 			isDirty: true,
 		});
 	});
@@ -45,22 +54,32 @@ describe("Catalog Workspace drafts", () => {
 		const refreshed = refreshCatalogWorkspaceDraft(
 			createCatalogWorkspaceDraft({
 				value: "Hallo",
-				expectedSourceFingerprint: "source-proposal-one",
-				expectedGitValueFingerprint: "git-one",
-				expectedGitValueRevision: 0,
-				expectedWorkspaceRevision: 0,
+				basis: {
+					kind: "repository" as const,
+					expectedSourceFingerprint: "source-proposal-one",
+					expectedGitValueFingerprint: "git-one",
+					expectedGitValueRevision: 0,
+					expectedWorkspaceRevision: 0,
+				},
 			}),
 			{
 				value: "Hallo",
-				expectedSourceFingerprint: "source-proposal-two",
-				expectedGitValueFingerprint: "git-one",
-				expectedGitValueRevision: 0,
-				expectedWorkspaceRevision: 1,
+				basis: {
+					kind: "repository" as const,
+					expectedSourceFingerprint: "source-proposal-two",
+					expectedGitValueFingerprint: "git-one",
+					expectedGitValueRevision: 0,
+					expectedWorkspaceRevision: 1,
+				},
 			},
 		);
 
-		expect(refreshed.expectedSourceFingerprint).toBe("source-proposal-two");
-		expect(refreshed.expectedWorkspaceRevision).toBe(1);
+		if (refreshed.basis.kind !== "repository")
+			throw new Error("Expected repository basis");
+		expect(refreshed.basis.expectedSourceFingerprint).toBe(
+			"source-proposal-two",
+		);
+		expect(refreshed.basis.expectedWorkspaceRevision).toBe(1);
 		expect(refreshed.isDirty).toBeFalse();
 	});
 
@@ -68,26 +87,35 @@ describe("Catalog Workspace drafts", () => {
 		const refreshed = refreshCatalogWorkspaceDraft(
 			createCatalogWorkspaceDraft({
 				value: "Account",
-				expectedSourceFingerprint: "git-source",
-				expectedGitValueFingerprint: "git-one",
-				expectedGitValueRevision: 0,
-				expectedWorkspaceRevision: 0,
+				basis: {
+					kind: "repository" as const,
+					expectedSourceFingerprint: "git-source",
+					expectedGitValueFingerprint: "git-one",
+					expectedGitValueRevision: 0,
+					expectedWorkspaceRevision: 0,
+				},
 			}),
 			{
 				value: "Your account",
-				expectedSourceFingerprint: "source-proposal-one",
-				expectedGitValueFingerprint: "git-one",
-				expectedGitValueRevision: 0,
-				expectedWorkspaceRevision: 1,
+				basis: {
+					kind: "repository" as const,
+					expectedSourceFingerprint: "source-proposal-one",
+					expectedGitValueFingerprint: "git-one",
+					expectedGitValueRevision: 0,
+					expectedWorkspaceRevision: 1,
+				},
 			},
 		);
 
 		expect(refreshed).toEqual({
 			value: "Your account",
-			expectedSourceFingerprint: "source-proposal-one",
-			expectedGitValueFingerprint: "git-one",
-			expectedGitValueRevision: 0,
-			expectedWorkspaceRevision: 1,
+			basis: {
+				kind: "repository" as const,
+				expectedSourceFingerprint: "source-proposal-one",
+				expectedGitValueFingerprint: "git-one",
+				expectedGitValueRevision: 0,
+				expectedWorkspaceRevision: 1,
+			},
 			isDirty: false,
 		});
 	});

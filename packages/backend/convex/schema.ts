@@ -1,10 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-
 import {
 	agentReviewAuthorizationValidator,
 	agentReviewPolicyValidator,
 } from "./agentReviewModel";
+import { managedBasisValidator } from "./contentModel";
 import { tokenScopeValidator } from "./lib";
 import { releaseAssessmentFields } from "./releaseRecordModel";
 import {
@@ -118,6 +118,10 @@ const changeSetAuthor = v.object({
 	id: v.string(),
 });
 const agentTranslationProposalTarget = v.union(
+	v.object({
+		kind: v.literal("managedCollection"),
+		collectionId: v.id("contentCollections"),
+	}),
 	v.object({ kind: v.literal("catalogWorkspace") }),
 	v.object({
 		kind: v.literal("localeProposal"),
@@ -150,6 +154,7 @@ const agentTranslationLocaleProposalBasis = v.object({
 	sourceFingerprint: v.string(),
 });
 const agentTranslationCandidateBasis = v.union(
+	managedBasisValidator,
 	agentTranslationCatalogWorkspaceBasis,
 	agentTranslationLocaleProposalBasis,
 );
@@ -253,6 +258,76 @@ const contractTransformCode = v.union(
 );
 
 export default defineSchema({
+	contentCollections: defineTable({
+		projectId: v.id("projects"),
+		name: v.string(),
+		membershipRevision: v.number(),
+		createdAt: v.number(),
+	}).index("by_project", ["projectId"]),
+	contentCollectionLocales: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		localeId: v.id("locales"),
+		active: v.boolean(),
+	})
+		.index("by_collection", ["collectionId"])
+		.index("by_collection_locale", ["collectionId", "localeId"])
+		.index("by_locale", ["localeId"]),
+	managedMessages: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		key: v.string(),
+		sourceValue: v.string(),
+		context: v.optional(v.string()),
+		sourceRevision: v.number(),
+		sourceFingerprint: v.string(),
+		archivedAt: v.optional(v.number()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_collection_key", ["collectionId", "key"])
+		.index("by_collection", ["collectionId"]),
+	managedSourceRevisions: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		messageId: v.string(),
+		sourceValue: v.string(),
+		context: v.optional(v.string()),
+		sourceRevision: v.number(),
+		sourceFingerprint: v.string(),
+		actor,
+		createdAt: v.number(),
+		archivedAt: v.optional(v.number()),
+	}).index("by_message", ["collectionId", "messageId"]),
+	managedTargets: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		value: v.string(),
+		sourceFingerprint: v.string(),
+		revision: v.number(),
+		intentionalBlankReason: v.optional(v.string()),
+		actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
+		updatedAt: v.number(),
+	})
+		.index("by_value", ["collectionId", "messageId", "localeId"])
+		.index("by_locale", ["localeId"]),
+	managedTargetRevisions: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.id("contentCollections"),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		value: v.string(),
+		sourceFingerprint: v.string(),
+		revision: v.number(),
+		intentionalBlankReason: v.optional(v.string()),
+		actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
+		createdAt: v.number(),
+	}).index("by_value", ["collectionId", "messageId", "localeId"]),
+
 	projects: defineTable({
 		name: v.string(),
 		slug: v.string(),
@@ -1800,10 +1875,13 @@ export default defineSchema({
 		messageId: v.string(),
 		localeId: v.id("locales"),
 		localeCode: v.string(),
-		sourceValue: v.string(),
-		targetValue: v.string(),
-		targetCatalogPath: v.string(),
-		basis: agentTranslationCatalogWorkspaceBasis,
+		sourceValue: v.optional(v.string()),
+		targetValue: v.optional(v.string()),
+		targetCatalogPath: v.optional(v.string()),
+		basis: v.union(
+			agentTranslationCatalogWorkspaceBasis,
+			managedBasisValidator,
+		),
 		createdAt: v.number(),
 	})
 		.index("by_proposal_and_catalogIndex", ["proposalId", "catalogIndex"])

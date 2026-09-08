@@ -102,6 +102,11 @@ function CandidateReviewContext({
 					</div>
 					<p className="whitespace-pre-wrap text-sm">{context.source.value}</p>
 					<WhitespaceFacts value={context.source.value} />
+					{"context" in context.source && context.source.context ? (
+						<p className="mt-2 text-muted-foreground text-sm">
+							{context.source.context}
+						</p>
+					) : null}
 				</div>
 				<div className="rounded-md border bg-muted/20 p-3">
 					<div className="mb-1 flex flex-wrap items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
@@ -117,21 +122,25 @@ function CandidateReviewContext({
 						{context.target.value || "No value yet"}
 					</p>
 					<WhitespaceFacts value={context.target.value} />
-					<code className="mt-2 block break-all text-[11px] text-muted-foreground">
-						{context.target.catalogPath}
-					</code>
+					{context.target.catalogPath ? (
+						<code className="mt-2 block break-all text-[11px] text-muted-foreground">
+							{context.target.catalogPath}
+						</code>
+					) : null}
 				</div>
 			</div>
-			<div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
-				<span>Arguments: {argumentsLabel}</span>
-				<span>Declared placeholders: {placeholdersLabel}</span>
-				{!context.source.argumentNamesComplete ||
-				!context.source.declaredPlaceholderNamesComplete ? (
-					<span>
-						Facts are truncated; server validation remains authoritative.
-					</span>
-				) : null}
-			</div>
+			{context.kind !== "managedCollection" ? (
+				<div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
+					<span>Arguments: {argumentsLabel}</span>
+					<span>Declared placeholders: {placeholdersLabel}</span>
+					{!context.source.argumentNamesComplete ||
+					!context.source.declaredPlaceholderNamesComplete ? (
+						<span>
+							Facts are truncated; server validation remains authoritative.
+						</span>
+					) : null}
+				</div>
+			) : null}
 			{!context.basisIsCurrent ? (
 				<Alert>
 					<AlertDescription>
@@ -155,13 +164,23 @@ function reviewDecisionLabel(kind: string) {
 }
 
 function ProposalDetailRoute() {
+	const { proposalId } = useParams({
+		from: "/projects/$projectId/proposals/$proposalId",
+	});
+	return <ProposalDetailContent key={proposalId} />;
+}
+
+function ProposalDetailContent() {
 	const { projectId, proposalId } = useParams({
 		from: "/projects/$projectId/proposals/$proposalId",
 	});
 	const project = useQuery(api.projects.get, {
 		projectId: convexId<"projects">(projectId),
 	});
+	const [pageCursors, setPageCursors] = useState([0]);
 	const detail = useQuery(api.agentTranslationProposals.getForReview, {
+		cursor: pageCursors[pageCursors.length - 1],
+		limit: 8,
 		proposalId: convexId<"agentTranslationProposals">(proposalId),
 	});
 	const reviewerTokens = useQuery(
@@ -257,6 +276,13 @@ function ProposalDetailRoute() {
 	}
 
 	const proposal = detail.proposal;
+	const managed = proposal.target.kind === "managedCollection";
+	const pageHasDrafts = detail.candidates.some(
+		({ revision, reviews }) =>
+			revision &&
+			drafts[revision._id] !== undefined &&
+			drafts[revision._id] !== (reviews[0]?.finalValue ?? revision.value),
+	);
 	const isEditor = project?.role === "owner" || project?.role === "editor";
 	const canReview = proposal.status === "open" && isEditor;
 	const exactBatchRevisionIds = exactTaskBatchRevisionIds({
@@ -376,7 +402,8 @@ function ProposalDetailRoute() {
 	};
 	const taskScope = proposal.taskScope;
 	const finalize = async () => {
-		if (!taskScope || proposal.status === "open" || isFinalizing) return;
+		if (!taskScope || managed || proposal.status === "open" || isFinalizing)
+			return;
 		setError(null);
 		setNotice(null);
 		setIsFinalizing(true);
@@ -405,7 +432,11 @@ function ProposalDetailRoute() {
 	);
 
 	return (
-		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
+		<ProjectShell
+			projectId={projectId}
+			title={project?.name ?? "Project"}
+			managed={managed}
+		>
 			<PageHeader
 				title={proposal.clientProposalKey}
 				description={
@@ -466,7 +497,7 @@ function ProposalDetailRoute() {
 					</AlertDescription>
 				</Alert>
 			) : null}
-			{taskScope && proposal.status !== "open" ? (
+			{taskScope && !managed && proposal.status !== "open" ? (
 				<Alert className="mb-4">
 					<AlertDescription className="flex flex-wrap items-center gap-3">
 						<span className="min-w-0 flex-1">
@@ -496,6 +527,61 @@ function ProposalDetailRoute() {
 						</Button>
 					</AlertDescription>
 				</Alert>
+			) : null}
+			{taskScope ? (
+				<div className="mb-4 flex flex-wrap items-center gap-3">
+					<span className="text-muted-foreground text-sm">
+						Page {pageCursors.length} ·{" "}
+						{detail.candidates.length + waitingTaskTargets.length} of{" "}
+						{taskScope.targetCount} task messages. Batch review applies to this
+						page.
+					</span>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={
+							pageCursors.length === 1 ||
+							pageHasDrafts ||
+							isBatchAccepting ||
+							reviewingMessageId !== null
+						}
+						onClick={() => setPageCursors((previous) => previous.slice(0, -1))}
+					>
+						Previous
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={
+							detail.nextCursor === null ||
+							pageHasDrafts ||
+							isBatchAccepting ||
+							reviewingMessageId !== null
+						}
+						onClick={() => {
+							const cursor = detail.nextCursor;
+							if (cursor !== null)
+								setPageCursors((previous) => [...previous, cursor]);
+						}}
+					>
+						Next
+					</Button>
+					{pageHasDrafts ? (
+						<span className="text-muted-foreground text-xs">
+							Save or revert edits before changing pages.
+						</span>
+					) : null}
+					{proposal.target.kind === "managedCollection" ? (
+						<Link
+							to="/projects/$projectId/strings"
+							params={{ projectId }}
+							search={{ collection: proposal.target.collectionId }}
+							className="text-sm underline"
+						>
+							Back to collection
+						</Link>
+					) : null}
+				</div>
 			) : null}
 			<div className="flex flex-col gap-4">
 				{waitingTaskTargets.map((target) => (
@@ -615,6 +701,7 @@ function ProposalDetailRoute() {
 													),
 											}}
 											meta={{
+												format: managed ? "plain" : "icu",
 												messageId: revision.messageId,
 												localeId: revision.localeId ?? "target",
 												localeCode: revisionContext?.localeCode ?? "target",

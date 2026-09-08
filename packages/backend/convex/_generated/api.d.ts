@@ -8,6 +8,10 @@
  * @module
  */
 
+import type * as contentModel from "../contentModel.js";
+import type * as contentCollections from "../contentCollections.js";
+import type * as managedContent from "../managedContent.js";
+import type * as agentContent from "../agentContent.js";
 import type * as catalogBrowse from "../catalogBrowse.js";
 import type * as catalogProcessing from "../catalogProcessing.js";
 import type * as snapshotUploads from "../snapshotUploads.js";
@@ -70,6 +74,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  contentModel: typeof contentModel;
+  contentCollections: typeof contentCollections;
+  managedContent: typeof managedContent;
+  agentContent: typeof agentContent;
+
   catalogBrowse: typeof catalogBrowse;
   catalogProcessing: typeof catalogProcessing;
   snapshotUploads: typeof snapshotUploads;

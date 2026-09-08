@@ -26,6 +26,7 @@ type ReviewEditorActions = {
 };
 
 type ReviewEditorMeta = {
+	format?: "icu" | "plain";
 	messageId: string;
 	localeId: string;
 	localeCode: string;
@@ -105,6 +106,7 @@ function Field() {
 	return (
 		<div className="rounded-md border bg-background p-2">
 			<IcuMessageSegmentEditor
+				format={meta.format}
 				messageId={meta.messageId}
 				localeId={meta.localeId}
 				localeCode={meta.localeCode}

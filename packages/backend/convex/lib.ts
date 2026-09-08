@@ -49,3 +49,15 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 import { type Infer, v } from "convex/values";
+
+/** Repository membership is independent of a Locale being available to managed content. */
+export function isRepositoryLocale(locale: {
+	isSource: boolean;
+	catalogPath?: string;
+	archivedAt?: number;
+}): boolean {
+	return (
+		locale.archivedAt === undefined &&
+		(locale.isSource || locale.catalogPath !== undefined)
+	);
+}

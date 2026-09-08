@@ -49,6 +49,7 @@ See [scan/resume](transport.md#bounded-scans) for bounded terminal execution.
 | Contract | Open when using |
 | --- | --- |
 | [Context](context-api.md) | Project discovery, search, guidance, or work queues |
+| [Managed collections](collection-api.md) | Collection discovery, managed wording search/context, or downloads |
 | [Translation Tasks](translation-api.md) | Task creation, pages, and candidates |
 | [Review](review-api.md) | Exact-revision review reads and decisions |
 | [Dictionary](dictionary-api.md) | Term reads, replacements, or removals |

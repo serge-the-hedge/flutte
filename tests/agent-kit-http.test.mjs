@@ -93,40 +93,45 @@ test("request preserves exact writes and successful JSON; credentials stay in Au
 	assert.equal(result.stderr, "");
 });
 
-test("GET scans continue empty pages and preserve whole evidence pages", async (t) => {
-	/** @type {(string | null)[]} */ const cursors = [];
-	const server = await fixture((request, response) => {
-		const url = new URL(request.url ?? "", "http://localhost");
-		cursors.push(url.searchParams.get("cursor"));
-		assert.equal(url.searchParams.get("q"), "a & b");
-		json(
-			response,
-			cursors.length === 1
-				? { items: [], provenance: { revision: 7 }, nextCursor: "opaque+next" }
-				: { items: [{ evidence: "keep me" }], nextCursor: null },
-		);
+for (const path of ["/workspace/search", "/collections/managed-1/search"])
+	test(`GET scans ${path} continue empty pages and preserve whole evidence pages`, async (t) => {
+		/** @type {(string | null)[]} */ const cursors = [];
+		const server = await fixture((request, response) => {
+			const url = new URL(request.url ?? "", "http://localhost");
+			cursors.push(url.searchParams.get("cursor"));
+			assert.equal(url.searchParams.get("q"), "a & b");
+			json(
+				response,
+				cursors.length === 1
+					? {
+							items: [],
+							provenance: { revision: 7 },
+							nextCursor: "opaque+next",
+						}
+					: { items: [{ evidence: "keep me" }], nextCursor: null },
+			);
+		});
+		t.after(() => server.close());
+		const query = await server.json("query.json", { q: "a & b" });
+		const result = await run(server.url, [
+			"scan",
+			"GET",
+			path,
+			"--query",
+			query,
+		]);
+		assert.equal(result.code, 0);
+		assert.deepEqual(cursors, [null, "opaque+next"]);
+		assert.deepEqual(JSON.parse(result.stdout), {
+			pages: [
+				{ items: [], provenance: { revision: 7 }, nextCursor: "opaque+next" },
+				{ items: [{ evidence: "keep me" }], nextCursor: null },
+			],
+			nextCursor: null,
+			complete: true,
+			stopReason: "complete",
+		});
 	});
-	t.after(() => server.close());
-	const query = await server.json("query.json", { q: "a & b" });
-	const result = await run(server.url, [
-		"scan",
-		"GET",
-		"/workspace/search",
-		"--query",
-		query,
-	]);
-	assert.equal(result.code, 0);
-	assert.deepEqual(cursors, [null, "opaque+next"]);
-	assert.deepEqual(JSON.parse(result.stdout), {
-		pages: [
-			{ items: [], provenance: { revision: 7 }, nextCursor: "opaque+next" },
-			{ items: [{ evidence: "keep me" }], nextCursor: null },
-		],
-		nextCursor: null,
-		complete: true,
-		stopReason: "complete",
-	});
-});
 
 test("proposal scans put cursors only in the POST body and stop at page budget", async (t) => {
 	/** @type {Record<string, unknown>[]} */ const bodies = [];

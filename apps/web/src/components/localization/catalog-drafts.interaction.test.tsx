@@ -24,9 +24,11 @@ function props({
 	sourceFingerprint = "source-1",
 	gitFingerprint = "git-1",
 	messageIds = ["welcome", "other"],
-	onCommitValue = async () => ({
-		workspaceRevision: 1,
-		sourceFingerprint: "source-1",
+	onCommitValue = async (input) => ({
+		basis:
+			input.basis.kind === "repository"
+				? { ...input.basis, expectedWorkspaceRevision: 1 }
+				: input.basis,
 	}),
 }: {
 	query?: string;
@@ -142,13 +144,126 @@ async function commit(input = field()) {
 }
 
 describe("Catalog editor draft lifecycle", () => {
+	test("managed literal text retains its collection and stale source basis across filtering", async () => {
+		const commits: CatalogWorkspaceCommit[] = [];
+		const onCommitValue: NonNullable<Props["onCommitValue"]> = async (
+			input,
+		) => {
+			commits.push(input);
+			throw new Error("Source changed");
+		};
+		const managedProps = (revision = 1, filtered = false): Props => {
+			const base = props({
+				messageIds: filtered ? ["other"] : ["welcome", "other"],
+				onCommitValue,
+			});
+			return {
+				...base,
+				hydratedCards: new Map(
+					[...base.hydratedCards].map(([key, card]) => [
+						key,
+						{
+							...card,
+							source: {
+								...card.source,
+								editBasis: {
+									kind: "managedSource" as const,
+									collectionId: "marketing",
+									sourceRevision: revision,
+									sourceFingerprint: `source-${revision}`,
+									membershipRevision: 1,
+								},
+							},
+							targets: card.targets.map((target) => ({
+								localeId: target.localeId,
+								localeCode: target.localeCode,
+								isSource: false,
+								value: "Literal {name}",
+								materialized: false,
+								editBasis: {
+									kind: "managed" as const,
+									collectionId: "marketing",
+									sourceRevision: revision,
+									targetRevision: 0,
+									sourceFingerprint: `source-${revision}`,
+									membershipRevision: 1,
+								},
+							})),
+						},
+					]),
+				),
+			};
+		};
+		await render(managedProps());
+		await type("Keep {count, plural, other{this literal text}} exactly");
+		const previousClipboard = Object.getOwnPropertyDescriptor(
+			navigator,
+			"clipboard",
+		);
+		let copied = "";
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: {
+				writeText: async (text: string) => {
+					copied = text;
+				},
+			},
+		});
+		try {
+			const copy = [...testDom.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Copy draft text",
+			);
+			if (!copy) throw new Error("Missing draft copy action");
+			await act(async () => copy.click());
+			expect(copied).toBe(
+				"Keep {count, plural, other{this literal text}} exactly",
+			);
+		} finally {
+			if (previousClipboard)
+				Object.defineProperty(navigator, "clipboard", previousClipboard);
+			else Reflect.deleteProperty(navigator, "clipboard");
+		}
+
+		expect(testDom.container.textContent).not.toContain("Raw ICU");
+		await render(managedProps(1, true));
+		await render(managedProps(2));
+		await commit();
+		expect(commits[0]).toMatchObject({
+			basis: {
+				kind: "managed",
+				collectionId: "marketing",
+				sourceRevision: 1,
+				targetRevision: 0,
+				sourceFingerprint: "source-1",
+				membershipRevision: 1,
+			},
+			intent: {
+				kind: "save",
+				value: "Keep {count, plural, other{this literal text}} exactly",
+			},
+		});
+		expect(field().value).toBe(
+			"Keep {count, plural, other{this literal text}} exactly",
+		);
+		expect(testDom.container.textContent).toContain("Source changed");
+	});
+
 	test("retains filtered-out text and its original concurrency basis across Baseline remounts", async () => {
 		const commits: CatalogWorkspaceCommit[] = [];
 		const onCommitValue: NonNullable<Props["onCommitValue"]> = async (
 			input,
 		) => {
 			commits.push(input);
-			return { workspaceRevision: 3, sourceFingerprint: "source-1" };
+			return {
+				basis:
+					input.basis.kind === "repository"
+						? {
+								...input.basis,
+								expectedWorkspaceRevision: 3,
+								expectedSourceFingerprint: "source-1",
+							}
+						: input.basis,
+			};
 		};
 		await render(props({ onCommitValue }));
 		await type("Mon brouillon");
@@ -175,10 +290,12 @@ describe("Catalog editor draft lifecycle", () => {
 		await commit();
 		expect(commits).toHaveLength(1);
 		expect(commits[0]).toMatchObject({
-			expectedWorkspaceRevision: 0,
-			expectedGitValueFingerprint: "git-1",
-			expectedGitValueRevision: 0,
-			expectedSourceFingerprint: "source-1",
+			basis: {
+				expectedWorkspaceRevision: 0,
+				expectedGitValueFingerprint: "git-1",
+				expectedGitValueRevision: 0,
+				expectedSourceFingerprint: "source-1",
+			},
 			intent: { kind: "save", value: "Mon brouillon" },
 		});
 	});
@@ -228,7 +345,15 @@ describe("Catalog editor draft lifecycle", () => {
 			props({ query: "other", messageIds: ["other"], onCommitValue }),
 		);
 		await act(async () =>
-			request.resolve({ workspaceRevision: 1, sourceFingerprint: "source-1" }),
+			request.resolve({
+				basis: {
+					kind: "repository",
+					expectedWorkspaceRevision: 1,
+					expectedSourceFingerprint: "source-1",
+					expectedGitValueFingerprint: "git-1",
+					expectedGitValueRevision: 0,
+				},
+			}),
 		);
 		await render(props({ onCommitValue }));
 		expect(field().value).toBe("Saved offscreen");
@@ -294,7 +419,7 @@ describe("Catalog editor draft lifecycle", () => {
 			);
 		});
 		expect(commits[0]).toMatchObject({
-			expectedWorkspaceRevision: 0,
+			basis: { expectedWorkspaceRevision: 0 },
 			intent: { kind: "intentionalBlank", reason: "No label is needed here" },
 		});
 		expect(reason().value).toBe("No label is needed here");

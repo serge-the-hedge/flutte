@@ -1,10 +1,26 @@
 # Blabla localization
 
-Blabla is a localization control plane for versioned application catalogs. It
+Blabla is a localization control plane for application catalogs and managed copy. It
 keeps translation work reviewable without becoming the application’s runtime or
 release authority.
 
 ## Language
+
+**Content Collection**:
+A named set of messages sharing one source owner and a target-Locale selection
+inside a project. Keys are unique within a collection; languages and guidance
+are shared across the project.
+_Avoid_: project clone, folder, pipeline
+
+**Managed Content**:
+Source text authored directly in Blabla, with reviewed target values for copy or
+download. Its source revisions are independent of repository Snapshots.
+_Avoid_: fake Snapshot, ARB import
+
+**Collection Membership**:
+A Locale's participation in a Content Collection, independent of any repository
+file binding. Removing membership preserves its retained translation history.
+_Avoid_: project Locale deletion, file binding
 
 **Source Contract**:
 The exact source-language localization definition: a message identifier, source
@@ -17,8 +33,8 @@ shipped in a release.
 _Avoid_: live catalog, latest service state
 
 **Translation Control Plane**:
-The Blabla workspace where a Git-addressed catalog snapshot gains context,
-translation proposals, review decisions, and readiness evidence.
+The Blabla workspace where repository catalogs or directly authored content gain
+context, translation proposals, review decisions, and readiness evidence.
 _Avoid_: runtime translation service, source of release files
 
 **Localization Sync Module**:
@@ -46,8 +62,8 @@ evidence; catalog state exposes only the workflow facts derived from it.
 _Avoid_: message table, editable metadata
 
 **Catalog Message**:
-A stable message identifier joining one Source Contract to its target-Locale
-values and history. The identifier is the key; each Locale's text is a value,
+A stable message identifier within a Content Collection, joining one Source
+Contract to its target-Locale values and history. The identifier is the key; each Locale's text is a value,
 so neither should be called the string when the distinction matters.
 _Avoid_: string, translation row
 
@@ -114,9 +130,9 @@ catalog Locale.
 _Avoid_: catalog locale, ARB locale
 
 **Locale Variant**:
-A distinct Locale with its own catalog file and canonical code because its
-translatable content differs by script or region. It exists only when the
-Source Contract actually contains that separate catalog.
+A distinct Locale with its own canonical code because its translatable content
+differs by script or region. Its collection membership is deliberate; only a
+repository collection requires a corresponding catalog file.
 _Avoid_: runtime fallback, compatibility alias
 
 **Locale Introduction Target**:

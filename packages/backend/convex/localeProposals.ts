@@ -1,5 +1,4 @@
 import { ConvexError, v } from "convex/values";
-
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -26,7 +25,12 @@ import {
 	assertTargetValueContract,
 	sourceContractsMatch,
 } from "./contractTransforms";
-import { DEFAULT_INTEGRATION_BRANCH, now, sha256Hex } from "./lib";
+import {
+	DEFAULT_INTEGRATION_BRANCH,
+	isRepositoryLocale,
+	now,
+	sha256Hex,
+} from "./lib";
 import {
 	assertIntroductionCatalogPath,
 	introductionTargetFor,
@@ -974,7 +978,7 @@ export const begin = internalMutation({
 				q.eq("projectId", args.projectId).eq("code", localeCode),
 			)
 			.unique();
-		if (existingLocale && existingLocale.archivedAt === undefined) {
+		if (existingLocale && isRepositoryLocale(existingLocale)) {
 			throw new ConvexError({
 				code: "CONFLICT",
 				message: "Locale is already a project Locale, not a Locale Proposal.",

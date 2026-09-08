@@ -1,6 +1,34 @@
+export type RepositoryEditBasis = {
+	kind: "repository";
+	expectedGitValueFingerprint: string;
+	expectedGitValueRevision: number;
+	expectedWorkspaceRevision: number;
+	expectedSourceFingerprint: string;
+};
+export type ManagedEditBasis = {
+	kind: "managed";
+	collectionId: string;
+	sourceRevision: number;
+	targetRevision: number;
+	sourceFingerprint: string;
+	membershipRevision: number;
+};
+export type ManagedSourceEditBasis = {
+	kind: "managedSource";
+	collectionId: string;
+	sourceRevision: number;
+	sourceFingerprint: string;
+	membershipRevision: number;
+};
+export type CatalogEditBasis =
+	| RepositoryEditBasis
+	| ManagedEditBasis
+	| ManagedSourceEditBasis;
+
 export type CatalogWorkspaceValue = {
 	/** The durable Locale identity is present whenever a Workspace value is editable. */
 	localeId?: string;
+	editBasis?: CatalogEditBasis;
 	localeCode: string;
 	isSource: boolean;
 	value: string;
@@ -30,6 +58,7 @@ export type CatalogWorkspaceKey = {
 
 export type StringsCatalogKey = {
 	id: string;
+	context?: string;
 	source: CatalogWorkspaceValue;
 	targets: readonly CatalogWorkspaceValue[];
 };
@@ -39,10 +68,7 @@ export type StringsCatalogKey = {
 type CatalogWorkspaceValueIdentity = {
 	messageId: string;
 	localeId: string;
-	expectedGitValueFingerprint: string;
-	expectedGitValueRevision: number;
-	expectedWorkspaceRevision: number;
-	expectedSourceFingerprint: string;
+	basis: CatalogEditBasis;
 };
 
 /** The editor names only the user decision. The Catalog Workspace derives the
@@ -59,18 +85,32 @@ export type CatalogWorkspaceCommit = CatalogWorkspaceValueIdentity & {
 /** The server returns the concurrency baseline produced by a commit. Keeping
  * this receipt local lets an editor become clean before Convex's subscription
  * round-trip paints the committed row back into the catalog. */
-export type CatalogWorkspaceCommitReceipt = {
-	workspaceRevision: number;
-	sourceFingerprint: string;
-};
+export type CatalogWorkspaceCommitReceipt = { basis: CatalogEditBasis };
 
 export type CatalogWorkspaceDraftSource = {
 	value: string;
-	expectedSourceFingerprint: string;
-	expectedGitValueFingerprint: string;
-	expectedGitValueRevision: number;
-	expectedWorkspaceRevision: number;
+	basis: CatalogEditBasis;
 };
+
+export function catalogValueEditBasis(
+	value: CatalogWorkspaceValue,
+): CatalogEditBasis | undefined {
+	if (value.editBasis) return value.editBasis;
+	if (
+		value.gitValueFingerprint === undefined ||
+		value.gitValueRevision === undefined ||
+		value.workspaceRevision === undefined ||
+		value.expectedSourceFingerprint === undefined
+	)
+		return undefined;
+	return {
+		kind: "repository",
+		expectedGitValueFingerprint: value.gitValueFingerprint,
+		expectedGitValueRevision: value.gitValueRevision,
+		expectedWorkspaceRevision: value.workspaceRevision,
+		expectedSourceFingerprint: value.expectedSourceFingerprint,
+	};
+}
 
 /** A Catalog Workspace draft owns the full compare-and-save snapshot present
  * when its author first changes it. `isDirty` is explicit: comparing text with

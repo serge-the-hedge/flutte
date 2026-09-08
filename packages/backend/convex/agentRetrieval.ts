@@ -318,6 +318,7 @@ export const guidanceContext = internalQuery({
 		token: v.string(),
 		texts: v.array(v.string()),
 		localeCodes: v.array(v.string()),
+		syntax: v.optional(v.union(v.literal("plain"), v.literal("icu"))),
 	},
 	returns: guidanceContextValidator,
 	handler: async (ctx, args) => {

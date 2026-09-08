@@ -18,7 +18,7 @@ export function windowBatchKey(batch: CatalogWindowBatch) {
 }
 
 export function initialWindowBatches(
-	args: CatalogWindowArgs,
+	args: Pick<CatalogWindowArgs, "messageIds" | "localeIds">,
 ): CatalogWindowBatch[] {
 	const locales = args.localeIds;
 	const groups =
@@ -48,6 +48,7 @@ export function initialWindowBatches(
 export function advanceWindowBatches(
 	batches: readonly CatalogWindowBatch[],
 	results: Readonly<Record<string, unknown>>,
+	sizeErrorCode = "WINDOW_TOO_LARGE",
 ): CatalogWindowBatch[] | null {
 	let changed = false;
 	const next: CatalogWindowBatch[] = [];
@@ -63,7 +64,7 @@ export function advanceWindowBatches(
 			data === null ||
 			typeof data !== "object" ||
 			!("code" in data) ||
-			data.code !== "WINDOW_TOO_LARGE"
+			data.code !== sizeErrorCode
 		)
 			throw result;
 		if (batch.messageIds.length > 1) {

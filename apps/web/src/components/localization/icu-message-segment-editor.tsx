@@ -32,6 +32,7 @@ type EditorKeyboardEventHandler = KeyboardEventHandler<EditableFieldElement>;
 type EditorFocusEventHandler = FocusEventHandler<HTMLElement>;
 
 type IcuMessageSegmentEditorProps = {
+	format?: "icu" | "plain";
 	messageId: string;
 	localeId: string;
 	localeCode: string;
@@ -807,6 +808,28 @@ function StructuredMessageEditor({
  * or raw presentation only; callers retain their Catalog Workspace draft and
  * commit through the existing interface. */
 export function IcuMessageSegmentEditor({
+	format = "icu",
+	...props
+}: IcuMessageSegmentEditorProps) {
+	if (format === "plain")
+		return (
+			<Textarea
+				{...fieldProps(
+					props,
+					`Edit ${props.localeCode} value for ${props.messageId}`,
+				)}
+				value={props.value}
+				onChange={(event) => props.onValueChange(event.target.value)}
+				className={cn(
+					"field-sizing-content min-h-0 resize-none",
+					props.fieldClassName,
+				)}
+			/>
+		);
+	return <StructuredIcuEditor {...props} />;
+}
+
+function StructuredIcuEditor({
 	messageId,
 	localeId,
 	localeCode,

@@ -1,0 +1,304 @@
+import { describe, expect, test } from "vitest";
+import {
+	authenticatedBackend,
+	createBackend,
+	createProject,
+} from "../test/support";
+import { api } from "./_generated/api";
+import { commitManagedTarget } from "./managedContent";
+
+async function setup() {
+	const t = createBackend({ transactionLimits: true });
+	const owner = await authenticatedBackend(t, "managed-owner");
+	const projectId = await createProject(owner);
+	const localeId = await owner.mutation(api.locales.create, {
+		projectId,
+		code: "pt-BR",
+	});
+	const collectionId = await owner.mutation(api.contentCollections.create, {
+		projectId,
+		name: "Store copy",
+		localeIds: [localeId],
+	});
+	const address = { projectId, collectionId };
+	const messageId = await owner.mutation(api.managedContent.createMessage, {
+		...address,
+		key: "title",
+		sourceValue: "Build {anything}\nIt's yours",
+		context: "Store screenshot headline",
+	});
+	const target = { ...address, messageId, localeId };
+	async function current() {
+		const result = await owner.query(api.managedContent.context, {
+			...address,
+			messageIds: [messageId],
+			localeIds: [localeId],
+		});
+		const item = result.items[0];
+		if (!item) throw new Error("Missing target");
+		return item;
+	}
+	return {
+		t,
+		owner,
+		projectId,
+		localeId,
+		collectionId,
+		address,
+		target,
+		current,
+	};
+}
+
+describe("managed content", () => {
+	test("authors and exports literal plain text without a Snapshot", async () => {
+		const s = await setup();
+		expect((await s.current()).valueState).toBe("waiting");
+		const value = "Crie {qualquer coisa}\nÉ seu";
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis: (await s.current()).basis,
+			intent: { kind: "save", value },
+		});
+		const current = await s.current();
+		expect(current.value).toBe(value);
+		expect(current.valueState).toBe("settled");
+		const download = await s.owner.query(api.managedContent.exportSelection, {
+			...s.address,
+			messageIds: ["title"],
+			localeIds: [s.localeId],
+			mode: "reviewed",
+		});
+		expect(JSON.parse(download.text).values.title["pt-BR"]).toBe(value);
+		expect(
+			await s.t.run((ctx) => ctx.db.query("sourceSnapshots").collect()),
+		).toEqual([]);
+	});
+	test("source edits invalidate stale saves; context edits preserve currency and notes", async () => {
+		const s = await setup();
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis: (await s.current()).basis,
+			intent: { kind: "save", value: "Construa" },
+		});
+		const old = await s.current();
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: "title",
+			sourceValue: old.sourceValue,
+			context: "New placement",
+			expectedSourceRevision: old.basis.sourceRevision,
+		});
+		expect((await s.current()).valueState).toBe("settled");
+		const before = await s.current();
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: "title",
+			sourceValue: "Explore",
+			expectedSourceRevision: before.basis.sourceRevision,
+		});
+		expect((await s.current()).context).toBe("New placement");
+		expect((await s.current()).valueState).toBe("stale");
+		await expect(
+			s.owner.mutation(api.managedContent.commit, {
+				...s.target,
+				basis: before.basis,
+				intent: { kind: "confirm" },
+			}),
+		).rejects.toThrow("changed");
+		await expect(
+			s.owner.query(api.managedContent.exportSelection, {
+				...s.address,
+				messageIds: ["title"],
+				localeIds: [s.localeId],
+				mode: "reviewed",
+			}),
+		).rejects.toThrow("missing or stale");
+		const partial = await s.owner.query(api.managedContent.exportSelection, {
+			...s.address,
+			messageIds: ["title"],
+			localeIds: [s.localeId],
+			mode: "partial",
+		});
+		expect(partial.omitted).toHaveLength(1);
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis: (await s.current()).basis,
+			intent: { kind: "confirm" },
+		});
+		expect((await s.current()).valueState).toBe("settled");
+	});
+	test("collection key namespaces isolate edits and membership changes reject old saves", async () => {
+		const s = await setup();
+		const second = await s.owner.mutation(api.contentCollections.create, {
+			projectId: s.projectId,
+			name: "Other",
+			localeIds: [s.localeId],
+		});
+		await s.owner.mutation(api.managedContent.createMessage, {
+			projectId: s.projectId,
+			collectionId: second,
+			key: "title",
+			sourceValue: "Other title",
+		});
+		const old = await s.current();
+		await s.owner.mutation(api.contentCollections.setLocales, {
+			...s.address,
+			localeIds: [],
+			expectedMembershipRevision: 1,
+		});
+		await expect(s.current()).rejects.toThrow("not enabled");
+		await s.owner.mutation(api.contentCollections.setLocales, {
+			...s.address,
+			localeIds: [s.localeId],
+			expectedMembershipRevision: 2,
+		});
+		await expect(
+			s.owner.mutation(api.managedContent.commit, {
+				...s.target,
+				basis: old.basis,
+				intent: { kind: "save", value: "Old" },
+			}),
+		).rejects.toThrow("changed");
+		const result = await s.owner.query(api.managedContent.context, {
+			projectId: s.projectId,
+			collectionId: second,
+			messageIds: ["title"],
+			localeIds: [s.localeId],
+		});
+		expect(result.items[0]?.sourceValue).toBe("Other title");
+		expect(result.items[0]?.valueState).toBe("waiting");
+	});
+	test("archive preserves evidence and refuses key reuse and pending application", async () => {
+		const s = await setup();
+		const old = await s.current();
+		await s.owner.mutation(api.managedContent.archiveMessage, {
+			...s.address,
+			messageId: "title",
+			expectedSourceRevision: old.basis.sourceRevision,
+		});
+		await expect(
+			s.owner.mutation(api.managedContent.commit, {
+				...s.target,
+				basis: old.basis,
+				intent: { kind: "save", value: "Archived" },
+			}),
+		).rejects.toThrow("not active");
+		await expect(
+			s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key: "title",
+				sourceValue: "Replacement",
+			}),
+		).rejects.toThrow("archived history");
+		expect(
+			await s.t.run((ctx) => ctx.db.query("managedSourceRevisions").collect()),
+		).toHaveLength(2);
+	});
+	test("only a human or authorized reviewer can confirm, and blank reasons persist", async () => {
+		const s = await setup();
+		const basis = (await s.current()).basis;
+		await expect(
+			s.t.run((ctx) =>
+				commitManagedTarget(ctx, {
+					...s.target,
+					basis,
+					intent: { kind: "save", value: "Agent" },
+					actor: { kind: "agent", id: "translator" },
+				}),
+			),
+		).rejects.toThrow("authorized independent");
+		await expect(
+			s.owner.mutation(api.managedContent.commit, {
+				...s.target,
+				basis,
+				intent: { kind: "save", value: "" },
+			}),
+		).rejects.toThrow("blank reason");
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis,
+			intent: { kind: "intentionalBlank", reason: "No text in this placement" },
+		});
+		expect((await s.current()).intentionalBlank).toBe(
+			"No text in this placement",
+		);
+		expect((await s.current()).valueState).toBe("settled");
+		const stranger = await authenticatedBackend(s.t, "stranger");
+		await expect(
+			stranger.query(api.managedContent.page, s.address),
+		).rejects.toThrow();
+	});
+	test("source browse continues across empty search pages", async () => {
+		const s = await setup();
+		for (let i = 0; i < 18; i++)
+			await s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key: `a${String(i).padStart(2, "0")}`,
+				sourceValue: "Ordinary",
+			});
+		const first = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			q: "anything",
+		});
+		expect(first.items).toEqual([]);
+		expect(first.nextCursor).not.toBeNull();
+		const next = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			q: "anything",
+			cursor: first.nextCursor ?? undefined,
+		});
+		expect(next.items.map((item) => item.key)).toEqual(["title"]);
+		expect(next.nextCursor).toBeNull();
+		const focused = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			focusKey: "title",
+		});
+		expect(focused.items.map((item) => item.key)).toEqual(["title"]);
+		expect(focused.nextCursor).toBeNull();
+		await expect(
+			s.owner.query(api.managedContent.page, {
+				...s.address,
+				q: "different",
+				cursor: first.nextCursor ?? undefined,
+			}),
+		).rejects.toThrow("cursor");
+	});
+	test("context rejects oversized batches before transaction limits", async () => {
+		const s = await setup();
+		const long = "x".repeat(256 * 1024);
+		for (let i = 0; i < 5; i++)
+			await s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key: `large${i}`,
+				sourceValue: long,
+			});
+		await expect(
+			s.owner.query(api.managedContent.context, {
+				...s.address,
+				messageIds: ["large0", "large1", "large2", "large3", "large4"],
+				localeIds: [s.localeId],
+			}),
+		).rejects.toThrow("fewer pairs");
+		const page = await s.owner.query(api.managedContent.page, s.address);
+		expect(page.items.length).toBeGreaterThan(0);
+		expect(page.nextCursor).not.toBeNull();
+	});
+	test("an oversized encoded source never becomes false end-of-results", async () => {
+		const s = await setup();
+		await s.owner.mutation(api.managedContent.createMessage, {
+			...s.address,
+			key: "a_large",
+			sourceValue: String.fromCharCode(1).repeat(192 * 1024),
+		});
+		await expect(
+			s.owner.query(api.managedContent.page, s.address),
+		).rejects.toThrow("encoded browse limit");
+		await expect(
+			s.owner.query(api.managedContent.page, {
+				...s.address,
+				focusKey: "a_large",
+			}),
+		).rejects.toThrow("encoded browse limit");
+	});
+});

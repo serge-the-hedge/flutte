@@ -66,6 +66,10 @@ content, scope, or Snapshot invalidates continuation and requires a fresh search
 
 ### `POST /guidance/context`
 
+Optional `syntax` is `icu` (default) or `plain`. Use `plain` for supplied managed
+copy so terms inside literal braces remain searchable. Collection/task context
+already selects the correct syntax.
+
 Requires `read`:
 
 ```json
@@ -79,7 +83,7 @@ renderings, author, timestamp, immutable `revisionId`, and `matchedTextIndexes`
 into `texts`. Untranslatable Terms have no renderings. Agent authorship is not
 labelled human review.
 
-Matching is case-sensitive within literal message text, excluding ICU arguments,
+Matching is case-sensitive within literal message text. In ICU mode it excludes arguments,
 selectors, and formatter options; plural counts separate literal runs. Word
 boundaries prevent `Start` matching `Restart`, while unspaced scripts can match
 within a literal segment. There is no fuzzy inference.

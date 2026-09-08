@@ -21,6 +21,31 @@ import { correctGuidanceLocaleCode } from "./translationGuidance";
 
 export { normalizeCatalogPath } from "./catalogPaths";
 
+/** Locale identities with managed history cannot be folded into another code. */
+async function assertNoManagedLocaleHistory(
+	ctx: MutationCtx,
+	localeId: Id<"locales">,
+	projectId: Id<"projects">,
+	isSource: boolean,
+) {
+	const membership = await ctx.db
+		.query("contentCollectionLocales")
+		.withIndex("by_locale", (q) => q.eq("localeId", localeId))
+		.first();
+	const sourceCollection = isSource
+		? await ctx.db
+				.query("contentCollections")
+				.withIndex("by_project", (q) => q.eq("projectId", projectId))
+				.first()
+		: null;
+	if (membership || sourceCollection)
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"This Locale is used by managed content and cannot be renamed or removed during repository setup.",
+		});
+}
+
 async function advanceBindingRevision(
 	ctx: MutationCtx,
 	projectId: Id<"projects">,
@@ -316,6 +341,12 @@ export const correctSetupBinding = mutation({
 		const codeChanges = code !== locale.code;
 
 		if (codeChanges) {
+			await assertNoManagedLocaleHistory(
+				ctx,
+				locale._id,
+				locale.projectId,
+				locale.isSource,
+			);
 			const snapshot = await ctx.db
 				.query("sourceSnapshots")
 				.withIndex("by_project", (q) => q.eq("projectId", locale.projectId))
@@ -372,6 +403,12 @@ export const correctSetupBinding = mutation({
 				});
 			}
 
+			await assertNoManagedLocaleHistory(
+				ctx,
+				codeMatch._id,
+				locale.projectId,
+				codeMatch.isSource,
+			);
 			await ctx.db.delete(codeMatch._id);
 		} else if (pathConflict) {
 			throw new ConvexError({
@@ -410,6 +447,17 @@ export const archive = mutation({
 				code: "VALIDATION",
 				message: "Source locale cannot be archived.",
 			});
+		}
+		const managedMemberships = ctx.db
+			.query("contentCollectionLocales")
+			.withIndex("by_locale", (q) => q.eq("localeId", args.localeId));
+		for await (const membership of managedMemberships) {
+			if (membership.active)
+				throw new ConvexError({
+					code: "CONFLICT",
+					message:
+						"Remove this language from its managed collections before archiving it project-wide.",
+				});
 		}
 		await ctx.db.patch(args.localeId, { archivedAt: now() });
 		await advanceBindingRevision(ctx, locale.projectId);

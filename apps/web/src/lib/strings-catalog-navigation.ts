@@ -73,7 +73,7 @@ export type StringsNavigationDigest = {
 	introductionReviewPending: number;
 	source: {
 		localeId: string;
-		gitValueFingerprint: string;
+		gitValueFingerprint?: string;
 	};
 	targets: readonly {
 		localeId: string;

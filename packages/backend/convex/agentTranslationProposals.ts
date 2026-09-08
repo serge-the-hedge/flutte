@@ -31,6 +31,7 @@ import {
 import { applyAgentTargetValue } from "./catalogWorkspace";
 import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget as currentWorkspaceTarget } from "./catalogWorkspaceRead";
+import { type ManagedBasis, managedBasisValidator } from "./contentModel";
 import { assertTargetValueContract } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
 import {
@@ -40,6 +41,7 @@ import {
 	finalizeProposal,
 	type LocaleProposalCarryForwardResult,
 } from "./localeProposals";
+import { commitManagedTarget, readManagedTarget } from "./managedContent";
 import { requireEditor, requireViewer } from "./permissions";
 import { guidanceContextValidator, readGuidance } from "./translationGuidance";
 
@@ -70,6 +72,10 @@ async function latestCandidateReview(
 }
 
 const targetValidator = v.union(
+	v.object({
+		kind: v.literal("managedCollection"),
+		collectionId: v.id("contentCollections"),
+	}),
 	v.object({ kind: v.literal("catalogWorkspace") }),
 	v.object({
 		kind: v.literal("localeProposal"),
@@ -85,6 +91,7 @@ const candidateRevisionInputValidator = v.object({
 	clientRevisionKey: v.string(),
 	expectedCandidateRevision: v.number(),
 	basis: v.union(
+		managedBasisValidator,
 		v.object({
 			kind: v.literal("catalogWorkspace"),
 			projectionId: v.id("catalogProjections"),
@@ -121,15 +128,18 @@ export type TranslationTaskReviewDecision =
 	| { kind: "reject"; reason?: string }
 	| { kind: "intentionalBlank"; reason: string };
 
-const taskBasisValidator = v.object({
-	kind: v.literal("catalogWorkspace"),
-	projectionId: v.id("catalogProjections"),
-	snapshotId: v.id("sourceSnapshots"),
-	gitValueFingerprint: v.string(),
-	gitValueRevision: v.number(),
-	workspaceRevision: v.number(),
-	sourceFingerprint: v.string(),
-});
+const taskBasisValidator = v.union(
+	managedBasisValidator,
+	v.object({
+		kind: v.literal("catalogWorkspace"),
+		projectionId: v.id("catalogProjections"),
+		snapshotId: v.id("sourceSnapshots"),
+		gitValueFingerprint: v.string(),
+		gitValueRevision: v.number(),
+		workspaceRevision: v.number(),
+		sourceFingerprint: v.string(),
+	}),
+);
 
 const reviewSummaryValidator = v.object({
 	reviewId: v.id("agentTranslationCandidateReviews"),
@@ -188,6 +198,7 @@ async function taskCandidateFeedback(
 }
 
 const taskTargetValidator = v.object({
+	context: v.optional(v.string()),
 	messageId: v.string(),
 	sourceValue: v.string(),
 	targetValue: v.string(),
@@ -246,6 +257,7 @@ const localeProposalTaskScopeValidator = v.object({
 });
 
 type ProposalTarget =
+	| { kind: "managedCollection"; collectionId: Id<"contentCollections"> }
 	| { kind: "catalogWorkspace" }
 	| { kind: "localeProposal"; localeProposalId: Id<"localeProposals"> };
 
@@ -257,6 +269,7 @@ type CandidateRevisionInput = {
 	clientRevisionKey: string;
 	expectedCandidateRevision: number;
 	basis:
+		| ManagedBasis
 		| {
 				kind: "catalogWorkspace";
 				projectionId: Id<"catalogProjections">;
@@ -470,10 +483,84 @@ type TaskActor =
 	| { kind: "user"; id: string }
 	| { kind: "agent"; id: Id<"apiTokens"> };
 
+function managedSourceContext(source: {
+	sourceValue: string;
+	context?: string;
+}) {
+	return {
+		value: source.sourceValue,
+		context: source.context,
+		icuType: "plain" as const,
+		argumentNames: [],
+		argumentNamesComplete: true,
+		declaredPlaceholderNames: [],
+		declaredPlaceholderNamesComplete: true,
+	};
+}
+
+async function selectedTaskCurrent(
+	ctx: QueryCtx | MutationCtx,
+	proposal: { projectId: Id<"projects">; target: ProposalTarget },
+	messageId: string,
+	localeId: Id<"locales">,
+) {
+	if (proposal.target.kind === "managedCollection") {
+		const current = await readManagedTarget(ctx, {
+			projectId: proposal.projectId,
+			collectionId: proposal.target.collectionId,
+			messageId,
+			localeId,
+		});
+		const locale = current.locale;
+		return {
+			source: managedSourceContext(current.source),
+			value: current.value,
+			basis: current.basis,
+			localeCode: locale.code,
+			catalogPath: undefined,
+			catalogIndex: undefined,
+		};
+	}
+	const current = await currentWorkspaceTarget(
+		ctx,
+		proposal.projectId,
+		messageId,
+		localeId,
+	);
+	return {
+		source: current.source,
+		value: current.value,
+		basis: catalogWorkspaceTaskBasis(current),
+		localeCode: current.target.localeCode,
+		catalogPath: current.target.catalogPath,
+		catalogIndex: current.target.catalogIndex,
+	};
+}
+
+function sameSelectedBasis(
+	left: CandidateRevisionInput["basis"],
+	right: CandidateRevisionInput["basis"],
+) {
+	if (left.kind === "managed" && right.kind === "managed")
+		return (
+			left.collectionId === right.collectionId &&
+			left.sourceRevision === right.sourceRevision &&
+			left.targetRevision === right.targetRevision &&
+			left.sourceFingerprint === right.sourceFingerprint &&
+			left.membershipRevision === right.membershipRevision
+		);
+	return (
+		left.kind === "catalogWorkspace" &&
+		right.kind === "catalogWorkspace" &&
+		sameCatalogWorkspaceTaskBasis(left, right)
+	);
+}
+
 async function createCatalogWorkspaceTask(
 	ctx: MutationCtx,
 	input: {
 		projectId: Id<"projects">;
+		collectionId?: Id<"contentCollections">;
 		title: string;
 		localeId: Id<"locales">;
 		messageIds: readonly string[];
@@ -511,36 +598,36 @@ async function createCatalogWorkspaceTask(
 	}
 
 	const targets = [];
+	let managedReadBytes = 0;
 	for (const messageId of uniqueMessageIds) {
-		const current = await currentWorkspaceTarget(
+		const target = input.collectionId
+			? { kind: "managedCollection" as const, collectionId: input.collectionId }
+			: { kind: "catalogWorkspace" as const };
+		const current = await selectedTaskCurrent(
 			ctx,
-			input.projectId,
+			{ projectId: input.projectId, target },
 			messageId,
 			input.localeId,
 		);
-		if (!current.projection.snapshotId) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "The active Catalog Workspace is missing Snapshot identity.",
-			});
+		if (input.collectionId) {
+			managedReadBytes += byteLength(current);
+			if (managedReadBytes > 4 * 1024 * 1024)
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message:
+						"Selected content exceeds one task creation read budget; select fewer keys.",
+				});
 		}
 		targets.push({
-			catalogIndex: current.target.catalogIndex,
+			catalogIndex: current.catalogIndex ?? targets.length,
 			messageId,
-			localeId: current.target.localeId,
-			localeCode: current.target.localeCode,
-			sourceValue: current.source.value,
-			targetValue: current.value,
-			targetCatalogPath: current.target.catalogPath,
-			basis: {
-				kind: "catalogWorkspace" as const,
-				projectionId: current.projection._id,
-				snapshotId: current.projection.snapshotId,
-				gitValueFingerprint: current.target.gitValueFingerprint as string,
-				gitValueRevision: current.target.gitValueRevision ?? 0,
-				workspaceRevision: current.workspaceRevision,
-				sourceFingerprint: current.source.sourceFingerprint,
-			},
+			localeId: locale._id,
+			localeCode: locale.code,
+			// Managed targets retain revision identities; page reads resolve live text.
+			sourceValue: input.collectionId ? undefined : current.source.value,
+			targetValue: input.collectionId ? undefined : current.value,
+			targetCatalogPath: current.catalogPath,
+			basis: current.basis,
 		});
 	}
 	targets.sort(
@@ -557,7 +644,9 @@ async function createCatalogWorkspaceTask(
 			: { createdByTokenId: input.createdByTokenId }),
 		createdBy: input.actor,
 		clientProposalKey: input.title.trim(),
-		target: { kind: "catalogWorkspace" },
+		target: input.collectionId
+			? { kind: "managedCollection", collectionId: input.collectionId }
+			: { kind: "catalogWorkspace" },
 		taskScope: {
 			localeId: locale._id,
 			localeCode: locale.code,
@@ -707,6 +796,11 @@ export const createTask = mutation({
 		title: v.string(),
 		target: v.union(
 			v.object({
+				kind: v.literal("managedLocale"),
+				collectionId: v.id("contentCollections"),
+				localeId: v.id("locales"),
+			}),
+			v.object({
 				kind: v.literal("existingLocale"),
 				localeId: v.id("locales"),
 			}),
@@ -728,7 +822,10 @@ export const createTask = mutation({
 	}),
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		if (args.target.kind === "existingLocale") {
+		if (
+			args.target.kind === "existingLocale" ||
+			args.target.kind === "managedLocale"
+		) {
 			if (args.scope.kind !== "selectedMessages") {
 				throw new ConvexError({
 					code: "VALIDATION",
@@ -739,6 +836,10 @@ export const createTask = mutation({
 				projectId: args.projectId,
 				title: args.title,
 				localeId: args.target.localeId,
+				collectionId:
+					args.target.kind === "managedLocale"
+						? args.target.collectionId
+						: undefined,
 				messageIds: args.scope.messageIds,
 				actor: { kind: "user", id: userId },
 			});
@@ -877,6 +978,7 @@ export const createTaskForAgent = internalMutation({
 	args: {
 		token: v.string(),
 		clientTaskKey: v.string(),
+		collectionId: v.optional(v.id("contentCollections")),
 		localeCode: v.string(),
 		messageIds: v.array(v.string()),
 	},
@@ -926,6 +1028,10 @@ export const createTaskForAgent = internalMutation({
 			const expected = [...new Set(args.messageIds)].sort();
 			const actual = targets.map((target) => target.messageId).sort();
 			if (
+				(args.collectionId
+					? existing.target.kind !== "managedCollection" ||
+						existing.target.collectionId !== args.collectionId
+					: existing.target.kind !== "catalogWorkspace") ||
 				!existing.taskScope ||
 				existing.taskScope.localeId !== locale._id ||
 				JSON.stringify(actual) !== JSON.stringify(expected)
@@ -946,6 +1052,7 @@ export const createTaskForAgent = internalMutation({
 		return await createCatalogWorkspaceTask(ctx, {
 			projectId: token.projectId,
 			title: args.clientTaskKey,
+			collectionId: args.collectionId,
 			localeId: locale._id,
 			messageIds: args.messageIds,
 			actor: { kind: "agent", id: token._id },
@@ -966,6 +1073,8 @@ export const taskForAgent = internalQuery({
 	},
 	returns: v.object({
 		task: v.object({
+			collectionId: v.optional(v.id("contentCollections")),
+			format: v.optional(v.literal("plain")),
 			taskId: v.id("agentTranslationProposals"),
 			title: v.string(),
 			status: v.union(
@@ -984,7 +1093,7 @@ export const taskForAgent = internalQuery({
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
 		const proposal = await proposalForToken(ctx, args.taskId, token._id);
-		if (!proposal.taskScope || proposal.target.kind !== "catalogWorkspace") {
+		if (!proposal.taskScope || proposal.target.kind === "localeProposal") {
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: "Translation Task not found.",
@@ -1004,12 +1113,7 @@ export const taskForAgent = internalQuery({
 		let targetBytes = 0;
 		for (const target of targets) {
 			const [current, candidate] = await Promise.all([
-				currentWorkspaceTarget(
-					ctx,
-					proposal.projectId,
-					target.messageId,
-					target.localeId,
-				),
+				selectedTaskCurrent(ctx, proposal, target.messageId, target.localeId),
 				ctx.db
 					.query("agentTranslationCandidates")
 					.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
@@ -1023,6 +1127,8 @@ export const taskForAgent = internalQuery({
 			const liveTarget = {
 				messageId: target.messageId,
 				sourceValue: current.source.value,
+				context:
+					"context" in current.source ? current.source.context : undefined,
 				targetValue: current.value,
 				candidate: await taskCandidateFeedback(ctx, candidate),
 			};
@@ -1041,6 +1147,14 @@ export const taskForAgent = internalQuery({
 		}
 		return {
 			task: {
+				collectionId:
+					proposal.target.kind === "managedCollection"
+						? proposal.target.collectionId
+						: undefined,
+				format:
+					proposal.target.kind === "managedCollection"
+						? ("plain" as const)
+						: undefined,
 				taskId: proposal._id,
 				title: proposal.clientProposalKey,
 				status: proposal.status,
@@ -1050,6 +1164,7 @@ export const taskForAgent = internalQuery({
 			},
 			targets: liveTargets,
 			guidance: await readGuidance(ctx, token.projectId, {
+				syntax: proposal.target.kind === "managedCollection" ? "plain" : "icu",
 				texts: liveTargets.map((target) => target.sourceValue),
 				localeCodes: [proposal.taskScope.localeCode],
 			}),
@@ -1068,7 +1183,8 @@ export const taskDescriptorForAgent = internalQuery({
 	},
 	returns: v.union(
 		v.object({
-			kind: v.literal("existingLocale"),
+			kind: v.union(v.literal("existingLocale"), v.literal("managedLocale")),
+			collectionId: v.optional(v.id("contentCollections")),
 			taskId: v.id("agentTranslationProposals"),
 			title: v.string(),
 			status: v.union(
@@ -1098,9 +1214,16 @@ export const taskDescriptorForAgent = internalQuery({
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
 		const proposal = await proposalForToken(ctx, args.taskId, token._id);
-		if (proposal.taskScope && proposal.target.kind === "catalogWorkspace") {
+		if (proposal.taskScope && proposal.target.kind !== "localeProposal") {
 			return {
-				kind: "existingLocale" as const,
+				kind:
+					proposal.target.kind === "managedCollection"
+						? ("managedLocale" as const)
+						: ("existingLocale" as const),
+				collectionId:
+					proposal.target.kind === "managedCollection"
+						? proposal.target.collectionId
+						: undefined,
 				taskId: proposal._id,
 				title: proposal.clientProposalKey,
 				status: proposal.status,
@@ -1160,7 +1283,12 @@ export const listTasksForAgent = internalQuery({
 	},
 	returns: v.array(
 		v.object({
-			kind: v.union(v.literal("existingLocale"), v.literal("newLocale")),
+			kind: v.union(
+				v.literal("existingLocale"),
+				v.literal("newLocale"),
+				v.literal("managedLocale"),
+			),
+			collectionId: v.optional(v.id("contentCollections")),
 			taskId: v.id("agentTranslationProposals"),
 			title: v.string(),
 			status: v.union(
@@ -1189,7 +1317,14 @@ export const listTasksForAgent = internalQuery({
 			.map((task) => {
 				if (task.taskScope) {
 					return {
-						kind: "existingLocale" as const,
+						kind:
+							task.target.kind === "managedCollection"
+								? ("managedLocale" as const)
+								: ("existingLocale" as const),
+						collectionId:
+							task.target.kind === "managedCollection"
+								? task.target.collectionId
+								: undefined,
 						taskId: task._id,
 						title: task.clientProposalKey,
 						status: task.status,
@@ -1258,7 +1393,7 @@ export const taskSubmissionContext = internalQuery({
 		const proposal = await proposalForToken(ctx, args.taskId, token._id);
 		if (
 			!proposal.taskScope ||
-			proposal.target.kind !== "catalogWorkspace" ||
+			proposal.target.kind === "localeProposal" ||
 			proposal.status !== "open"
 		) {
 			throw new ConvexError({
@@ -1290,13 +1425,13 @@ export const taskSubmissionContext = internalQuery({
 					message: `“${messageId}” is outside this Translation Task.`,
 				});
 			}
-			const current = await currentWorkspaceTarget(
+			const current = await selectedTaskCurrent(
 				ctx,
-				proposal.projectId,
+				proposal,
 				target.messageId,
 				target.localeId,
 			);
-			const basis = catalogWorkspaceTaskBasis(current);
+			const basis = current.basis;
 			const candidate = await ctx.db
 				.query("agentTranslationCandidates")
 				.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
@@ -1317,7 +1452,7 @@ export const taskSubmissionContext = internalQuery({
 			}
 			if (
 				currentCandidate &&
-				currentCandidate.basis.kind !== "catalogWorkspace"
+				currentCandidate.basis.kind === "localeProposal"
 			) {
 				throw new ConvexError({
 					code: "INTEGRITY",
@@ -1325,7 +1460,7 @@ export const taskSubmissionContext = internalQuery({
 				});
 			}
 			const currentCandidateBasis =
-				currentCandidate?.basis.kind === "catalogWorkspace"
+				currentCandidate && currentCandidate.basis.kind !== "localeProposal"
 					? currentCandidate.basis
 					: null;
 			result.push({
@@ -1341,10 +1476,7 @@ export const taskSubmissionContext = internalQuery({
 								revision: currentCandidate.revision,
 								value: currentCandidate.value,
 								intentionalBlankReason: currentCandidate.intentionalBlankReason,
-								basisIsCurrent: sameCatalogWorkspaceTaskBasis(
-									currentCandidateBasis,
-									basis,
-								),
+								basisIsCurrent: sameSelectedBasis(currentCandidateBasis, basis),
 							}
 						: null,
 			});
@@ -1580,6 +1712,12 @@ export const create = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
+		if (args.target.kind === "managedCollection")
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Managed content requires a Translation Task with selected messages.",
+			});
 		assertBoundedString(
 			args.clientProposalKey,
 			"clientProposalKey",
@@ -1791,7 +1929,7 @@ export const submitRevisions = internalMutation({
 				if (
 					!taskTarget ||
 					item.localeId !== taskTarget.localeId ||
-					item.basis.kind !== "catalogWorkspace"
+					item.basis.kind !== taskTarget.basis.kind
 				) {
 					throw new ConvexError({
 						code: "VALIDATION",
@@ -1801,10 +1939,13 @@ export const submitRevisions = internalMutation({
 				}
 			}
 			let candidate: Doc<"agentTranslationCandidates"> | null = null;
-			if (proposal.target.kind === "catalogWorkspace") {
+			if (proposal.target.kind !== "localeProposal") {
 				if (
 					item.localeId === undefined ||
-					item.basis.kind !== "catalogWorkspace"
+					(proposal.target.kind === "managedCollection"
+						? item.basis.kind !== "managed" ||
+							item.basis.collectionId !== proposal.target.collectionId
+						: item.basis.kind !== "catalogWorkspace")
 				) {
 					throw new ConvexError({
 						code: "VALIDATION",
@@ -1874,7 +2015,24 @@ export const submitRevisions = internalMutation({
 				});
 				continue;
 			}
-			if (proposal.target.kind === "catalogWorkspace") {
+			if (proposal.target.kind === "managedCollection") {
+				if (!item.localeId)
+					throw new ConvexError({
+						code: "VALIDATION",
+						message: "Managed candidates need a Locale.",
+					});
+				const current = await selectedTaskCurrent(
+					ctx,
+					proposal,
+					item.messageId,
+					item.localeId,
+				);
+				if (!sameSelectedBasis(item.basis, current.basis))
+					throw new ConvexError({
+						code: "STALE_BASIS",
+						message: "Managed content changed; refresh before proposing.",
+					});
+			} else if (proposal.target.kind === "catalogWorkspace") {
 				const current = await currentWorkspaceTarget(
 					ctx,
 					proposal.projectId,
@@ -2094,11 +2252,111 @@ export const listForReview = query({
 });
 
 export const getForReview = query({
-	args: { proposalId: v.id("agentTranslationProposals") },
+	args: {
+		proposalId: v.id("agentTranslationProposals"),
+		cursor: v.optional(v.number()),
+		limit: v.optional(v.number()),
+	},
 	handler: async (ctx, args) => {
 		const proposal = await ctx.db.get(args.proposalId);
 		if (!proposal) return null;
 		await requireViewer(ctx, proposal.projectId);
+		if (proposal.taskScope) {
+			const limit = args.limit ?? MAX_TASK_TARGETS;
+			let cursor = args.cursor ?? 0;
+			assertNonNegativeInteger(cursor, "cursor");
+			if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_TASK_TARGETS)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Review page limit must be between 1 and 32.",
+				});
+			const taskTargets: Doc<"translationTaskTargets">[] = [];
+			const candidates: {
+				candidate: Doc<"agentTranslationCandidates">;
+				revision: Doc<"agentTranslationCandidateRevisions"> | null;
+				reviews: Doc<"agentTranslationCandidateReviews">[];
+			}[] = [];
+			let bytes = byteLength(proposal);
+			let count = 0;
+			let nextCursor: number | null = null;
+			while (true) {
+				const target = await ctx.db
+					.query("translationTaskTargets")
+					.withIndex("by_proposal_and_catalogIndex", (q) =>
+						q.eq("proposalId", proposal._id).gte("catalogIndex", cursor),
+					)
+					.first();
+				if (!target) break;
+				if (count >= limit) {
+					nextCursor = target.catalogIndex;
+					break;
+				}
+				const candidate = await ctx.db
+					.query("agentTranslationCandidates")
+					.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
+						q
+							.eq("proposalId", proposal._id)
+							.eq("messageId", target.messageId)
+							.eq("localeId", target.localeId),
+					)
+					.unique();
+				const revision = candidate?.latestRevisionId
+					? await ctx.db.get(candidate.latestRevisionId)
+					: null;
+				const review = revision
+					? await latestCandidateReview(ctx, revision._id)
+					: null;
+				const entry = candidate
+					? {
+							candidate,
+							revision,
+							reviews: review
+								? [
+										{
+											...review,
+											finalValue:
+												review.finalValue === revision?.value
+													? undefined
+													: review.finalValue,
+										},
+									]
+								: [],
+						}
+					: null;
+				const current = entry
+					? null
+					: await selectedTaskCurrent(
+							ctx,
+							proposal,
+							target.messageId,
+							target.localeId,
+						);
+				const waiting = current
+					? {
+							...target,
+							sourceValue: current.source.value,
+							targetValue: current.value,
+							basis: current.basis,
+						}
+					: { ...target, sourceValue: undefined, targetValue: undefined };
+				const entryBytes = byteLength({ entry, waiting });
+				if (entryBytes > 900 * 1024)
+					throw new ConvexError({
+						code: "LIMIT_EXCEEDED",
+						message: "One task review value exceeds its page envelope.",
+					});
+				if (count > 0 && bytes + entryBytes > 900 * 1024) {
+					nextCursor = target.catalogIndex;
+					break;
+				}
+				if (entry) candidates.push(entry);
+				if (waiting) taskTargets.push(waiting);
+				bytes += entryBytes;
+				count += 1;
+				cursor = target.catalogIndex + 1;
+			}
+			return { proposal, taskTargets, candidates, nextCursor };
+		}
 		// Complete new-Locale tasks have their own 16-row review page. Avoid
 		// subscribing this routing query to the entire catalog-sized candidate set.
 		const candidates = proposal.localeProposalTaskScope
@@ -2128,44 +2386,7 @@ export const getForReview = query({
 				return { candidate, revision, reviews };
 			}),
 		);
-		const storedTaskTargets = proposal.taskScope
-			? await ctx.db
-					.query("translationTaskTargets")
-					.withIndex("by_proposal_and_catalogIndex", (q) =>
-						q.eq("proposalId", proposal._id),
-					)
-					.take(MAX_TASK_TARGETS + 1)
-			: [];
-		if (storedTaskTargets.length > MAX_TASK_TARGETS) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Translation Task exceeds its target envelope.",
-			});
-		}
-		const candidateMessageIds = new Set(
-			candidates.map((candidate) => candidate.messageId),
-		);
-		const taskTargets = await Promise.all(
-			storedTaskTargets.map(async (target) => {
-				// Candidate cards have their own compact live-context subscription.
-				// Hydrate only still-waiting rows here so one accepted value does not
-				// make this task-level query reread every selected Catalog key.
-				if (candidateMessageIds.has(target.messageId)) return target;
-				const current = await currentWorkspaceTarget(
-					ctx,
-					proposal.projectId,
-					target.messageId,
-					target.localeId,
-				);
-				return {
-					...target,
-					sourceValue: current.source.value,
-					targetValue: current.value,
-					basis: catalogWorkspaceTaskBasis(current),
-				};
-			}),
-		);
-		return { proposal, taskTargets, candidates: entries };
+		return { proposal, taskTargets: [], candidates: entries, nextCursor: null };
 	},
 });
 
@@ -2183,6 +2404,43 @@ export const contextForReview = query({
 		await requireViewer(ctx, proposal.projectId);
 
 		try {
+			if (proposal.target.kind === "managedCollection") {
+				if (!revision.localeId || revision.basis.kind !== "managed")
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "Managed candidate evidence is incomplete.",
+					});
+				const current = await selectedTaskCurrent(
+					ctx,
+					proposal,
+					revision.messageId,
+					revision.localeId,
+				);
+				const review = await latestCandidateReview(ctx, revision._id);
+				return {
+					kind: "managedCollection" as const,
+					available: true as const,
+					localeCode: current.localeCode,
+					source: {
+						value: current.source.value,
+						context:
+							"context" in current.source ? current.source.context : undefined,
+						icuType: current.source.icuType,
+						argumentNames: current.source.argumentNames,
+						argumentNamesComplete: current.source.argumentNamesComplete,
+						declaredPlaceholderNames:
+							current.source.declaredPlaceholderNames ?? [],
+						declaredPlaceholderNamesComplete:
+							current.source.declaredPlaceholderNamesComplete ?? true,
+					},
+					target: { value: current.value, catalogPath: undefined },
+					basisIsCurrent: sameSelectedBasis(revision.basis, current.basis),
+					reviewBasisIsCurrent: review?.appliedBasis
+						? sameSelectedBasis(review.appliedBasis, current.basis)
+						: null,
+				};
+			}
+
 			if (proposal.target.kind === "catalogWorkspace") {
 				if (
 					revision.localeId === undefined ||
@@ -2372,7 +2630,7 @@ export const acceptTaskCandidates = mutation({
 		const proposal = await ctx.db.get(args.proposalId);
 		const isExistingLocaleTask =
 			proposal?.taskScope !== undefined &&
-			proposal.target.kind === "catalogWorkspace";
+			proposal.target.kind !== "localeProposal";
 		const isNewLocaleTask =
 			proposal?.localeProposalTaskScope !== undefined &&
 			proposal.target.kind === "localeProposal" &&
@@ -2411,7 +2669,10 @@ export const acceptTaskCandidates = mutation({
 			if (
 				(isExistingLocaleTask &&
 					(revision.localeId === undefined ||
-						revision.basis.kind !== "catalogWorkspace")) ||
+						revision.basis.kind !==
+							(proposal.target.kind === "managedCollection"
+								? "managed"
+								: "catalogWorkspace"))) ||
 				(isNewLocaleTask &&
 					(revision.localeProposalId !== localeProposalId ||
 						revision.basis.kind !== "localeProposal"))
@@ -2437,6 +2698,15 @@ export const acceptTaskCandidates = mutation({
 							"A task candidate already has a different review decision.",
 					});
 				}
+				continue;
+			}
+			if (proposal.target.kind === "managedCollection") {
+				await applyCandidateReview(
+					ctx,
+					{ candidateRevisionId, decision: { kind: "accept" } },
+					{ actor: { kind: "user", id: userId } },
+				);
+				accepted += 1;
 				continue;
 			}
 			const valueFingerprint = await sha256Hex(revision.value);
@@ -2563,6 +2833,55 @@ async function applyCandidateReview(
 	let appliedBasis: CandidateRevisionInput["basis"] | undefined;
 	if (args.decision.kind === "reject") {
 		// Rejection is deliberately evidence-only.
+	} else if (proposal.target.kind === "managedCollection") {
+		if (
+			!revision.localeId ||
+			revision.basis.kind !== "managed" ||
+			revision.basis.collectionId !== proposal.target.collectionId
+		)
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Managed candidate evidence is incomplete.",
+			});
+		const basis =
+			args.decision.kind === "keepForCurrentSource"
+				? (
+						await readManagedTarget(ctx, {
+							projectId: proposal.projectId,
+							collectionId: proposal.target.collectionId,
+							messageId: revision.messageId,
+							localeId: revision.localeId,
+						})
+					).basis
+				: revision.basis;
+		const reason =
+			args.decision.kind === "intentionalBlank"
+				? args.decision.reason
+				: args.decision.kind === "accept"
+					? revision.intentionalBlankReason
+					: undefined;
+		finalValue =
+			reason !== undefined
+				? ""
+				: args.decision.kind === "acceptWithEdits"
+					? args.decision.value
+					: revision.value;
+		const applied = await commitManagedTarget(ctx, {
+			projectId: proposal.projectId,
+			collectionId: proposal.target.collectionId,
+			messageId: revision.messageId,
+			localeId: revision.localeId,
+			basis,
+			intent:
+				reason !== undefined
+					? { kind: "intentionalBlank", reason }
+					: { kind: "save", value: finalValue },
+			actor,
+			reviewAuthorization: reviewer.reviewAuthorization,
+		});
+		finalValueFingerprint = await sha256Hex(finalValue);
+		workspaceRevision = applied.workspaceRevision;
+		appliedBasis = applied.basis;
 	} else if (proposal.target.kind === "catalogWorkspace") {
 		if (
 			revision.localeId === undefined ||
@@ -2721,12 +3040,15 @@ export const revokeCandidateReviewGrant = mutation({
 
 const agentReviewContextValidator = v.object({
 	kind: v.literal("candidate"),
+	collectionId: v.optional(v.id("contentCollections")),
+	format: v.optional(v.literal("plain")),
 	proposalId: v.id("agentTranslationProposals"),
 	candidateRevisionId: v.id("agentTranslationCandidateRevisions"),
 	messageId: v.string(),
 	localeCode: v.string(),
 	source: v.object({
 		value: v.string(),
+		context: v.optional(v.string()),
 		icuType: v.union(v.literal("plain"), v.literal("icu")),
 		argumentNames: v.array(v.string()),
 		argumentNamesComplete: v.boolean(),
@@ -2735,7 +3057,7 @@ const agentReviewContextValidator = v.object({
 	}),
 	target: v.object({
 		value: v.string(),
-		catalogPath: v.string(),
+		catalogPath: v.optional(v.string()),
 		intentionalBlankReason: v.optional(v.string()),
 	}),
 	candidate: v.object({
@@ -2798,6 +3120,14 @@ async function contextForAgentReviewer(
 	const review = await latestCandidateReview(ctx, revision._id);
 	const common = {
 		kind: "candidate" as const,
+		collectionId:
+			proposal.target.kind === "managedCollection"
+				? proposal.target.collectionId
+				: undefined,
+		format:
+			proposal.target.kind === "managedCollection"
+				? ("plain" as const)
+				: undefined,
 		proposalId: proposal._id,
 		candidateRevisionId: revision._id,
 		messageId: revision.messageId,
@@ -2815,7 +3145,31 @@ async function contextForAgentReviewer(
 		"reviewToken" | "guidance"
 	>;
 	let mutableBasis: unknown;
-	if (proposal.target.kind === "catalogWorkspace") {
+	if (proposal.target.kind === "managedCollection") {
+		if (!revision.localeId || revision.basis.kind !== "managed")
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Managed candidate evidence is incomplete.",
+			});
+		const current = await readManagedTarget(ctx, {
+			projectId: proposal.projectId,
+			collectionId: proposal.target.collectionId,
+			messageId: revision.messageId,
+			localeId: revision.localeId,
+		});
+		const locale = current.locale;
+		context = {
+			...common,
+			localeCode: locale.code,
+			source: managedSourceContext(current.source),
+			target: {
+				value: current.value,
+				intentionalBlankReason: current.intentionalBlank ?? undefined,
+			},
+			basisIsCurrent: sameSelectedBasis(revision.basis, current.basis),
+		};
+		mutableBasis = current.basis;
+	} else if (proposal.target.kind === "catalogWorkspace") {
 		if (!revision.localeId || revision.basis.kind !== "catalogWorkspace")
 			throw new ConvexError({
 				code: "INTEGRITY",
@@ -2903,6 +3257,7 @@ async function contextForAgentReviewer(
 	const reviewContext = {
 		...context,
 		guidance: await readGuidance(ctx, proposal.projectId, {
+			syntax: proposal.target.kind === "managedCollection" ? "plain" : "icu",
 			texts: [context.source.value],
 			localeCodes: [context.localeCode],
 		}),
@@ -3037,7 +3392,7 @@ export const saveTaskValue = mutation({
 		const localeId = proposal.taskScope?.localeId;
 		const localeProposalId = proposal.localeProposalTaskScope?.localeProposalId;
 		const isExistingLocaleTask =
-			proposal.target.kind === "catalogWorkspace" && localeId !== undefined;
+			proposal.target.kind !== "localeProposal" && localeId !== undefined;
 		const isNewLocaleTask =
 			proposal.target.kind === "localeProposal" &&
 			localeProposalId !== undefined &&
@@ -3109,7 +3464,46 @@ export const saveTaskValue = mutation({
 		const actor = { kind: "user" as const, id: userId };
 		let decision: TranslationTaskReviewDecision;
 		let appliedBasis: CandidateRevisionInput["basis"];
-		if (isExistingLocaleTask) {
+		if (proposal.target.kind === "managedCollection") {
+			if (!localeId || revision.basis.kind !== "managed")
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Managed task candidate evidence is incomplete.",
+				});
+			const current = await readManagedTarget(ctx, {
+				projectId: proposal.projectId,
+				collectionId: proposal.target.collectionId,
+				messageId: revision.messageId,
+				localeId,
+			});
+			const latestReview = await latestCandidateReview(ctx, revision._id);
+			if (
+				latestReview?.finalValue === args.value &&
+				latestReview.appliedBasis &&
+				sameSelectedBasis(latestReview.appliedBasis, current.basis)
+			)
+				return {
+					taskId: proposal._id,
+					messageId: args.messageId,
+					decision: latestReview.decision,
+				};
+			decision =
+				args.value !== revision.value
+					? { kind: "acceptWithEdits", value: args.value }
+					: sameSelectedBasis(revision.basis, current.basis)
+						? { kind: "accept" }
+						: { kind: "keepForCurrentSource" };
+			const applied = await commitManagedTarget(ctx, {
+				projectId: proposal.projectId,
+				collectionId: proposal.target.collectionId,
+				messageId: revision.messageId,
+				localeId,
+				basis: current.basis,
+				intent: { kind: "save", value: args.value },
+				actor,
+			});
+			appliedBasis = applied.basis;
+		} else if (isExistingLocaleTask) {
 			if (
 				revision.localeId !== localeId ||
 				revision.basis.kind !== "catalogWorkspace"
@@ -3267,7 +3661,7 @@ export const reviewTaskValue = mutation({
 		await requireEditor(ctx, proposal.projectId);
 		const isTask =
 			(proposal.taskScope !== undefined &&
-				proposal.target.kind === "catalogWorkspace") ||
+				proposal.target.kind !== "localeProposal") ||
 			(proposal.localeProposalTaskScope !== undefined &&
 				proposal.target.kind === "localeProposal" &&
 				proposal.localeProposalTaskScope.localeProposalId ===
@@ -3362,7 +3756,7 @@ export const taskFinalizationContext = internalQuery({
 			});
 		}
 		await requireEditor(ctx, proposal.projectId);
-		if (proposal.taskScope && proposal.target.kind === "catalogWorkspace") {
+		if (proposal.taskScope && proposal.target.kind !== "localeProposal") {
 			if (proposal.status === "open") {
 				throw new ConvexError({
 					code: "REVIEW_REQUIRED",

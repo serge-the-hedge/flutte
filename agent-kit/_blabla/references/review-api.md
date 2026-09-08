@@ -8,7 +8,9 @@ Requires a separate reviewer credential and current human authorization under
 [review policy](https://github.com/serge-the-hedge/flutte/blob/main/docs/agent-review.md).
 
 `kind: "candidate"` returns Source, current target, candidate, blank reasons,
-basis status, authorization, guidance, and an opaque `reviewToken`.
+basis status, authorization, guidance, and an opaque `reviewToken`. Managed
+context includes `collectionId` and `format: "plain"` for independent
+[collection evidence](collection-api.md) retrieval.
 `kind: "recordedReview"` instead returns `latestReview` (decision, reviewer,
 authorization, timestamp, final fingerprint when available), without a token.
 With current access, recorded results remain readable after supersession,
