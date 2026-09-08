@@ -27,41 +27,26 @@ Disable the project setting to stop future reviews authorized by that setting.
 Revoke a per-revision delegation to stop that delegation; it does not override
 an enabled project setting. Revoke the reviewer token to stop all of its future
 access. These decisions belong to the project: changing the granting human's
-role does not revoke them; use the explicit controls above. Completed reviews retain their historical authority and continue to
-count as evidence after permission is withdrawn.
+role does not revoke them; use the explicit controls above. Completed reviews retain their
+historical authority and continue to count as evidence after permission is withdrawn.
 
 ## Review contract
 
-The human supplies the reviewer with the exact candidate revision's review URL.
-The [Agent API](agent-api.md) returns bounded Source, current target, and candidate
-context, together with an opaque review token. The reviewer must inspect that
-context and submit its decision with the token it received. The same credential
-can search the Catalog Workspace and read related message context to assess
-terminology and established wording. Search access does not extend review
-authorization to other candidates. The general project Voice Guide, applicable
-Locale add-ons, and Dictionary terms are included once in review context and
-bound into its review token; their text
-indexes refer to the single Source value. Immutable guidance citations remain
-readable after later edits or removal. For new-Locale consistency, use
-`POST /proposal-examples/search` with the authorized revision as its review scope
-to read reviewed draft examples without accessing the translating credential.
-Existing reviewer credentials created without
-`search` need a replacement token to use search; token scopes are immutable.
-Once reviewed, the same URL returns a recorded result instead of editable
-context. This recovers a
-lost response even after a later revision or finalization, while current access
-is still checked.
+Give the separate reviewer the exact candidate revision's review URL and the
+[review skill](../agent-kit/blabla-review/SKILL.md). Its procedure covers evidence,
+decisions, stale context, and lost responses; the [API contract](../agent-kit/_blabla/references/review-api.md#independent-review-endpoints)
+defines request and response fields. Search access does not extend review
+authorization to other candidates. Existing reviewer tokens without `search`
+need replacement to use example lookup; token scopes are immutable.
 
 Agent acceptance applies the exact candidate bytes, including an existing
 Intentional Blank reason. It cannot edit the candidate, keep it against a newer
 Source Contract, finalize a Locale Proposal, build a Release Bundle, or deliver
 to Git. Corrections require a new translation revision and a new review.
 
-The server checks the candidate revision, Source and target basis, latest review,
-reviewer identity, and current permission again in the write transaction. A
-changed catalog value, staged new-Locale value, Source, candidate, guidance, or authority
-invalidates the read token. The reviewer must read and assess the new context;
-it must not blindly retry an earlier verdict against new facts.
+The server rechecks revision, Source and target basis, latest review, reviewer
+identity, guidance, and current permission in the write transaction. A change
+invalidates the review token.
 
 ## Evidence
 

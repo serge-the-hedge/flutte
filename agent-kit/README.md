@@ -27,7 +27,10 @@ bundle needs no Blabla checkout, package installation, or network dependency to
 run its helper. Installation makes no API calls.
 
 Use the same command with `--replace` to deliberately update these bundle
-folders; back up local edits first. Other skills are untouched. Pick a reviewed
+folders; back up local edits first. Other skills are untouched. Rerunning after an
+interrupted update recovers the prior bundle (or keeps a completed update) before
+applying normal overwrite checks. If recovery evidence is invalid, the installer
+stops and preserves it for inspection. Pick a reviewed
 commit/tag of this repository when distributing a pinned version. Reload your
 agent's skill catalog using its normal mechanism after installation.
 
@@ -40,7 +43,6 @@ does not grant permission to review.
 
 Start with assignments such as “Find our established German wording for this
 message,” “Translate task …,” or “Review candidate revision … independently.”
-The four skill descriptions allow ordinary discovery without a dispatcher skill.
 
 Live project Voice Guides, optional Locale add-ons, and Dictionary terms are
 retrieved from Blabla. They are not copied into this bundle. Repository delivery
