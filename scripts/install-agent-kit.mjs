@@ -10,6 +10,7 @@ import {
 	realpath,
 	rename,
 	rm,
+	rmdir,
 	writeFile,
 } from "node:fs/promises";
 import {
@@ -170,7 +171,14 @@ async function recover(target, stage) {
 			}
 		}
 	}
-	await rm(stage, { recursive: true, force: true });
+	// Keep the recovery journal until every other staged item is gone. If cleanup
+	// stops midway, the same rollback/committed recovery can run again safely.
+	for (const name of await readdir(stage)) {
+		if (name !== "journal.json")
+			await rm(join(stage, name), { recursive: true, force: true });
+	}
+	await rm(join(stage, "journal.json"));
+	await rmdir(stage);
 }
 
 /** Refuse active owners and ambiguous lock files rather than racing their writes.

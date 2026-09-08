@@ -299,3 +299,80 @@ syncBuiltinESMExports();
 		await rm(temporary, { recursive: true, force: true });
 	}
 });
+
+test("interrupted rollback and committed cleanup retain recoverable evidence", async () => {
+	const temporary = await mkdtemp(join(tmpdir(), "blabla-cleanup-"));
+	try {
+		const preload = join(temporary, "kill-cleanup.cjs");
+		await writeFile(
+			preload,
+			`
+const fs = require('node:fs');
+const path = require('node:path');
+const { syncBuiltinESMExports } = require('node:module');
+const original = fs.promises.rm;
+fs.promises.rm = async function(location, options) {
+  if (path.basename(location).startsWith('.blabla-install-')) {
+    // Reproduce a permitted recursive deletion order: journal first.
+    await original(path.join(location, 'journal.json'), { force: true });
+    process.kill(process.pid, 'SIGKILL');
+  }
+  const result = await original.call(this, location, options);
+  if (path.basename(path.dirname(location)).startsWith('.blabla-install-'))
+    process.kill(process.pid, 'SIGKILL');
+  return result;
+};
+syncBuiltinESMExports();
+`,
+		);
+		for (const state of ["ready", "committed"]) {
+			const target = join(temporary, state);
+			assert.equal(install(target).status, 0);
+			const stage = join(target, ".blabla-install-fixture");
+			await mkdir(stage);
+			const bundle = [
+				"blabla-context",
+				"blabla-translate",
+				"blabla-review",
+				"blabla-dictionary",
+				"_blabla",
+			];
+			await writeFile(
+				join(stage, "journal.json"),
+				JSON.stringify({ version: 1, state, previous: bundle }),
+			);
+			for (const entry of bundle) {
+				await writeFile(join(target, entry, "version"), "new");
+				await mkdir(join(stage, `${entry}.previous`));
+				await writeFile(join(stage, `${entry}.previous`, "version"), "old");
+				if (state === "ready") await mkdir(join(stage, entry));
+			}
+			await writeFile(join(target, "unrelated.txt"), "keep");
+			const killed = spawnSync(
+				process.execPath,
+				["--require", preload, installer, "--to", target],
+				{ encoding: "utf8" },
+			);
+			assert.equal(killed.signal, "SIGKILL", killed.stderr);
+			const resumed = install(target);
+			assert.match(resumed.stderr, /already exists/);
+			for (const entry of bundle)
+				assert.equal(
+					await readFile(join(target, entry, "version"), "utf8"),
+					state === "ready" ? "old" : "new",
+				);
+			assert.equal(
+				await readFile(join(target, "unrelated.txt"), "utf8"),
+				"keep",
+			);
+			assert.equal(
+				(await readdir(target)).some((name) =>
+					name.startsWith(".blabla-install"),
+				),
+				false,
+			);
+		}
+	} finally {
+		await rm(temporary, { recursive: true, force: true });
+	}
+});
