@@ -3220,6 +3220,7 @@ export const catalogText = action({
 
 export const publishBindingRealization = internalMutation({
 	args: {
+		pendingLocale: v.optional(v.boolean()),
 		projectId: v.id("projects"),
 		localeId: v.id("locales"),
 		catalogPath: v.string(),
@@ -3241,7 +3242,9 @@ export const publishBindingRealization = internalMutation({
 			!locale ||
 			locale.projectId !== args.projectId ||
 			locale.isSource ||
-			locale.archivedAt !== undefined ||
+			(args.pendingLocale
+				? !locale.pendingBinding || locale.archivedAt === undefined
+				: locale.archivedAt !== undefined) ||
 			locale.catalogPath !== args.expectedCatalogPath ||
 			!snapshot ||
 			snapshot.projectId !== args.projectId ||
@@ -3289,7 +3292,12 @@ export const publishBindingRealization = internalMutation({
 			projectionId: args.projectionId,
 			realizedAt: now(),
 		});
-		await ctx.db.patch(locale._id, { catalogPath: args.catalogPath });
+		await ctx.db.patch(locale._id, {
+			catalogPath: args.catalogPath,
+			...(args.pendingLocale
+				? { archivedAt: undefined, pendingBinding: undefined }
+				: {}),
+		});
 		await publishProjection(ctx, {
 			identity: {
 				projectId: args.projectId,
@@ -3316,6 +3324,7 @@ export const publishBindingRealization = internalMutation({
 export async function realizeLocaleBinding(
 	ctx: ActionCtx,
 	input: {
+		pendingLocale?: boolean;
 		projectId: Id<"projects">;
 		localeId: Id<"locales">;
 		catalogPath: string;
@@ -3326,6 +3335,7 @@ export async function realizeLocaleBinding(
 ): Promise<void> {
 	const plan = await ctx.runQuery(internal.locales.bindingPlan, {
 		localeId: input.localeId,
+		allowPending: input.pendingLocale,
 		catalogPath: input.catalogPath,
 	});
 	if (

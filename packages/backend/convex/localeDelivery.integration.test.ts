@@ -156,15 +156,23 @@ describe("Locale delivery observation and binding realization", () => {
 		if (!delivered.snapshotId) throw new Error("Expected delivery Snapshot.");
 		const before = await readWorkspaceKeyCards(user, projectId);
 		expect(before.keys.every((key) => key.values.length === 6)).toBe(true);
-		const localeId = await user.mutation(api.locales.create, {
+		const discovery = await user.query(api.locales.discoveredCatalogs, {
 			projectId,
+		});
+		const file = discovery.files.find((file) => file.suggestedCode === "pt");
+		if (!file) throw new Error("Expected discovered Portuguese catalog");
+		await user.action(api.locales.addDiscovered, {
+			projectId,
+			snapshotId: delivered.snapshotId,
+			unboundFileId: file.id,
 			code: "pt",
 			label: "Portuguese",
 		});
-		await user.action(api.locales.bind, {
-			localeId,
-			catalogPath: "intl_pt.arb",
-		});
+		const locale = (await user.query(api.locales.list, { projectId })).find(
+			(locale) => locale.code === "pt",
+		);
+		if (!locale) throw new Error("Expected published Portuguese language");
+		const localeId = locale._id;
 		const after = await readWorkspaceKeyCards(user, projectId);
 		expect(after.projectionId).not.toBe(before.projectionId);
 		const scopes = await t.run(async (ctx) => {

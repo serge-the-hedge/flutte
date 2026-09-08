@@ -10,7 +10,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
 import { Link } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useId, useState } from "react";
 import { toast } from "sonner";
@@ -175,13 +175,8 @@ export function DiscoveredCatalogFiles({
 export function DiscoveredCatalogs({ projectId }: { projectId: string }) {
 	const id = convexId<"projects">(projectId);
 	const discovery = useQuery(api.locales.discoveredCatalogs, { projectId: id });
-	const locales = useQuery(api.locales.list, {
-		projectId: id,
-		includeArchived: true,
-	});
-	const create = useMutation(api.locales.create);
-	const bind = useAction(api.locales.bind);
-	if (!discovery?.snapshotId || !locales) return null;
+	const add = useAction(api.locales.addDiscovered);
+	if (!discovery?.snapshotId) return null;
 	const snapshotId = discovery.snapshotId;
 	return (
 		<DiscoveredCatalogFiles
@@ -189,32 +184,12 @@ export function DiscoveredCatalogs({ projectId }: { projectId: string }) {
 			files={discovery.files}
 			canEdit={discovery.canEdit}
 			onAdd={async (file, code, label) => {
-				const normalizedCode = code
-					.trim()
-					.replaceAll("_", "-")
-					.split("-")
-					.filter(Boolean)
-					.map((part, index) =>
-						index === 0 ? part.toLowerCase() : part.toUpperCase(),
-					)
-					.join("-");
-				const existing = locales.find(
-					(locale) => locale.code === normalizedCode,
-				);
-				if (existing?.archivedAt !== undefined)
-					throw new Error("Restore the archived language before binding it.");
-				if (existing?.isSource || existing?.catalogPath)
-					throw new Error(
-						"This language already has a catalog. Review its binding in Sync.",
-					);
-				const localeId =
-					existing?._id ??
-					(await create({ projectId: id, code: normalizedCode, label }));
-				await bind({
-					localeId,
-					catalogPath: file.catalogPath,
-					expectedSnapshotId: snapshotId,
-					expectedUnboundFileId: file.id,
+				await add({
+					projectId: id,
+					snapshotId,
+					unboundFileId: file.id,
+					code,
+					label,
 				});
 				toast.success(`${label} added to Strings`);
 			}}

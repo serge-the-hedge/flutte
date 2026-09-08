@@ -7,7 +7,7 @@ import {
 	createBackend,
 	createProject,
 } from "../test/support";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 async function request(
 	t: Backend,
@@ -289,6 +289,89 @@ describe("Repository Adapter snapshot transport", () => {
 				}),
 			]),
 		);
+	});
+
+	test("publishes a new discovered language atomically and reclaims failed reservations", async () => {
+		const user = await authenticatedBackend(t, "catalog-atomic-add");
+		const { projectId } = await setup(user);
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "https://github.com/brickit-app/brickit-flutter.git",
+			commit: "a".repeat(40),
+			files: [
+				...files,
+				{
+					catalogPath: "intl_fr.arb",
+					content: '{"@@locale":"fr","greeting":"Bonjour"}',
+				},
+				{ catalogPath: "broken.arb", content: "{broken" },
+			],
+		});
+		const discovery = await user.query(api.locales.discoveredCatalogs, {
+			projectId,
+		});
+		const french = discovery.files.find((file) => file.suggestedCode === "fr");
+		const broken = discovery.files.find(
+			(file) => file.catalogPath === "broken.arb",
+		);
+		if (!discovery.snapshotId || !french || !broken)
+			throw new Error("Missing discovery");
+		const args = {
+			projectId,
+			snapshotId: discovery.snapshotId,
+			unboundFileId: french.id,
+			code: "fr",
+			label: "French",
+		};
+		const reserved = await user.mutation(
+			internal.locales.prepareDiscoveredBinding,
+			args,
+		);
+		expect(
+			(
+				await user.query(api.locales.list, { projectId, includeArchived: true })
+			).some((locale) => locale.code === "fr"),
+		).toBe(false);
+		await expect(
+			user.mutation(api.locales.create, { projectId, code: "fr" }),
+		).rejects.toThrow("being added");
+		await user.mutation(internal.locales.discardPendingBinding, {
+			localeId: reserved.localeId,
+		});
+		await user.action(api.locales.addDiscovered, args);
+		const published = (await user.query(api.locales.list, { projectId })).find(
+			(locale) => locale.code === "fr",
+		);
+		expect(published).toMatchObject({
+			label: "French",
+			catalogPath: "intl_fr.arb",
+		});
+		expect(published?.pendingBinding).toBeUndefined();
+		const failedArgs = {
+			...args,
+			unboundFileId: broken.id,
+			code: "ja",
+			label: "Japanese",
+		};
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await expect(
+				user.action(api.locales.addDiscovered, failedArgs),
+			).rejects.toThrow();
+			expect(
+				await t.run(
+					async (ctx) =>
+						await ctx.db
+							.query("locales")
+							.withIndex("by_project_code", (q) =>
+								q.eq("projectId", projectId).eq("code", "ja"),
+							)
+							.unique(),
+				),
+			).toBeNull();
+		}
+		expect(
+			(await user.query(api.snapshots.getBaseline, { projectId }))?._id,
+		).toBe(discovery.snapshotId);
 	});
 
 	test("does not allow a token from another project or an unscoped token", async () => {

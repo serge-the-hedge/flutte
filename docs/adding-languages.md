@@ -90,7 +90,10 @@ requires an editor to choose it; filenames alone do not decide language identity
 Conflicting, source, and archived language bindings explain what needs resolving.
 
 Choose **Add language** to bind and import that file immediately, without another
-sync. A snapshot change invalidates the open binding request. Files disappear from
+sync. A new language remains hidden during preparation and becomes active in
+the same transaction as its catalog binding. Failed attempts reclaim the hidden
+identity; abandoned attempts expire after 24 hours. Existing language identities
+are preserved on failure. A snapshot change invalidates the open binding request. Files disappear from
 discovery after binding; re-syncing the same commit no longer warns about them.
 Adding a language is deliberate because it changes the active translation and
 release scope. Ordinary Git imports remain unconfirmed; matching reviewed delivery
