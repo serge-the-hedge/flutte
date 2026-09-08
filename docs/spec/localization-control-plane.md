@@ -440,19 +440,27 @@ marks itself and **never sorts ahead**: a list that rearranges as you work it is
 the failure this map has rejected twice. [Decide how a translator finds their
 way through the catalog](https://github.com/serge-the-hedge/flutte/issues/25)
 
-**Navigation is paged in Catalog Order.** Strings selects one working Locale
-alongside Source, reads compact key digests in bounded pages, and hydrates at most
-32 visible cards through a Window. The index retains identifiers and state facts,
+**Navigation is paged in Catalog Order.** Strings defaults to all active, bound target
+Locales alongside Source. A searchable multi-select supports a subset or Source
+only. Explicit selections live in the URL; an omitted selection means All,
+including newly bound languages. Strings reads compact key digests in bounded
+pages and hydrates at most 32 nearby cards through a Window, reducing key
+lookahead as the selected Locale count grows. The index retains identifiers and state facts,
 not a copy of every translated value. A browse query scans at most 64 digests
 with a 512 KiB read budget. Search stops when its effective-text reads reach
-2 MiB, allowing the final bounded value read to cross that threshold. Empty pages can have a continuation when the scan budget is exhausted.
+2 MiB, allowing the final bounded value read to cross that threshold. Search also caps hydrated targets at 64 per query. Empty pages can have a
+continuation when a scan budget is exhausted, including an offset within a key
+so later selected Locales are not skipped.
 The browser shows page counts, rather than presenting them as catalog totals.
 
 The older whole-Navigation endpoint remains capped at 8 MiB for compatible
 callers. It is no longer the Strings loading path. Windows select Source and
-requested target Locales; the UI requests one target, and the endpoint permits
-up to four for bounded comparisons. Changing the working language preserves the
-unsaved-edit navigation guard. Publication changes invalidate browse generations.
+requested target Locales, with at most four targets per backend request. The UI
+loads selected languages progressively with at most four pending requests,
+splitting oversized reads by keys and then languages. Completed batches remain
+reactive and merge into one card per key. Changing the language selection
+preserves the unsaved-edit navigation guard. Publication changes invalidate
+browse generations.
 
 An upgraded deployment whose active Navigation generation predates the
 materialized ordinary-import counts is explicitly incomplete for the Agent
@@ -464,7 +472,7 @@ re-arms the bounded worker. This is a maintenance command, not an unattended
 repair. The ordinary-import run uses the same readiness gate, so neither its
 preview nor its confirmation mutation can start against an incomplete index.
 
-**Search is a literal substring scan over key, Source, and the working Locale.**
+**Search is a literal substring scan over key, Source, and any selected Locale.**
 It runs through bounded backend reads of effective workspace values, preserves
 Catalog Order, and does not rank. Native Convex tokenization misses internal
 terms in unspaced Chinese: a real-backend fixture evaluation found only 10 of
@@ -479,11 +487,11 @@ highlights rather than filtering.
 
 **Catalog Scopes** compose as AND, live in the URL, and render as dismissible
 chips with live counts. The initial Navigation contract supports search text,
-a working Locale, a waiting state, an **Unconfirmed Import**, and a Work
+selected Locales, a waiting state, an **Unconfirmed Import**, and a Work
 Hand-off. Code Area, tag, a **Sibling Set**, expansion, and archived keys remain
 valid domain concepts, but require their own bounded context or metadata reads.
-The working Locale selects the target shown alongside Source; scopes apply to
-that view. A Work Hand-off narrows the keys without changing Catalog Order.
+The selected Locales choose the targets shown alongside Source; a target-state
+scope matches a key when any selected target matches. A Work Hand-off narrows the keys without changing Catalog Order.
 
 First-class filters in the initial Navigation contract are **the four phrases a
 value already says** — `needs a value`, `English changed`, `English, not chosen`,

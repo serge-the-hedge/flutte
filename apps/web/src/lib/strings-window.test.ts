@@ -3,9 +3,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	collectStringsWindowMessageIds,
 	createStringsWindowCardCache,
+	estimateStringsCardHeight,
 	quantizeStringsWindowBounds,
 	StringsCardMeasurementCache,
 	sameStringsWindowMessageIds,
+	stringsWindowKeyCap,
 	updateStringsWindowCardCache,
 	WINDOW_KEY_CAP,
 } from "./strings-window";
@@ -152,4 +154,56 @@ describe("StringsCardMeasurementCache", () => {
 		cache.clear();
 		expect(cache.estimate("p1", "greeting", 208)).toBe(208);
 	});
+});
+
+test("wide language windows hydrate the actual visible key at every stride", () => {
+	expect([0, 4, 8, 24, 100, 1000].map(stringsWindowKeyCap)).toEqual([
+		32, 32, 16, 5, 1, 1,
+	]);
+	const ordered = Array.from({ length: 40 }, (_, i) => `key_${i}`);
+	for (const targets of [24, 100])
+		for (let visible = 0; visible < 40; visible++) {
+			const cap = stringsWindowKeyCap(targets);
+			const bounds = quantizeStringsWindowBounds(visible, visible + 1, 40, cap);
+			const ids = collectStringsWindowMessageIds({
+				orderedMessageIds: ordered,
+				bounds,
+				visibleBounds: { start: visible, end: visible + 1 },
+				extraMessageIds: ["key_0"],
+				cap,
+			});
+			expect(ids).toContain(`key_${visible}`);
+			expect(ids.length).toBeLessThanOrEqual(cap);
+		}
+	expect(estimateStringsCardHeight(100)).toBeGreaterThan(3000);
+	expect(estimateStringsCardHeight(100)).toBeGreaterThan(
+		estimateStringsCardHeight(4),
+	);
+});
+
+test("removes suppressed requested cards while retaining unrelated lookahead", () => {
+	const initial = updateStringsWindowCardCache(createStringsWindowCardCache(), {
+		projectionId: "projection",
+		maxCards: 4,
+		cards: new Map(
+			["suppressed", "retained", "lookahead"].map((id) => [id, card(id)]),
+		),
+	});
+	const requestedMessageIds = ["suppressed", "retained"];
+	expect(
+		updateStringsWindowCardCache(initial, {
+			projectionId: "projection",
+			maxCards: 4,
+			cards: undefined,
+			requestedMessageIds,
+		}),
+	).toBe(initial);
+	const result = updateStringsWindowCardCache(initial, {
+		projectionId: "projection",
+		maxCards: 4,
+		requestedMessageIds,
+		cards: new Map([["retained", card("retained")]]),
+	});
+	expect(result.cards.has("suppressed")).toBe(false);
+	expect([...result.cards.keys()]).toEqual(["lookahead", "retained"]);
 });

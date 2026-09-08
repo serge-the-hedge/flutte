@@ -22,6 +22,7 @@ export function useCatalogBrowsePage(
 	const [scan, setScan] = useState<{
 		requestKey: string;
 		after: number;
+		targetIndex: number;
 	} | null>(null);
 	const after =
 		scan?.requestKey === requestKey
@@ -29,27 +30,41 @@ export function useCatalogBrowsePage(
 			: args === "skip"
 				? undefined
 				: args.after;
+	const scanTargetIndex =
+		scan?.requestKey === requestKey
+			? scan.targetIndex
+			: args === "skip"
+				? undefined
+				: args.scanTargetIndex;
 	const queryArgs = useMemo(
-		() => (args === "skip" ? ("skip" as const) : { ...args, after }),
-		[args, after],
+		() =>
+			args === "skip" ? ("skip" as const) : { ...args, after, scanTargetIndex },
+		[args, after, scanTargetIndex],
 	);
 	const page = useQuery(api.catalogBrowse.page, queryArgs);
 	const nextAfter =
 		page && !page.stale && page.keys.length === 0 ? page.nextAfter : null;
+	const nextTargetIndex = page?.nextTargetIndex ?? 0;
 	// A non-advancing cursor is a protocol failure, never an invitation to loop.
-	if (nextAfter !== null && nextAfter <= (after ?? -1))
+	if (
+		nextAfter !== null &&
+		(nextAfter < (after ?? -1) ||
+			(nextAfter === (after ?? -1) &&
+				nextTargetIndex <= (scanTargetIndex ?? 0)))
+	)
 		throw new Error("Catalog search did not advance its scan cursor.");
 	useEffect(() => {
 		setScan((previous) => {
 			if (nextAfter !== null)
 				return previous?.requestKey === requestKey &&
-					previous.after === nextAfter
+					previous.after === nextAfter &&
+					previous.targetIndex === nextTargetIndex
 					? previous
-					: { requestKey, after: nextAfter };
+					: { requestKey, after: nextAfter, targetIndex: nextTargetIndex };
 			// A committed request change must forget the earlier scan even if
 			// the new request immediately matches or temporarily skips reads.
 			return previous?.requestKey === requestKey ? previous : null;
 		});
-	}, [requestKey, nextAfter]);
+	}, [requestKey, nextAfter, nextTargetIndex]);
 	return args === "skip" || nextAfter !== null ? undefined : page;
 }

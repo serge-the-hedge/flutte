@@ -10,12 +10,12 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { LocaleSelector } from "@/components/localization/locale-selector";
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { StringsCatalogView } from "@/components/localization/strings-catalog-view";
+import { StringsLanguageSelector } from "@/components/localization/strings-language-selector";
 import { api, convexId } from "@/lib/convex-api";
 import {
 	type CatalogWorkspaceCommit,
@@ -26,15 +26,16 @@ import type {
 	CatalogValueScope,
 	StringsCatalogNavigationState,
 } from "@/lib/strings-catalog-navigation";
+import { stringsLanguagesFromSearch } from "@/lib/strings-languages";
 import {
 	previousStringsPages,
 	type StringsPageHistory,
 } from "@/lib/strings-page-history";
 import {
 	createStringsWindowCardCache,
-	STRINGS_WINDOW_CARD_CACHE_CAP,
 	type StringsWindowCards,
 	sameStringsWindowMessageIds,
+	stringsWindowKeyCap,
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
 import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
@@ -42,7 +43,7 @@ import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
 
 type StringsSearch = {
-	locale?: string;
+	locales?: string[];
 	after?: number;
 	q?: string;
 	key?: string;
@@ -63,7 +64,7 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	validateSearch: (search: Record<string, unknown>): StringsSearch => ({
-		locale: typeof search.locale === "string" ? search.locale : undefined,
+		locales: stringsLanguagesFromSearch(search),
 		after:
 			Number.isSafeInteger(Number(search.after)) && Number(search.after) >= -1
 				? Number(search.after)
@@ -89,15 +90,19 @@ function StringsRoute() {
 		(locale) =>
 			!locale.isSource && locale.archivedAt === undefined && locale.catalogPath,
 	);
-	const selectedLocale =
-		targets.find((locale) => locale.code === search.locale) ?? targets[0];
+	const selectedLocales =
+		search.locales === undefined
+			? targets
+			: targets.filter((locale) => search.locales?.includes(locale.code));
+	const selectedLocaleIds = selectedLocales.map((locale) => locale._id);
+	const selectionKey = JSON.stringify(search.locales ?? "all");
 	const overview = useQuery(api.catalogBrowse.overview, {
 		projectId: convexProjectId,
 	});
 	const pageContext = JSON.stringify([
 		projectId,
 		overview?.kind === "ready" ? overview.projectionId : null,
-		selectedLocale?._id,
+		selectionKey,
 		search.q,
 		search.scope,
 		search.release,
@@ -145,7 +150,7 @@ function StringsRoute() {
 			? {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
-					localeId: selectedLocale?._id,
+					localeIds: selectedLocaleIds,
 					after: search.after,
 					q: search.q,
 					scope: search.scope,
@@ -183,7 +188,7 @@ function StringsRoute() {
 	// from the new Navigation read on the next scroll or focus.
 	const windowedProjectionId =
 		navigation?.kind === "ready"
-			? `${navigation.projectionId}:${selectedLocale?._id ?? "source"}`
+			? `${navigation.projectionId}:${JSON.stringify(selectedLocaleIds)}`
 			: undefined;
 	const windowMessageIds =
 		windowRequest.projectionId === windowedProjectionId
@@ -208,10 +213,11 @@ function StringsRoute() {
 					projectId: convexProjectId,
 					expectedProjectionId: navigation.projectionId,
 					messageIds: windowMessageIds,
-					localeIds: selectedLocale ? [selectedLocale._id] : [],
+					localeIds: selectedLocaleIds,
 				}
 			: ("skip" as const);
-	const windowResult = useCatalogWindow(windowArgs);
+	const { cards: windowResult, isLoading: loadingLanguages } =
+		useCatalogWindow(windowArgs);
 	const windowCards = useMemo<StringsWindowCards | undefined>(() => {
 		if (windowResult === undefined) return undefined;
 		const cards = new Map<string, StringsCatalogKey>();
@@ -220,15 +226,17 @@ function StringsRoute() {
 		}
 		return cards;
 	}, [windowResult]);
+	const windowCacheCap = 2 * stringsWindowKeyCap(selectedLocaleIds.length);
 	useEffect(() => {
 		setWindowCardCache((current) =>
 			updateStringsWindowCardCache(current, {
 				projectionId: windowedProjectionId,
 				cards: windowCards,
-				maxCards: STRINGS_WINDOW_CARD_CACHE_CAP,
+				maxCards: windowCacheCap,
+				requestedMessageIds: windowMessageIds,
 			}),
 		);
-	}, [windowedProjectionId, windowCards]);
+	}, [windowedProjectionId, windowCards, windowCacheCap, windowMessageIds]);
 	const hydratedCards =
 		windowCardCache.projectionId === windowedProjectionId
 			? windowCardCache.cards
@@ -424,15 +432,14 @@ function StringsRoute() {
 			/>
 			<div className="mb-4 flex flex-wrap items-center gap-3">
 				<div className="w-64">
-					<LocaleSelector
+					<StringsLanguageSelector
 						locales={targets}
-						value={selectedLocale?.code ?? null}
-						placeholder="Working language"
-						onChange={(locale) => {
+						value={search.locales}
+						onChange={(codes) => {
 							void navigate({
 								search: (previous) => ({
 									...previous,
-									locale: locale ?? undefined,
+									locales: codes,
 									after: undefined,
 									key: undefined,
 								}),
@@ -441,11 +448,16 @@ function StringsRoute() {
 					/>
 				</div>
 				<span className="text-muted-foreground text-sm">
-					Source and selected language · counts for this page
+					Source always shown · counts for selected languages on this page
 				</span>
 			</div>
+			{loadingLanguages && navigation?.kind === "ready" ? (
+				<p role="status" className="mb-2 text-muted-foreground text-sm">
+					Loading languages…
+				</p>
+			) : null}
 			<StringsCatalogView
-				key={`${projectId}:${selectedLocale?._id ?? "source"}`}
+				key={`${projectId}:${selectionKey}`}
 				onUnsavedWorkChange={setHasUnsavedWork}
 				navigation={
 					search.release && releaseHandoff === undefined

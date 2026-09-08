@@ -1,7 +1,11 @@
 import { ConvexError, v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
-import { activeProjectionFor } from "./catalogProjection";
+import {
+	activeProjectionFor,
+	MAX_PROJECTED_LOCALES,
+} from "./catalogProjection";
 import {
 	backfillStepIsPending,
 	navigationReadIdentity,
@@ -83,12 +87,15 @@ export const overview = query({
 });
 
 /** A page is pinned to one published projection. Search hydrates only the
- * selected language, preserving literal matching for every writing system. */
+ * selected languages, preserving literal matching for every writing system.
+ * `after` is the last completed key; `scanTargetIndex` resumes its next key. */
 export const page = query({
 	args: {
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		localeId: v.optional(v.id("locales")),
+		localeIds: v.optional(v.array(v.id("locales"))),
+		scanTargetIndex: v.optional(v.number()),
 		after: v.optional(v.number()),
 		q: v.optional(v.string()),
 		scope: v.optional(
@@ -112,6 +119,7 @@ export const page = query({
 				keys: [],
 				counts: { waiting: 0, unconfirmedImport: 0, stale: 0, settled: 0 },
 				nextAfter: null,
+				nextTargetIndex: null,
 			};
 		}
 		await readyNavigationStateFor(ctx, {
@@ -120,8 +128,13 @@ export const page = query({
 			expectedRowCount: projection.expectedKeyCount,
 		});
 		const after = args.after ?? -1;
+		const scanTargetIndex = args.scanTargetIndex ?? 0;
 		const needle = (args.q ?? "").trim().toLowerCase();
 		if (
+			!Number.isSafeInteger(scanTargetIndex) ||
+			scanTargetIndex < 0 ||
+			scanTargetIndex > MAX_PROJECTED_LOCALES ||
+			(scanTargetIndex > 0 && args.after === undefined) ||
 			!Number.isSafeInteger(after) ||
 			after < -1 ||
 			encodedSize(needle) > 2050 ||
@@ -134,21 +147,44 @@ export const page = query({
 				message: "Catalog page arguments exceed their bounds.",
 			});
 		}
-		if (args.localeId) {
-			const locale = await ctx.db.get(args.localeId);
-			if (
-				!locale ||
-				locale.projectId !== args.projectId ||
-				locale.archivedAt !== undefined ||
-				locale.isSource ||
-				!locale.catalogPath
-			) {
+		if (args.localeId !== undefined && args.localeIds !== undefined)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Use either localeId or localeIds.",
+			});
+		const selected =
+			args.localeIds ?? (args.localeId ? [args.localeId] : undefined);
+		if (
+			selected &&
+			(selected.length > MAX_PROJECTED_LOCALES ||
+				new Set(selected).size !== selected.length)
+		)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Language selection exceeds its bounds or repeats a language.",
+			});
+		const active = new Map<Id<"locales">, boolean>();
+		async function isActive(localeId: Id<"locales">) {
+			const cached = active.get(localeId);
+			if (cached !== undefined) return cached;
+			const locale = await ctx.db.get(localeId);
+			const valid = Boolean(
+				locale &&
+					locale.projectId === args.projectId &&
+					!locale.isSource &&
+					locale.archivedAt === undefined &&
+					locale.catalogPath,
+			);
+			active.set(localeId, valid);
+			return valid;
+		}
+		for (const localeId of selected ?? [])
+			if (!(await isActive(localeId)))
 				throw new ConvexError({
 					code: "VALIDATION",
 					message: "Choose an active target language.",
 				});
-			}
-		}
+		const selection = selected ? new Set(selected) : undefined;
 		// A permalink starts at its key rather than making clients scan earlier pages.
 		const focusKey = args.focusKey;
 		const focus =
@@ -176,34 +212,61 @@ export const page = query({
 		const keys = [];
 		const membership = args.messageIds ? new Set(args.messageIds) : null;
 		let readBytes = 0;
-		let last = after;
+		let hydrated = 0;
+		let outputBytes = 0;
+		let last = focus ? focus.catalogIndex - 1 : after;
+		let resumeTarget = 0;
+		let partial = false;
 		for (const row of batch.page) {
-			last = row.catalogIndex;
-			if (membership && !membership.has(row.messageId)) continue;
-			const targets = args.localeId
-				? row.targets.filter((target) => target.localeId === args.localeId)
-				: [];
-			const target = targets[0];
+			if (membership && !membership.has(row.messageId)) {
+				last = row.catalogIndex;
+				continue;
+			}
+			const targets = [];
+			for (const target of row.targets)
+				if (
+					(!selection || selection.has(target.localeId)) &&
+					(await isActive(target.localeId))
+				)
+					targets.push(target);
 			const matchesScope =
 				args.scope === undefined ||
 				(args.scope === "introduced"
 					? targets.some((value) => value.firstReviewPending)
 					: targets.some((value) => value.valueState === args.scope));
-			if (!matchesScope) continue;
+			if (!matchesScope) {
+				last = row.catalogIndex;
+				continue;
+			}
 			let matches = !needle || row.messageId.toLowerCase().includes(needle);
-			if (!matches && target) {
+			const start = row === batch.page[0] ? scanTargetIndex : 0;
+			if (start > targets.length)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Invalid target search position.",
+				});
+			for (let index = start; !matches && index < targets.length; index++) {
+				if (readBytes >= 2 * 1024 * 1024 || hydrated >= 64) {
+					resumeTarget = index;
+					partial = true;
+					break;
+				}
+				const target = targets[index];
+				if (!target) continue;
 				const current = await readWorkspaceTarget(
 					ctx,
 					args.projectId,
 					row.messageId,
 					target.localeId,
 				);
+				hydrated++;
 				readBytes += encodedSize(current);
 				matches =
 					current.source.value.toLowerCase().includes(needle) ||
 					current.value.toLowerCase().includes(needle);
 			}
-			if (!matches && !target) {
+			if (partial) break;
+			if (!matches && targets.length === 0) {
 				const [source, head] = await Promise.all([
 					ctx.db
 						.query("catalogProjectionMessages")
@@ -237,8 +300,7 @@ export const page = query({
 				matches = effective?.value.toLowerCase().includes(needle) ?? false;
 			}
 			if (matches) {
-				for (const value of targets) counts[value.valueState]++;
-				keys.push({
+				const key = {
 					messageId: row.messageId,
 					catalogIndex: row.catalogIndex,
 					searchCorpus: [],
@@ -253,17 +315,40 @@ export const page = query({
 							firstReviewPending: value.firstReviewPending === true,
 						}),
 					),
-				});
+				};
+				const size = encodedSize(key);
+				if (size > 512 * 1024)
+					throw new ConvexError({
+						code: "LIMIT_EXCEEDED",
+						message: "A catalog key exceeds its compact page budget.",
+					});
+				if (keys.length && outputBytes + size > 1024 * 1024) {
+					partial = true;
+					resumeTarget = 0;
+					break;
+				}
+				outputBytes += size;
+				keys.push(key);
+				for (const value of targets) counts[value.valueState]++;
 			}
+			last = row.catalogIndex;
 			if (keys.length >= 32 || readBytes >= 2 * 1024 * 1024) break;
 		}
 		const remaining =
-			!batch.isDone || last !== batch.page[batch.page.length - 1]?.catalogIndex;
+			partial ||
+			!batch.isDone ||
+			last !== batch.page[batch.page.length - 1]?.catalogIndex;
 		return {
 			stale: false,
 			keys,
 			counts,
 			nextAfter: batch.page.length && remaining ? last : null,
+			nextTargetIndex:
+				batch.page.length && remaining
+					? keys.length
+						? 0
+						: resumeTarget
+					: null,
 		};
 	},
 });
