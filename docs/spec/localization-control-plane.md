@@ -10,7 +10,7 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Release assessment, bundles, configured language delivery and binding | Implemented; exact delivery observation preserves review evidence, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
+| Release assessment, bundles, configured language delivery and binding | Implemented; exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |

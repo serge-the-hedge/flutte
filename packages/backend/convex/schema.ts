@@ -761,6 +761,8 @@ export default defineSchema({
 			"catalogContentHash",
 		])
 		.index("by_project", ["projectId"])
+		// Hashless recovery needs creation order, independent of target-file hash order.
+		.index("by_project_and_catalogPath", ["projectId", "catalogPath"])
 		.index("by_project_and_catalogPath_and_catalogContentHash", [
 			"projectId",
 			"catalogPath",
@@ -856,6 +858,8 @@ export default defineSchema({
 	// Normalized workflow fields derived from Catalog Documents. A projection
 	// becomes visible only when its Source Snapshot becomes the baseline.
 	catalogProjections: defineTable({
+		// Completed review-evidence derivation; absent on older published generations.
+		localeReviewEvidenceVersion: v.optional(v.number()),
 		localeBindingRevision: v.optional(v.number()),
 		projectId: v.id("projects"),
 		// A staging projection claims the Snapshot Identity it was derived from.

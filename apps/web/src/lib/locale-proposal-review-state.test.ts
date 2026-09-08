@@ -3,6 +3,32 @@ import { describe, expect, test } from "bun:test";
 import { localeProposalReviewState } from "./locale-proposal-review-state";
 
 describe("localeProposalReviewState", () => {
+	test("keeps a bound finalized language complete after the baseline changes", () => {
+		expect(
+			localeProposalReviewState({
+				status: "ready",
+				isBound: true,
+				isCurrentBaseline: false,
+				remaining: 0,
+				pendingReview: { count: 0, hasMore: false },
+			}),
+		).toMatchObject({
+			phase: "handedOff",
+			badgeLabel: "Language connected",
+			canFinalize: false,
+			emptyDescription:
+				"This task is complete. Review current translations and any changed source values in Strings.",
+		});
+		expect(
+			localeProposalReviewState({
+				status: "draft",
+				isBound: true,
+				isCurrentBaseline: false,
+				remaining: 2,
+				pendingReview: { count: 0, hasMore: false },
+			}),
+		).toMatchObject({ phase: "stale", canFinalize: false });
+	});
 	test("presents a complete draft as ready to finalize", () => {
 		expect(
 			localeProposalReviewState({

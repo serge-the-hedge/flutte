@@ -175,15 +175,23 @@ would additionally require application CI to consume Blabla readiness evidence.
 
 A finalized Locale Proposal becomes delivery evidence. An accepted descendant
 Snapshot records an exact artifact-path/content observation only when the pinned
-Source Contract still matches. Reviewed authorship, review authorization, and
-Intentional Blank reasons transfer with publication; failed private staging
-never supplies visible confirmations.
+Source Contract still matches. Separately, a bound catalog at the proposal’s
+path retains review for each exact Source Contract/target pair from a finalized
+proposal for that Locale. File formatting and unrelated Source or target edits
+do not discard those approvals; changed pairs, absent values and unreviewed
+candidates gain none. Reviewed authorship, review authorization, and Intentional
+Blank reasons transfer with publication; failed private staging never supplies
+visible confirmations.
 
 An editor can bind a matching Unbound Locale File from the current Baseline.
 Binding Realization stages and atomically publishes the refreshed projection
 and binding, without changing Snapshot Identity. A binding made before delivery
 is handled during ordinary ingestion. Existing messages retain their original
 First Review scope. See [Adding a language](adding-languages.md).
+
+Re-syncing a Baseline imported before per-value review preservation rebuilds its
+derived evidence once, keeping Snapshot Identity and existing binding realizations.
+It restores applicable prior reviews without a new approval gesture.
 
 ## Compatibility note
 

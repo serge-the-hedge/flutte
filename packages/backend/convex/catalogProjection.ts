@@ -22,6 +22,34 @@ import {
 	requireViewer,
 } from "./permissions";
 
+/** Increment when preserved Locale review evidence must be rederived on Snapshot replay. */
+export const LOCALE_REVIEW_EVIDENCE_VERSION = 1;
+export const completeLocaleReviewEvidence = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		actor: v.optional(repositoryAdapterActorValidator),
+	},
+	handler: async (ctx, args) => {
+		await authorizeProjectIngestion(ctx, args.projectId, args.actor);
+		const projection = await ctx.db.get(args.projectionId);
+		if (
+			!projection ||
+			projection.projectId !== args.projectId ||
+			projection.status !== "staging"
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"Locale review evidence can only complete in its private staging projection.",
+			});
+		await ctx.db.patch(projection._id, {
+			localeReviewEvidenceVersion: LOCALE_REVIEW_EVIDENCE_VERSION,
+		});
+		return null;
+	},
+});
+
 /** Storage cardinality guards are independent of transaction read budgets.
  * Processing and public reads page by bytes; no whole-generation response is
  * admitted by these totals. Per-value limits bound the scalar byte counters. */

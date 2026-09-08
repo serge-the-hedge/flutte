@@ -64,6 +64,9 @@ identity. Blabla holds no Git credentials.
 After merging, check out the integration branch and run `blabla sync`. A later
 accepted Baseline can record a **Locale Delivery Observation** only when the
 catalog bytes and path match the artifact and its Source Contract still matches.
+That whole-file observation is separate from translation review: formatting or
+an unrelated edit does not invalidate already reviewed Source/target pairs in
+the bound catalog at the configured path. Changed pairs remain unresolved.
 Preview snapshots and similar-looking translations do not transfer approval.
 
 Return to the task and choose **Bind language**. This deliberate editor action
@@ -75,6 +78,11 @@ that commit is later accepted.
 
 The language is then ordinary translation and release work in Strings. Adding
 it does not reopen older messages' frozen First Review scope.
+
+For a language imported before this review-preservation fix, run `blabla sync`
+again from the integration branch. Blabla rebuilds the current Snapshot’s
+derived review evidence once, retaining its bindings and identity. Matching
+prior approvals and Intentional Blank reasons return without reviewing again.
 
 ## Import a language already in Git
 

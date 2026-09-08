@@ -23,7 +23,10 @@ import {
 } from "./catalogWorkspace";
 import { sourceContractsMatch } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
-import { backfillLegacyDeliveryMetadata } from "./localeProposals";
+import {
+	backfillLegacyDeliveryMetadata,
+	proposalDeliveryIdentity,
+} from "./localeProposals";
 import {
 	authorizeProjectIngestion,
 	type RepositoryAdapterActor,
@@ -63,7 +66,7 @@ export const matchingArtifact = internalQuery({
 	args: {
 		projectId: v.id("projects"),
 		catalogPath: v.string(),
-		contentHash: v.string(),
+		contentHash: v.optional(v.string()),
 		repository: v.string(),
 		commit: v.string(),
 		cursor: v.union(v.string(), v.null()),
@@ -71,19 +74,29 @@ export const matchingArtifact = internalQuery({
 	},
 	handler: async (ctx, args) => {
 		await authorizeProjectIngestion(ctx, args.projectId, args.actor);
-		const matches = await ctx.db
-			.query("localeProposals")
-			.withIndex("by_project_and_catalogPath_and_catalogContentHash", (q) =>
-				q
-					.eq("projectId", args.projectId)
-					.eq("catalogPath", args.catalogPath)
-					.eq("catalogContentHash", args.contentHash),
-			)
-			.order("desc")
-			.paginate({
-				numItems: ARTIFACT_CANDIDATE_PAGE_SIZE,
-				cursor: args.cursor,
-			});
+		const candidates =
+			args.contentHash === undefined
+				? ctx.db
+						.query("localeProposals")
+						.withIndex("by_project_and_catalogPath", (q) =>
+							q
+								.eq("projectId", args.projectId)
+								.eq("catalogPath", args.catalogPath),
+						)
+				: ctx.db
+						.query("localeProposals")
+						.withIndex(
+							"by_project_and_catalogPath_and_catalogContentHash",
+							(q) =>
+								q
+									.eq("projectId", args.projectId)
+									.eq("catalogPath", args.catalogPath)
+									.eq("catalogContentHash", args.contentHash),
+						);
+		const matches = await candidates.order("desc").paginate({
+			numItems: ARTIFACT_CANDIDATE_PAGE_SIZE,
+			cursor: args.cursor,
+		});
 		const proposals = [];
 		for (const proposal of matches.page) {
 			if (proposal.status !== "ready") continue;
@@ -191,69 +204,166 @@ export const stageDecisions = internalMutation({
 							.gt("messageId", args.after),
 			)
 			.take(16);
-		const next = [];
-		for (const value of values) {
-			if (
-				!isHumanOrAuthorizedReview(value.updatedBy, value.reviewAuthorization)
-			)
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "A delivered Locale value lacks authorized review.",
-				});
-			const target = await ctx.db
-				.query("catalogProjectionMessages")
-				.withIndex("by_projection_and_messageId_and_localeId", (q) =>
-					q
-						.eq("projectionId", observation.projectionId)
-						.eq("messageId", value.messageId)
-						.eq("localeId", localeId),
-				)
-				.unique();
-			if (
-				!target ||
-				target.value !== value.value ||
-				target.sourceFingerprint !== value.sourceFingerprint
-			)
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message:
-						"Delivered Locale value does not match its reviewed Source/value pair.",
-				});
-			const basis = {
-				deliveryProjectionId: observation.projectionId,
-				localeProposalId: observation.proposalId,
-				messageId: value.messageId,
-				localeId: observation.localeId,
-				sourceFingerprint: value.sourceFingerprint,
-				valueFingerprint: await sha256Hex(value.value),
-				recordedBy: value.updatedBy,
-				...(value.reviewAuthorization
-					? { reviewAuthorization: value.reviewAuthorization }
-					: {}),
-				recordedAt: value.updatedAt,
-			};
-			if (value.value.length === 0) {
-				if (!value.intentionalBlankReason)
-					throw new ConvexError({
-						code: "INTEGRITY",
-						message:
-							"A delivered empty value lacks its Intentional Blank reason.",
-					});
-				next.push({
-					...basis,
-					kind: "intentionalBlank" as const,
-					reason: value.intentionalBlankReason,
-				});
-			} else next.push({ ...basis, kind: "translatorConfirmation" as const });
-		}
-		await recordDecisions(ctx, {
-			projectId: observation.projectId,
-			state: await decisionStateFor(ctx, observation.projectId),
-			next,
-		});
+		await stageReviewedDecisions(
+			ctx,
+			{
+				projectId: observation.projectId,
+				projectionId: observation.projectionId,
+				proposalId: observation.proposalId,
+				localeId,
+			},
+			values,
+		);
 		const done = values.length < 16;
 		if (done) await ctx.db.patch(observation._id, { decisionsStaged: true });
 		return { done, after: values[values.length - 1]?.messageId };
+	},
+});
+
+type ReviewDestination = {
+	projectId: Id<"projects">;
+	projectionId: Id<"catalogProjections">;
+	proposalId: Id<"localeProposals">;
+	localeId: Id<"locales">;
+};
+
+/** Carry original review evidence into a private projection, never creating a new approval. */
+async function stageReviewedDecisions(
+	ctx: MutationCtx,
+	input: ReviewDestination,
+	values: readonly Doc<"localeProposalValues">[],
+	partial = false,
+) {
+	const next = [];
+	for (const value of values) {
+		if (!isHumanOrAuthorizedReview(value.updatedBy, value.reviewAuthorization))
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "A delivered Locale value lacks authorized review.",
+			});
+		const target = await ctx.db
+			.query("catalogProjectionMessages")
+			.withIndex("by_projection_and_messageId_and_localeId", (q) =>
+				q
+					.eq("projectionId", input.projectionId)
+					.eq("messageId", value.messageId)
+					.eq("localeId", input.localeId),
+			)
+			.unique();
+		if (
+			!target ||
+			target.value !== value.value ||
+			target.sourceFingerprint !== value.sourceFingerprint
+		) {
+			if (partial) continue;
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message:
+					"Delivered Locale value does not match its reviewed Source/value pair.",
+			});
+		}
+		// A removed or transformed Git value is not the reviewed output.
+		if (
+			partial &&
+			(target.materialized ||
+				target.gitValueFingerprint !== (await sha256Hex(value.value)))
+		)
+			continue;
+		const basis = {
+			deliveryProjectionId: input.projectionId,
+			localeProposalId: input.proposalId,
+			messageId: value.messageId,
+			localeId: input.localeId,
+			sourceFingerprint: value.sourceFingerprint,
+			valueFingerprint: await sha256Hex(value.value),
+			recordedBy: value.updatedBy,
+			...(value.reviewAuthorization
+				? { reviewAuthorization: value.reviewAuthorization }
+				: {}),
+			recordedAt: value.updatedAt,
+		};
+		if (value.value.length === 0) {
+			if (!value.intentionalBlankReason)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message:
+						"A delivered empty value lacks its Intentional Blank reason.",
+				});
+			next.push({
+				...basis,
+				kind: "intentionalBlank" as const,
+				reason: value.intentionalBlankReason,
+			});
+		} else next.push({ ...basis, kind: "translatorConfirmation" as const });
+	}
+	await recordDecisions(ctx, {
+		projectId: input.projectId,
+		state: await decisionStateFor(ctx, input.projectId),
+		next,
+	});
+	return next.map((decision) => decision.messageId);
+}
+
+/** Source Contract matches are computed from immutable documents by the staging action. */
+export const stageReviewedPairs = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		proposalId: v.id("localeProposals"),
+		localeId: v.id("locales"),
+		expectedRevision: v.number(),
+		messageIds: v.array(v.string()),
+		actor: v.optional(repositoryAdapterActorValidator),
+	},
+	handler: async (ctx, args) => {
+		await authorizeProjectIngestion(ctx, args.projectId, args.actor);
+		const [projection, proposal, locale] = await Promise.all([
+			ctx.db.get(args.projectionId),
+			ctx.db.get(args.proposalId),
+			ctx.db.get(args.localeId),
+		]);
+		if (
+			!projection ||
+			projection.projectId !== args.projectId ||
+			projection.status !== "staging" ||
+			!proposal ||
+			proposal.projectId !== args.projectId ||
+			proposal.status !== "ready" ||
+			proposal.revision !== args.expectedRevision ||
+			!locale ||
+			locale.projectId !== args.projectId ||
+			locale.code !== proposal.localeCode ||
+			locale.isSource ||
+			(locale.archivedAt !== undefined && !locale.pendingBinding)
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "Reviewed Locale evidence changed while staging.",
+			});
+		if (
+			args.messageIds.length > 16 ||
+			new Set(args.messageIds).size !== args.messageIds.length
+		)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "Stage at most 16 distinct reviewed Locale values at once.",
+			});
+		const values = await Promise.all(
+			args.messageIds.map((messageId) =>
+				ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal_and_messageId", (q) =>
+						q.eq("proposalId", args.proposalId).eq("messageId", messageId),
+					)
+					.unique(),
+			),
+		);
+		return await stageReviewedDecisions(
+			ctx,
+			args,
+			values.filter((value) => value !== null),
+			true,
+		);
 	},
 });
 
@@ -272,6 +382,88 @@ export async function assertDeliveryStaged(
 		throw new ConvexError({
 			code: "INTEGRITY",
 			message: "Locale delivery evidence is incomplete.",
+		});
+}
+
+/** Exact file delivery and per-value review are independent facts. Formatting or
+ * unrelated edits must not erase review of an unchanged Source/target pair. */
+async function stageMatchingReviewedPairs(
+	ctx: ActionCtx,
+	input: {
+		projectId: Id<"projects">;
+		projectionId: Id<"catalogProjections">;
+		repository: string;
+		commit: string;
+		catalogPath: string;
+		localeId: Id<"locales">;
+		localeCode: string;
+		actor?: RepositoryAdapterActor;
+	},
+	currentSource: ReadonlyMap<string, CatalogDocument["messages"][number]>,
+	target: CatalogDocument,
+) {
+	const remaining = new Set(target.messages.map((message) => message.id));
+	let cursor: string | null = null;
+	for (
+		let page = 0;
+		page < MAX_ARTIFACT_CANDIDATE_PAGES && remaining.size;
+		page++
+	) {
+		const candidates: {
+			proposals: Doc<"localeProposals">[];
+			isDone: boolean;
+			continueCursor: string;
+		} = await ctx.runQuery(internal.localeDelivery.matchingArtifact, {
+			projectId: input.projectId,
+			catalogPath: input.catalogPath,
+			repository: input.repository,
+			commit: input.commit,
+			cursor,
+			actor: input.actor,
+		});
+		for (const proposal of candidates.proposals) {
+			if (proposal.localeCode !== input.localeCode) continue;
+			const blob = await ctx.storage.get(proposal.sourceStorageId);
+			if (!blob)
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Reviewed Locale source evidence is missing.",
+				});
+			const source = parse(await blob.text());
+			const eligible = source.messages
+				.filter((message) => {
+					const current = currentSource.get(message.id);
+					return (
+						remaining.has(message.id) &&
+						current &&
+						sourceContractsMatch(message, current)
+					);
+				})
+				.map((message) => message.id);
+			for (let offset = 0; offset < eligible.length; offset += 16) {
+				const matched: string[] = await ctx.runMutation(
+					internal.localeDelivery.stageReviewedPairs,
+					{
+						projectId: input.projectId,
+						projectionId: input.projectionId,
+						localeId: input.localeId,
+						proposalId: proposal._id,
+						expectedRevision: proposal.revision,
+						messageIds: eligible.slice(offset, offset + 16),
+						actor: input.actor,
+					},
+				);
+				for (const id of matched) remaining.delete(id);
+			}
+			if (!remaining.size) return;
+		}
+		if (candidates.isDone) return;
+		cursor = candidates.continueCursor;
+	}
+	if (remaining.size)
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "Locale review matching exceeded its bounded proposal history.",
 		});
 }
 
@@ -361,7 +553,25 @@ export async function stageLocaleDeliveries(
 				message:
 					"Locale delivery artifact matching exceeded its bounded proposal history.",
 			});
-		if (!proposal) continue;
+		if (!proposal) {
+			if (bound)
+				await stageMatchingReviewedPairs(
+					ctx,
+					{
+						projectId: input.projectId,
+						projectionId: input.projectionId,
+						repository: input.repository,
+						commit: input.commit,
+						catalogPath: file.catalogPath,
+						localeId: bound.localeId,
+						localeCode: bound.localeCode,
+						actor: input.actor,
+					},
+					currentSource,
+					parse(file.content),
+				);
+			continue;
+		}
 		// Proposal source snapshots are created from an accepted Baseline. The action
 		// only runs inside a prospective accepted descendant or explicit realization.
 		if (++observations > 128)
@@ -402,6 +612,14 @@ export async function stageLocaleDeliveries(
 					"Locale delivery decisions exceeded their bounded staging steps.",
 			});
 	}
+	await ctx.runMutation(
+		internal.catalogProjection.completeLocaleReviewEvidence,
+		{
+			projectId: input.projectId,
+			projectionId: input.projectionId,
+			actor: input.actor,
+		},
+	);
 }
 
 /** A failed private attempt must not consume the bounded decision-history
@@ -461,36 +679,80 @@ export const discardDecisions = internalMutation({
 	},
 });
 
+async function proposalBindingEvidence(
+	ctx: QueryCtx,
+	proposalId: Id<"localeProposals">,
+) {
+	const proposal = await ctx.db.get(proposalId);
+	if (!proposal)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Locale Proposal not found.",
+		});
+	await requireViewer(ctx, proposal.projectId);
+	const project = await ctx.db.get(proposal.projectId);
+	if (!project?.baselineSnapshotId) return null;
+	const locale = await ctx.db
+		.query("locales")
+		.withIndex("by_project_code", (q) =>
+			q.eq("projectId", proposal.projectId).eq("code", proposal.localeCode),
+		)
+		.unique();
+	const activeProjectionId = project.activeCatalogProjectionId;
+	const currentRow =
+		locale && locale.archivedAt === undefined && activeProjectionId
+			? await ctx.db
+					.query("catalogProjectionMessages")
+					.withIndex("by_projection_and_localeId_and_valueFingerprint", (q) =>
+						q.eq("projectionId", activeProjectionId).eq("localeId", locale._id),
+					)
+					.first()
+			: null;
+	return { proposal, project, locale, currentRow };
+}
+
+/** Active workspace binding is independent of observing an exact delivery artifact. */
+export const bindingForProposal = query({
+	args: { proposalId: v.id("localeProposals") },
+	handler: async (ctx, args) => {
+		const evidence = await proposalBindingEvidence(ctx, args.proposalId);
+		if (!evidence) return null;
+		const { proposal, project, locale, currentRow } = evidence;
+		const catalogPath = proposalDeliveryIdentity(proposal).catalogPath;
+		if (
+			!locale ||
+			locale.pendingBinding ||
+			!currentRow ||
+			currentRow.isSource ||
+			locale.catalogPath !== catalogPath ||
+			currentRow.catalogPath !== catalogPath ||
+			currentRow.localeCode !== proposal.localeCode ||
+			!project.activeCatalogProjectionId
+		)
+			return null;
+		const publication = await projectionPublicationStateFor(
+			ctx,
+			project.activeCatalogProjectionId,
+		);
+		if (
+			publication?.status !== "published" ||
+			publication.snapshotId !== project.baselineSnapshotId
+		)
+			return null;
+		return {
+			localeId: locale._id,
+			catalogPath,
+			snapshotId: publication.snapshotId,
+		};
+	},
+});
+
 export const forProposal = query({
 	args: { proposalId: v.id("localeProposals") },
 	handler: async (ctx, args) => {
-		const proposal = await ctx.db.get(args.proposalId);
-		if (!proposal)
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Locale Proposal not found.",
-			});
-		await requireViewer(ctx, proposal.projectId);
-		const project = await ctx.db.get(proposal.projectId);
-		if (!project?.baselineSnapshotId) return null;
-		const locale = await ctx.db
-			.query("locales")
-			.withIndex("by_project_code", (q) =>
-				q.eq("projectId", proposal.projectId).eq("code", proposal.localeCode),
-			)
-			.unique();
-		const activeProjectionId = project.activeCatalogProjectionId;
-		const currentRow =
-			locale && locale.archivedAt === undefined && activeProjectionId
-				? await ctx.db
-						.query("catalogProjectionMessages")
-						.withIndex("by_projection_and_localeId_and_valueFingerprint", (q) =>
-							q
-								.eq("projectionId", activeProjectionId)
-								.eq("localeId", locale._id),
-						)
-						.first()
-				: null;
+		const evidence = await proposalBindingEvidence(ctx, args.proposalId);
+		if (!evidence) return null;
+		const { proposal, project, locale, currentRow } = evidence;
 		const observations = await ctx.db
 			.query("localeDeliveryObservations")
 			.withIndex("by_proposal", (q) => q.eq("proposalId", proposal._id))
