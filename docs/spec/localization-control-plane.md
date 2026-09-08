@@ -17,6 +17,7 @@ when a product decision changes.
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
+| Managed marketing content and multiple content collections | Not implemented; see the [proposed collection architecture](content-collections.md) |
 
 Charted by [Wayfinder: Make Blabla Brickit's trusted localization control
 plane](https://github.com/serge-the-hedge/flutte/issues/4) and locked by [Lock
@@ -1122,11 +1123,10 @@ answered differently later.
   [capacity and storage trade-offs](../adding-languages.md#several-languages-and-capacity);
   structural guards do not establish latency or quota guarantees for 50 or
   100 full-size languages.
-- **Generalizing the module beyond Flutter ARB.** The first interface should
-  expose real variation before anyone judges whether other formats are adapters
-  or a redesign.
-- **Store Listing Content.** It shares Locale identity and is outside ARB
-  snapshots, release bundles, and reconciliation.
+- **Content beyond Flutter ARB.** The [collection proposal](content-collections.md)
+  covers directly authored marketing copy and its relationship to the existing
+  repository workflow. Store Listing Content remains outside ARB snapshots,
+  release bundles, and reconciliation; implementation is pending.
 
 ### Standing risks, recorded rather than solved
 
