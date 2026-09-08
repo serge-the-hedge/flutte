@@ -18,8 +18,7 @@ Loopback HTTP is supported for local tests. Redirects are rejected.
 
 ## Requests
 
-Use `node <helper-path> --help` to inspect options. The helper prefixes endpoint
-paths with `/api/agent/v1`:
+The helper prefixes endpoint paths with `/api/agent/v1`:
 
 ```text
 node <helper-path> request GET /projects/current
@@ -51,8 +50,8 @@ This helper adds no scopes, review authority, or CLI delivery compatibility.
 `scan` supports the paginated read endpoints listed by `--help`. For example:
 
 ```text
-node <helper-path> scan GET /workspace/search --query query.json --max-pages 4 --max-bytes 1048576
-node <helper-path> scan POST /proposal-examples/search --body examples.json --max-pages 4
+node <helper-path> scan GET /workspace/search --query query.json
+node <helper-path> scan POST /proposal-examples/search --body examples.json
 ```
 
 The output contains `pages` (unaltered API page objects), `nextCursor`, `complete`,

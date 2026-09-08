@@ -13,14 +13,14 @@ permission.
 1. Read [transport](../_blabla/references/transport.md) and discover the project's
    Dictionary capability. If access is missing, report the required scope; do not
    switch to another agent's credential.
-2. Read the [Dictionary](../_blabla/references/api.md#get-dictionary), including
+2. Read the [Dictionary](../_blabla/references/dictionary-api.md#get-dictionary), including
    its revision and complete entries. Use exact term lookup when adding a Locale
    rendering. Follow continuations to cover an assigned audit.
 3. Use [retrieval](../_blabla/references/retrieval.md) where example lookup is
    authorized (`search` scope). Establish each term's meaning from the assignment
    and evidence. Frequency alone is not policy. Keep voice-guide editing with
    the human; the general guide and optional Locale add-ons remain live context.
-4. [Save a bounded batch](../_blabla/references/api.md#post-dictionaryterms) with
+4. [Save a bounded batch](../_blabla/references/dictionary-api.md#post-dictionaryterms) with
    the read `expectedRevision`. An existing term is replaced in full: preserve
    its definition and other Locale renderings unless the assignment changes
    them. An untranslatable term has no Locale renderings. Remove a term only when

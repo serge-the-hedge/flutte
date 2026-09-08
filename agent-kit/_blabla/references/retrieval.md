@@ -37,10 +37,14 @@ use `{ "kind": "task", "taskId": "…" }` for the translating task owner, or
 Reviewed draft examples are not proof of release. Reviewers retrieve their own
 evidence rather than relying only on examples selected by the translator.
 
-For a few examples, stop once the evidence answers the question and state that
-the search was partial. For exhaustive occurrence audits use `quality=all` unless the assignment explicitly
-limits the audit to confirmed values. For exhaustive repair or terminology audits, follow
-`nextCursor` until null, including empty intermediate pages. A helper budget stop
-is a checkpoint, not completion. Preserve filters while resuming; changed filters
-or a stale-basis response require a fresh search. Report remaining scope when the
-assignment's time or request budget is exhausted.
+For a few examples, stop once the evidence answers the question and report that
+scope. For exhaustive occurrence audits use `quality=all` unless the assignment
+limits the audit to confirmed values. Follow the [scan/resume contract](transport.md#bounded-scans)
+through every page, preserving filters; changed filters or stale basis require a
+fresh search. Report unfinished scope when the assignment's budget is exhausted.
+
+For complete repairs, discover `/workspace/work` one Locale at a time and finish
+that initial pass before accepting reviews. Queue matches require inspection,
+not automatic overwrites; use the [translation skill](../../blabla-translate/SKILL.md)
+for assigned candidates. After review, restart discovery with the same selected
+reasons and require a complete zero-match pass before claiming they are fixed.
