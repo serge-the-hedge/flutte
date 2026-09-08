@@ -515,7 +515,14 @@ async function withAgent<T>(
 	request: Request,
 	scope: AgentScope | readonly AgentScope[],
 	rateLimitName: AgentRateLimitName,
-	handler: (token: string, actor: ProposalActor) => Promise<T>,
+	handler: (
+		token: string,
+		actor: ProposalActor,
+		project: {
+			type: "basic" | "repository";
+			managedCollectionId?: Id<"contentCollections">;
+		},
+	) => Promise<T>,
 	options: { requireCliProtocol?: boolean } = {},
 ): Promise<{ value: T; responseHeaders: Record<string, string> }> {
 	const token = readToken(request);
@@ -541,10 +548,14 @@ async function withAgent<T>(
 	});
 	await ctx.runMutation(internalApi.agentApi.touchToken, { tokenId: auth._id });
 	return {
-		value: await handler(token, {
-			projectId: auth.projectId,
-			tokenId: auth._id,
-		}),
+		value: await handler(
+			token,
+			{
+				projectId: auth.projectId,
+				tokenId: auth._id,
+			},
+			{ type: auth.projectType, managedCollectionId: auth.managedCollectionId },
+		),
 		responseHeaders,
 	};
 }
@@ -1150,8 +1161,8 @@ http.route({
 					request,
 					"search",
 					"agentSearch",
-					async (token) =>
-						await ctx.runQuery(internalApi.agentRetrieval.workspaceSearch, {
+					async (token, _actor, project) => {
+						const options = {
 							token,
 							q: url.searchParams.get("q") ?? undefined,
 							localeCode: url.searchParams.get("localeCode") ?? undefined,
@@ -1176,7 +1187,19 @@ http.route({
 								"compact",
 								"full",
 							] as const),
-						}),
+						};
+						if (project.type === "basic" && project.managedCollectionId) {
+							const { view: _view, ...managedOptions } = options;
+							return ctx.runQuery(internalApi.agentContent.search, {
+								...managedOptions,
+								collectionId: project.managedCollectionId,
+							});
+						}
+						return ctx.runQuery(
+							internalApi.agentRetrieval.workspaceSearch,
+							options,
+						);
+					},
 				),
 			);
 		} catch (error) {
@@ -1233,16 +1256,65 @@ http.route({
 					request,
 					"read",
 					"agentRead",
-					async (token) =>
-						await ctx.runQuery(internalApi.agentRetrieval.workspaceContext, {
-							token,
-							keys,
-							locales,
-						}),
+					async (token, _actor, project) =>
+						project.type === "basic" && project.managedCollectionId
+							? ctx.runQuery(internalApi.agentContent.context, {
+									token,
+									keys,
+									locales,
+									collectionId: project.managedCollectionId,
+								})
+							: ctx.runQuery(internalApi.agentRetrieval.workspaceContext, {
+									token,
+									keys,
+									locales,
+								}),
 				),
 			);
 		} catch (error) {
 			return routeError(error, { NOT_FOUND: 404, STALE_BASIS: 409 });
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/workspace/download",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			if (!isStringArray(body.keys) || !isStringArray(body.locales))
+				throw new Error("keys and locales must be string arrays.");
+			const keys = body.keys;
+			const locales = body.locales;
+			const mode = body.mode ?? "reviewed";
+			if (mode !== "reviewed" && mode !== "partial" && mode !== "draft")
+				throw new Error("mode must be reviewed, partial, or draft.");
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"read",
+					"agentRead",
+					async (token, _actor, project) => {
+						if (project.type !== "basic" || !project.managedCollectionId)
+							throw new ConvexError({
+								code: "BAD_STATE",
+								message:
+									"Repository projects use Release Bundles for delivery.",
+							});
+						return ctx.runQuery(internalApi.agentContent.download, {
+							token,
+							collectionId: project.managedCollectionId,
+							keys,
+							locales,
+							mode,
+						});
+					},
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404, NEEDS_REVIEW: 409 });
 		}
 	}),
 });
@@ -1392,6 +1464,17 @@ http.route({
 						await ctx.runMutation(internalApi.agentDictionary.save, {
 							token,
 							expectedRevision,
+							expectedDictionaryId:
+								body.expectedDictionaryId === undefined
+									? undefined
+									: (requiredJsonString(
+											body,
+											"expectedDictionaryId",
+										) as Id<"dictionaries">),
+							expectedConnectionRevision:
+								body.expectedConnectionRevision === undefined
+									? undefined
+									: requiredJsonNumber(body, "expectedConnectionRevision"),
 							terms,
 						}),
 				),
@@ -1420,6 +1503,17 @@ http.route({
 						await ctx.runMutation(internalApi.agentDictionary.remove, {
 							token,
 							expectedRevision,
+							expectedDictionaryId:
+								body.expectedDictionaryId === undefined
+									? undefined
+									: (requiredJsonString(
+											body,
+											"expectedDictionaryId",
+										) as Id<"dictionaries">),
+							expectedConnectionRevision:
+								body.expectedConnectionRevision === undefined
+									? undefined
+									: requiredJsonNumber(body, "expectedConnectionRevision"),
 							sourceTerm,
 						}),
 				),

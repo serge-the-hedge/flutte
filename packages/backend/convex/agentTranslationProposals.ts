@@ -31,6 +31,7 @@ import {
 import { applyAgentTargetValue } from "./catalogWorkspace";
 import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget as currentWorkspaceTarget } from "./catalogWorkspaceRead";
+import { requireManagedCollection } from "./contentCollections";
 import { type ManagedBasis, managedBasisValidator } from "./contentModel";
 import { assertTargetValueContract } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
@@ -568,6 +569,10 @@ async function createCatalogWorkspaceTask(
 		createdByTokenId?: Id<"apiTokens">;
 	},
 ) {
+	const project = await ctx.db.get(input.projectId);
+	const collectionId =
+		input.collectionId ??
+		(project?.type === "basic" ? project.managedCollectionId : undefined);
 	assertBoundedString(input.title, "title", MAX_TASK_TITLE_BYTES);
 	if (
 		input.messageIds.length === 0 ||
@@ -600,8 +605,8 @@ async function createCatalogWorkspaceTask(
 	const targets = [];
 	let managedReadBytes = 0;
 	for (const messageId of uniqueMessageIds) {
-		const target = input.collectionId
-			? { kind: "managedCollection" as const, collectionId: input.collectionId }
+		const target = collectionId
+			? { kind: "managedCollection" as const, collectionId: collectionId }
 			: { kind: "catalogWorkspace" as const };
 		const current = await selectedTaskCurrent(
 			ctx,
@@ -609,7 +614,7 @@ async function createCatalogWorkspaceTask(
 			messageId,
 			input.localeId,
 		);
-		if (input.collectionId) {
+		if (collectionId) {
 			managedReadBytes += byteLength(current);
 			if (managedReadBytes > 4 * 1024 * 1024)
 				throw new ConvexError({
@@ -624,8 +629,8 @@ async function createCatalogWorkspaceTask(
 			localeId: locale._id,
 			localeCode: locale.code,
 			// Managed targets retain revision identities; page reads resolve live text.
-			sourceValue: input.collectionId ? undefined : current.source.value,
-			targetValue: input.collectionId ? undefined : current.value,
+			sourceValue: collectionId ? undefined : current.source.value,
+			targetValue: collectionId ? undefined : current.value,
 			targetCatalogPath: current.catalogPath,
 			basis: current.basis,
 		});
@@ -644,8 +649,8 @@ async function createCatalogWorkspaceTask(
 			: { createdByTokenId: input.createdByTokenId }),
 		createdBy: input.actor,
 		clientProposalKey: input.title.trim(),
-		target: input.collectionId
-			? { kind: "managedCollection", collectionId: input.collectionId }
+		target: collectionId
+			? { kind: "managedCollection", collectionId: collectionId }
 			: { kind: "catalogWorkspace" },
 		taskScope: {
 			localeId: locale._id,
@@ -990,6 +995,10 @@ export const createTaskForAgent = internalMutation({
 	}),
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "propose");
+		const project = await ctx.db.get(token.projectId);
+		const collectionId =
+			args.collectionId ??
+			(project?.type === "basic" ? project.managedCollectionId : undefined);
 		assertBoundedString(
 			args.clientTaskKey,
 			"clientTaskKey",
@@ -1028,9 +1037,9 @@ export const createTaskForAgent = internalMutation({
 			const expected = [...new Set(args.messageIds)].sort();
 			const actual = targets.map((target) => target.messageId).sort();
 			if (
-				(args.collectionId
+				(collectionId
 					? existing.target.kind !== "managedCollection" ||
-						existing.target.collectionId !== args.collectionId
+						existing.target.collectionId !== collectionId
 					: existing.target.kind !== "catalogWorkspace") ||
 				!existing.taskScope ||
 				existing.taskScope.localeId !== locale._id ||
@@ -1052,7 +1061,7 @@ export const createTaskForAgent = internalMutation({
 		return await createCatalogWorkspaceTask(ctx, {
 			projectId: token.projectId,
 			title: args.clientTaskKey,
-			collectionId: args.collectionId,
+			collectionId: collectionId,
 			localeId: locale._id,
 			messageIds: args.messageIds,
 			actor: { kind: "agent", id: token._id },
@@ -2807,6 +2816,12 @@ async function applyCandidateReview(
 			message: "Translation proposal not found.",
 		});
 	}
+	if (proposal.target.kind === "managedCollection")
+		await requireManagedCollection(
+			ctx,
+			proposal.projectId,
+			proposal.target.collectionId,
+		);
 	const candidate = await ctx.db.get(revision.candidateId);
 	if (!candidate || candidate.latestRevisionId !== revision._id) {
 		throw new ConvexError({

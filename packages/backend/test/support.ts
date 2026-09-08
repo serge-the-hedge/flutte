@@ -92,6 +92,33 @@ export async function createProject(
 	});
 }
 
+/** Retained collection fixtures model data authored before standalone Basic projects. */
+export async function createLegacyCollection(
+	t: Backend,
+	args: {
+		projectId: Id<"projects">;
+		name: string;
+		localeIds: Id<"locales">[];
+	},
+) {
+	return await t.run(async (ctx) => {
+		const collectionId = await ctx.db.insert("contentCollections", {
+			projectId: args.projectId,
+			name: args.name,
+			membershipRevision: 1,
+			createdAt: Date.now(),
+		});
+		for (const localeId of args.localeIds)
+			await ctx.db.insert("contentCollectionLocales", {
+				projectId: args.projectId,
+				collectionId,
+				localeId,
+				active: true,
+			});
+		return collectionId;
+	});
+}
+
 /**
  * The windowed stand-in for the retired whole-catalog read in tests: read
  * the Navigation read for order and identity, then compose exactly the

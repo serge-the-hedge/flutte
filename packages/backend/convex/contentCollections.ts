@@ -21,6 +21,12 @@ export async function requireManagedCollection(
 			code: "NOT_FOUND",
 			message: "Collection not found.",
 		});
+	if (collection.movingToProjectId)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"This content is moving to its own project. Try again after the move completes.",
+		});
 	return collection;
 }
 export async function collectionMemberships(
@@ -53,6 +59,15 @@ export async function readCollections(ctx: ReadCtx, projectId: Id<"projects">) {
 			code: "LIMIT_EXCEEDED",
 			message: "Project collection configuration exceeds its bounds.",
 		});
+	if (project.type === "basic")
+		return collections
+			.filter((c) => c._id === project.managedCollectionId)
+			.map((c) => ({
+				id: c._id,
+				kind: "managed" as const,
+				name: project.name,
+				membershipRevision: c.membershipRevision,
+			}));
 	return [
 		{
 			id: "app" as const,
@@ -139,44 +154,11 @@ export const create = mutation({
 	},
 	handler: async (ctx, args) => {
 		await requireEditor(ctx, args.projectId);
-		const name = args.name.trim();
-		if (!name || name.length > 128)
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Collection name must contain 1–128 characters.",
-			});
-		const collections = await ctx.db
-			.query("contentCollections")
-			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-			.take(MAX_CONTENT_COLLECTIONS);
-		if (collections.length >= MAX_CONTENT_COLLECTIONS)
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: "A project supports at most 64 managed collections.",
-			});
-		if (
-			collections.some((c) => c.name.toLowerCase() === name.toLowerCase()) ||
-			name.toLowerCase() === "app"
-		)
-			throw new ConvexError({
-				code: "CONFLICT",
-				message: "Collection name already exists.",
-			});
-		await validateLocales(ctx, args.projectId, args.localeIds);
-		const id = await ctx.db.insert("contentCollections", {
-			projectId: args.projectId,
-			name,
-			membershipRevision: 1,
-			createdAt: Date.now(),
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Each project has one set of strings. Create a Basic project for separately authored content.",
 		});
-		for (const localeId of args.localeIds)
-			await ctx.db.insert("contentCollectionLocales", {
-				projectId: args.projectId,
-				collectionId: id,
-				localeId,
-				active: true,
-			});
-		return id;
 	},
 });
 export const setLocales = mutation({

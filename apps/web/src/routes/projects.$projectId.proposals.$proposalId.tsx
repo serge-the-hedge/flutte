@@ -33,6 +33,7 @@ import {
 	exactTaskBatchRevisionIds,
 	type TranslationTaskBasisState,
 } from "@/lib/translation-task-review";
+import { useCanonicalTaskProject } from "@/lib/use-canonical-task-project";
 
 export const Route = createFileRoute(
 	"/projects/$projectId/proposals/$proposalId",
@@ -164,18 +165,15 @@ function reviewDecisionLabel(kind: string) {
 }
 
 function ProposalDetailRoute() {
-	const { proposalId } = useParams({
+	const { projectId, proposalId } = useParams({
 		from: "/projects/$projectId/proposals/$proposalId",
 	});
-	return <ProposalDetailContent key={proposalId} />;
+	return <ProposalDetailContent key={`${projectId}:${proposalId}`} />;
 }
 
 function ProposalDetailContent() {
 	const { projectId, proposalId } = useParams({
 		from: "/projects/$projectId/proposals/$proposalId",
-	});
-	const project = useQuery(api.projects.get, {
-		projectId: convexId<"projects">(projectId),
 	});
 	const [pageCursors, setPageCursors] = useState([0]);
 	const detail = useQuery(api.agentTranslationProposals.getForReview, {
@@ -183,11 +181,23 @@ function ProposalDetailContent() {
 		limit: 8,
 		proposalId: convexId<"agentTranslationProposals">(proposalId),
 	});
+	const relocating = useCanonicalTaskProject(
+		projectId,
+		proposalId,
+		detail?.proposal.projectId,
+	);
+	const project = useQuery(
+		api.projects.get,
+		detail === undefined || relocating
+			? "skip"
+			: { projectId: convexId<"projects">(projectId) },
+	);
 	const reviewerTokens = useQuery(
 		api.apiTokens.list,
-		detail?.candidates.some(({ reviews }) =>
-			reviews.some((review) => review.reviewer.kind === "agent"),
-		)
+		!relocating &&
+			detail?.candidates.some(({ reviews }) =>
+				reviews.some((review) => review.reviewer.kind === "agent"),
+			)
 			? { projectId: convexId<"projects">(projectId) }
 			: "skip",
 	);
@@ -245,13 +255,20 @@ function ProposalDetailContent() {
 		[],
 	);
 
-	if (detail === undefined) {
+	if (detail === undefined || relocating) {
 		return (
-			<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
+			<div
+				className="p-5"
+				role="status"
+				aria-label={
+					relocating ? "Opening the task’s current project" : "Loading task"
+				}
+			>
 				<Skeleton className="h-48 w-full" />
-			</ProjectShell>
+			</div>
 		);
 	}
+
 	if (detail === null) {
 		return (
 			<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
@@ -432,11 +449,7 @@ function ProposalDetailContent() {
 	);
 
 	return (
-		<ProjectShell
-			projectId={projectId}
-			title={project?.name ?? "Project"}
-			managed={managed}
-		>
+		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader
 				title={proposal.clientProposalKey}
 				description={
@@ -575,10 +588,10 @@ function ProposalDetailContent() {
 						<Link
 							to="/projects/$projectId/strings"
 							params={{ projectId }}
-							search={{ collection: proposal.target.collectionId }}
+							search={{}}
 							className="text-sm underline"
 						>
-							Back to collection
+							Back to Strings
 						</Link>
 					) : null}
 				</div>

@@ -180,6 +180,11 @@ export const bindingPlan = internalQuery({
 		}
 
 		const project = await assertProjectExists(ctx, locale.projectId);
+		if (project.type === "basic")
+			throw new ConvexError({
+				code: "BAD_STATE",
+				message: "Basic project languages have no repository file binding.",
+			});
 		const snapshot = project.baselineSnapshotId
 			? await ctx.db.get(project.baselineSnapshotId)
 			: null;

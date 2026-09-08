@@ -8,6 +8,14 @@ import {
 	query,
 } from "./_generated/server";
 import { encodedSize } from "./catalogWorkspaceView";
+import {
+	type GuidanceScope,
+	guidanceEntries,
+	guidanceEntry,
+	guidanceState,
+	projectDictionaryConnection,
+	resolveDictionaryWrite,
+} from "./dictionaryAccess";
 import { normalizeLocaleCode } from "./lib";
 import { introductionTargetFor } from "./localeIntroductionTargets";
 import { messageLiteralParts } from "./messageFacts";
@@ -71,7 +79,7 @@ function validateRevision(revision: number) {
 /** Guidance can prepare configured targets before they have a Catalog Binding. */
 async function validateLocales(
 	ctx: ReadCtx,
-	projectId: Id<"projects">,
+	projectId: Id<"projects"> | undefined,
 	localeCodes: readonly string[],
 	options: {
 		allowArchived?: boolean;
@@ -95,6 +103,7 @@ async function validateLocales(
 			});
 		}
 		seen.add(localeCode);
+		if (!projectId) continue;
 		const locale = await ctx.db
 			.query("locales")
 			.withIndex("by_project_code", (q) =>
@@ -139,19 +148,17 @@ function citation(entry: Doc<"translationGuidanceEntries">) {
 	};
 }
 
-async function currentGuidance(
+export async function localGuidance(
 	ctx: ReadCtx,
-	projectId: Id<"projects">,
+	projectId: Id<"projects"> | undefined,
+	dictionaryId?: Id<"dictionaries">,
 ): Promise<Infer<typeof guidanceListValidator>> {
+	const scope = { projectId, dictionaryId };
 	const [state, entries] = await Promise.all([
-		ctx.db
-			.query("translationGuidanceStates")
-			.withIndex("by_project", (q) => q.eq("projectId", projectId))
-			.unique(),
-		ctx.db
-			.query("translationGuidanceEntries")
-			.withIndex("by_project_and_key", (q) => q.eq("projectId", projectId))
-			.take(MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 2),
+		guidanceState(ctx, scope),
+		guidanceEntries(ctx, scope).take(
+			MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 2,
+		),
 	]);
 	if (
 		entries.length > MAX_DICTIONARY_TERMS + MAX_VOICE_GUIDES + 1 ||
@@ -195,18 +202,52 @@ async function currentGuidance(
 	};
 }
 
+export async function currentGuidance(
+	ctx: ReadCtx,
+	projectId: Id<"projects">,
+): Promise<Infer<typeof guidanceListValidator>> {
+	const local = await localGuidance(ctx, projectId);
+	const link = await projectDictionaryConnection(ctx, projectId);
+	if (!link?.dictionaryId) return local;
+	const shared = await localGuidance(ctx, undefined, link.dictionaryId);
+	return {
+		...local,
+		terms: shared.terms,
+		dictionary: {
+			id: link.dictionaryId,
+			revision: shared.revision,
+			connectionRevision: link.revision,
+		},
+	};
+}
+
 /** One revision per deliberate authorized change, with an immutable copy small
  * enough to retrieve by citation. Unchanged writes do not grow history. */
-async function writeEntry(
+export async function writeEntry(
 	ctx: MutationCtx,
 	input: {
-		projectId: Id<"projects">;
+		projectId?: Id<"projects">;
+		dictionaryId?: Id<"dictionaries">;
 		expectedRevision: number;
 		key: string;
 		content: GuidanceContent | null;
 		authoredBy: GuidanceAuthor;
 	},
 ) {
+	if (Boolean(input.projectId) === Boolean(input.dictionaryId))
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Guidance must belong to exactly one project or Dictionary.",
+		});
+	if (
+		input.dictionaryId &&
+		(!input.key.startsWith("term:") ||
+			(input.content && input.content.kind !== "term"))
+	)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Voice guidance belongs to a project.",
+		});
 	validateRevision(input.expectedRevision);
 	if (input.content) {
 		const dictionaryEntry = input.content.kind === "term";
@@ -218,17 +259,12 @@ async function writeEntry(
 				: "A voice guide supports at most 8 KiB.",
 		);
 	}
+	const scope: GuidanceScope = input.dictionaryId
+		? { dictionaryId: input.dictionaryId }
+		: { projectId: input.projectId };
 	const [state, previous] = await Promise.all([
-		ctx.db
-			.query("translationGuidanceStates")
-			.withIndex("by_project", (q) => q.eq("projectId", input.projectId))
-			.unique(),
-		ctx.db
-			.query("translationGuidanceEntries")
-			.withIndex("by_project_and_key", (q) =>
-				q.eq("projectId", input.projectId).eq("key", input.key),
-			)
-			.unique(),
+		guidanceState(ctx, scope),
+		guidanceEntry(ctx, scope, input.key),
 	]);
 	if ((state?.revision ?? 0) !== input.expectedRevision) {
 		throw new ConvexError({
@@ -259,7 +295,7 @@ async function writeEntry(
 		(previous ? encodedSize(previous.content) : 0);
 	requireEnvelope(
 		termCount <= MAX_DICTIONARY_TERMS,
-		"A project supports at most 256 Dictionary terms.",
+		"Guidance supports at most 256 Dictionary terms.",
 	);
 	requireEnvelope(
 		guideCount <= MAX_VOICE_GUIDES,
@@ -268,12 +304,12 @@ async function writeEntry(
 	// Keep room for citations and matched-text indexes in the bounded read.
 	requireEnvelope(
 		byteLength <= MAX_GUIDANCE_BYTES - 64 * 1024,
-		"Translation guidance exceeds its project byte envelope.",
+		"Translation guidance exceeds its owner byte envelope.",
 	);
 	const authoredBy = input.authoredBy;
 	const authoredAt = Date.now();
 	const revisionId = await ctx.db.insert("translationGuidanceRevisions", {
-		projectId: input.projectId,
+		...scope,
 		key: input.key,
 		content: input.content,
 		revision,
@@ -284,7 +320,7 @@ async function writeEntry(
 		if (previous) await ctx.db.delete(previous._id);
 	} else {
 		const next = {
-			projectId: input.projectId,
+			...scope,
 			key: input.key,
 			content: input.content,
 			revisionId,
@@ -296,7 +332,7 @@ async function writeEntry(
 		else await ctx.db.insert("translationGuidanceEntries", next);
 	}
 	const nextState = {
-		projectId: input.projectId,
+		...scope,
 		revision,
 		termCount,
 		guideCount,
@@ -321,7 +357,7 @@ export async function correctGuidanceLocaleCode(
 	},
 ) {
 	if (input.fromCode === input.toCode) return;
-	const guidance = await currentGuidance(ctx, input.projectId);
+	const guidance = await localGuidance(ctx, input.projectId);
 	const changes: Array<{ key: string; content: GuidanceContent | null }> = [];
 	const fromGuide = guidance.guides.find(
 		(guide) => guide.localeCode === input.fromCode,
@@ -419,12 +455,16 @@ export const guidanceSaveResultValidator = v.object({
 export async function saveDictionaryTerm(
 	ctx: MutationCtx,
 	args: {
-		projectId: Id<"projects">;
+		projectId?: Id<"projects">;
+		dictionaryId?: Id<"dictionaries">;
+		expectedDictionaryId?: Id<"dictionaries">;
+		expectedConnectionRevision?: number;
 		expectedRevision: number;
 		term: DictionaryTerm;
 		authoredBy: GuidanceAuthor;
 	},
 ) {
+	const scope = await resolveDictionaryWrite(ctx, args);
 	requireNonblank(args.term.sourceTerm, "Source term");
 	requireNonblank(args.term.definition, "Term definition");
 	const sourceTerm = args.term.sourceTerm.trim();
@@ -439,12 +479,7 @@ export async function saveDictionaryTerm(
 				code: "VALIDATION",
 				message: "A translated term needs at least one Locale rendering.",
 			});
-		const previous = await ctx.db
-			.query("translationGuidanceEntries")
-			.withIndex("by_project_and_key", (q) =>
-				q.eq("projectId", args.projectId).eq("key", termKey(sourceTerm)),
-			)
-			.unique();
+		const previous = await guidanceEntry(ctx, scope, termKey(sourceTerm));
 		const previousRenderings = new Map(
 			previous?.content.kind === "term" &&
 				previous.content.term.kind === "translated"
@@ -456,7 +491,7 @@ export async function saveDictionaryTerm(
 		);
 		await validateLocales(
 			ctx,
-			args.projectId,
+			scope.projectId,
 			args.term.renderings.map((rendering) => rendering.localeCode),
 			{
 				preservedRenderingLocales: new Set(
@@ -488,6 +523,9 @@ export async function saveDictionaryTerm(
 	const content = { kind: "term" as const, term };
 	return await writeEntry(ctx, {
 		...args,
+		...scope,
+		projectId: scope.projectId,
+		dictionaryId: scope.dictionaryId,
 		key: termKey(sourceTerm),
 		content,
 		authoredBy: args.authoredBy,
@@ -498,6 +536,8 @@ export const saveTerm = mutation({
 	args: {
 		projectId: v.id("projects"),
 		expectedRevision: v.number(),
+		expectedDictionaryId: v.optional(v.id("dictionaries")),
+		expectedConnectionRevision: v.optional(v.number()),
 		term: dictionaryTermValidator,
 	},
 	returns: guidanceSaveResultValidator,
@@ -513,15 +553,21 @@ export const saveTerm = mutation({
 export async function removeDictionaryTerm(
 	ctx: MutationCtx,
 	args: {
-		projectId: Id<"projects">;
+		projectId?: Id<"projects">;
+		dictionaryId?: Id<"dictionaries">;
+		expectedDictionaryId?: Id<"dictionaries">;
+		expectedConnectionRevision?: number;
 		expectedRevision: number;
 		sourceTerm: string;
 		authoredBy: GuidanceAuthor;
 	},
 ) {
+	const scope = await resolveDictionaryWrite(ctx, args);
 	requireNonblank(args.sourceTerm, "Source term");
 	return await writeEntry(ctx, {
 		...args,
+		projectId: scope.projectId,
+		dictionaryId: scope.dictionaryId,
 		key: termKey(args.sourceTerm.trim()),
 		content: null,
 		authoredBy: args.authoredBy,
@@ -532,6 +578,8 @@ export const removeTerm = mutation({
 	args: {
 		projectId: v.id("projects"),
 		expectedRevision: v.number(),
+		expectedDictionaryId: v.optional(v.id("dictionaries")),
+		expectedConnectionRevision: v.optional(v.number()),
 		sourceTerm: v.string(),
 	},
 	returns: guidanceSaveResultValidator,
@@ -699,6 +747,7 @@ export async function readGuidance(
 	const localeCodes = new Set(input.localeCodes);
 	const result = {
 		revision: guidance.revision,
+		dictionary: guidance.dictionary,
 		projectGuide: guidance.projectGuide,
 		terms: guidance.terms.flatMap((entry) => {
 			const matchedTextIndexes = literalsByText.flatMap((literals, index) =>
@@ -740,7 +789,21 @@ export async function readGuidanceRevision(
 ): Promise<Infer<typeof retainedGuidanceRevisionValidator>> {
 	await assertProjectExists(ctx, projectId);
 	const revision = await ctx.db.get(revisionId);
-	if (!revision || revision.projectId !== projectId)
+	const link = await projectDictionaryConnection(ctx, projectId);
+	const dictionary = link?.dictionaryId
+		? await ctx.db.get(link.dictionaryId)
+		: null;
+	const sharedAllowed =
+		revision &&
+		dictionary &&
+		revision.key.startsWith("term:") &&
+		(revision.dictionaryId === dictionary._id ||
+			(dictionary.legacyProjectId !== undefined &&
+				revision.projectId === dictionary.legacyProjectId &&
+				dictionary.legacyRevision !== undefined &&
+				revision.revision <= dictionary.legacyRevision &&
+				dictionary.legacyTermKeys?.includes(revision.key) === true));
+	if (!revision || (revision.projectId !== projectId && !sharedAllowed))
 		throw new ConvexError({
 			code: "NOT_FOUND",
 			message: "Guidance revision not found for this project.",

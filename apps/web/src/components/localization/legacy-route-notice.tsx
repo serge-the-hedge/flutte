@@ -6,12 +6,13 @@ import {
 import { Button } from "@blabla/ui/components/button";
 import { Card, CardContent } from "@blabla/ui/components/card";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import { Archive, ArrowRight } from "lucide-react";
-
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { api, convexId } from "@/lib/convex-api";
 
 export function LegacyRouteNotice({
 	projectId,
@@ -24,11 +25,15 @@ export function LegacyRouteNotice({
 	title: string;
 	area: string;
 }) {
+	const project = useQuery(api.projects.get, {
+		projectId: convexId<"projects">(projectId),
+	});
+	const repository = project?.type === "repository";
 	return (
 		<ProjectShell projectId={projectId} title={projectName}>
 			<PageHeader
 				title={title}
-				description={`${area} is now handled from Sync and Strings.`}
+				description={`${area} is now handled from ${repository ? "Sync and Strings" : "Strings"}.`}
 			/>
 			<Card size="sm">
 				<CardContent className="flex flex-col gap-4 py-6">
@@ -37,19 +42,20 @@ export function LegacyRouteNotice({
 						<AlertTitle>This page is kept for old links</AlertTitle>
 						<AlertDescription>
 							It is read-only and no longer part of the primary localization
-							flow. Use Sync to connect the repository, then Strings for current
-							catalog work.
+							flow. Open Strings to work with current content.
 						</AlertDescription>
 					</Alert>
 					<div className="flex flex-wrap gap-2">
-						<Button
-							nativeButton={false}
-							render={
-								<Link to="/projects/$projectId/sync" params={{ projectId }} />
-							}
-						>
-							Open Sync <ArrowRight data-icon="inline-end" />
-						</Button>
+						{repository && (
+							<Button
+								nativeButton={false}
+								render={
+									<Link to="/projects/$projectId/sync" params={{ projectId }} />
+								}
+							>
+								Open Sync <ArrowRight data-icon="inline-end" />
+							</Button>
+						)}
 						<Button
 							nativeButton={false}
 							variant="outline"

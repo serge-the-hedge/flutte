@@ -11,9 +11,11 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as DictionariesRouteImport } from './routes/dictionaries'
 import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SignInRouteImport } from './routes/sign-in'
+import { Route as DictionariesDictionaryIdRouteImport } from './routes/dictionaries.$dictionaryId'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsProjectIdExportRouteImport } from './routes/projects.$projectId.export'
@@ -47,6 +49,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DictionariesRoute = DictionariesRouteImport.update({
+  id: '/dictionaries',
+  path: '/dictionaries',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsRoute = ProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
@@ -62,6 +69,12 @@ const SignInRoute = SignInRouteImport.update({
   path: '/sign-in',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DictionariesDictionaryIdRoute =
+  DictionariesDictionaryIdRouteImport.update({
+    id: '/$dictionaryId',
+    path: '/$dictionaryId',
+    getParentRoute: () => DictionariesRoute,
+  } as any)
 const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   id: '/$projectId',
   path: '/$projectId',
@@ -192,9 +205,11 @@ const ProjectsProjectIdSettingsMembersRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/dictionaries': typeof DictionariesRouteWithChildren
   '/projects': typeof ProjectsRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
+  '/dictionaries/$dictionaryId': typeof DictionariesDictionaryIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
@@ -221,9 +236,11 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/dictionaries': typeof DictionariesRouteWithChildren
   '/projects': typeof ProjectsRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
+  '/dictionaries/$dictionaryId': typeof DictionariesDictionaryIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
@@ -249,9 +266,11 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/dictionaries': typeof DictionariesRouteWithChildren
   '/projects': typeof ProjectsRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/sign-in': typeof SignInRoute
+  '/dictionaries/$dictionaryId': typeof DictionariesDictionaryIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$projectId/export': typeof ProjectsProjectIdExportRoute
@@ -280,9 +299,11 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/dashboard'
+    | '/dictionaries'
     | '/projects'
     | '/reset-password'
     | '/sign-in'
+    | '/dictionaries/$dictionaryId'
     | '/projects/$projectId'
     | '/projects/new'
     | '/projects/$projectId/export'
@@ -309,9 +330,11 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/dashboard'
+    | '/dictionaries'
     | '/projects'
     | '/reset-password'
     | '/sign-in'
+    | '/dictionaries/$dictionaryId'
     | '/projects/$projectId'
     | '/projects/new'
     | '/projects/$projectId/export'
@@ -336,9 +359,11 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/dashboard'
+    | '/dictionaries'
     | '/projects'
     | '/reset-password'
     | '/sign-in'
+    | '/dictionaries/$dictionaryId'
     | '/projects/$projectId'
     | '/projects/new'
     | '/projects/$projectId/export'
@@ -366,6 +391,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
+  DictionariesRoute: typeof DictionariesRouteWithChildren
   ProjectsRoute: typeof ProjectsRouteWithChildren
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignInRoute: typeof SignInRoute
@@ -385,6 +411,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dictionaries': {
+      id: '/dictionaries'
+      path: '/dictionaries'
+      fullPath: '/dictionaries'
+      preLoaderRoute: typeof DictionariesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects': {
@@ -407,6 +440,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/sign-in'
       preLoaderRoute: typeof SignInRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/dictionaries/$dictionaryId': {
+      id: '/dictionaries/$dictionaryId'
+      path: '/$dictionaryId'
+      fullPath: '/dictionaries/$dictionaryId'
+      preLoaderRoute: typeof DictionariesDictionaryIdRouteImport
+      parentRoute: typeof DictionariesRoute
     }
     '/projects/$projectId': {
       id: '/projects/$projectId'
@@ -565,6 +605,18 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface DictionariesRouteChildren {
+  DictionariesDictionaryIdRoute: typeof DictionariesDictionaryIdRoute
+}
+
+const DictionariesRouteChildren: DictionariesRouteChildren = {
+  DictionariesDictionaryIdRoute: DictionariesDictionaryIdRoute,
+}
+
+const DictionariesRouteWithChildren = DictionariesRoute._addFileChildren(
+  DictionariesRouteChildren,
+)
+
 interface ProjectsProjectIdProposalsRouteChildren {
   ProjectsProjectIdProposalsProposalIdRoute: typeof ProjectsProjectIdProposalsProposalIdRoute
   ProjectsProjectIdProposalsIndexRoute: typeof ProjectsProjectIdProposalsIndexRoute
@@ -674,6 +726,7 @@ const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
+  DictionariesRoute: DictionariesRouteWithChildren,
   ProjectsRoute: ProjectsRouteWithChildren,
   ResetPasswordRoute: ResetPasswordRoute,
   SignInRoute: SignInRoute,

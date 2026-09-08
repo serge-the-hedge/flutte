@@ -3,7 +3,7 @@
 Blabla is Brickit's localization workspace. Developers sync committed Flutter
 ARB catalogs from Git, translators edit and review values in the web app, and a
 local CLI delivers reviewed output on a branch with matching generated Dart.
-Managed collections hold marketing copy authored directly in Blabla, with the
+Basic projects hold marketing copy authored directly in Blabla, with the
 same editor and review workflow and explicit copy/download output.
 Agents propose candidates; a human or an explicitly authorized independent
 Reviewer Agent decides what becomes current. Blabla never
@@ -11,7 +11,7 @@ pushes to Git or opens a pull request on the developer's behalf.
 
 ## Start here
 
-- [Content collections](docs/content-collections.md): app catalogs and directly
+- [Projects and Dictionaries](docs/projects-and-dictionaries.md): app catalogs and directly
   authored marketing copy in one project.
 - [Catalog message lifecycle](docs/catalog-message-lifecycle.md): the implemented
   path from Git import through review to delivery.

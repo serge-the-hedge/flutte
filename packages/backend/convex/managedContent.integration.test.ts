@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
+	createLegacyCollection,
 	createProject,
 } from "../test/support";
 import { api } from "./_generated/api";
@@ -15,7 +16,7 @@ async function setup() {
 		projectId,
 		code: "pt-BR",
 	});
-	const collectionId = await owner.mutation(api.contentCollections.create, {
+	const collectionId = await createLegacyCollection(t, {
 		projectId,
 		name: "Store copy",
 		localeIds: [localeId],
@@ -130,7 +131,7 @@ describe("managed content", () => {
 	});
 	test("collection key namespaces isolate edits and membership changes reject old saves", async () => {
 		const s = await setup();
-		const second = await s.owner.mutation(api.contentCollections.create, {
+		const second = await createLegacyCollection(s.t, {
 			projectId: s.projectId,
 			name: "Other",
 			localeIds: [s.localeId],

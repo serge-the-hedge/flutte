@@ -12,6 +12,9 @@ scope, and `capabilities.dictionary.batchWrites` advertises batch support.
 Targets are editor-configured. For setup, catalog-code/path restrictions, and
 runtime mappings, see [Adding languages](https://github.com/serge-the-hedge/flutte/blob/main/docs/adding-languages.md#configure-and-prepare).
 
+Basic projects use the [plain-text workspace contract](collection-api.md) below
+the same project-scoped addresses. The following catalog details apply to repository projects.
+
 ### `GET /workspace/search`
 
 Searches effective Source and current targets in Catalog Order using case-folded

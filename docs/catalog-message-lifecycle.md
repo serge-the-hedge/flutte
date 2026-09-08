@@ -5,7 +5,7 @@ This is the normative travel map for Catalog Messages and Target Values. The
 full system; this document keeps its lifecycle decisions in one place.
 
 This document describes the repository-backed App collection.
-[Managed collections](content-collections.md) share target confirmation, source
+[Basic projects](projects-and-dictionaries.md) share target confirmation, source
 currency and independent review, while authoring source directly and delivering
 through copy/download. They do not participate in Git reconciliation or releases.
 

@@ -175,6 +175,54 @@ async function context(
 }
 
 describe("independent agent review", () => {
+	test("invalidates review reads when a connected Dictionary changes or is disconnected", async () => {
+		const f = await setup();
+		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+			projectId: f.projectId,
+			enabled: true,
+		});
+		const dictionaryId = await f.owner.mutation(api.dictionaries.create, {
+			name: "Shared terminology",
+		});
+		await f.owner.mutation(api.dictionaries.connect, {
+			projectId: f.projectId,
+			dictionaryId,
+			expectedConnectionRevision: 0,
+		});
+		const before = await context(f);
+		await f.owner.mutation(api.dictionaries.saveTerm, {
+			dictionaryId,
+			expectedRevision: 0,
+			term: {
+				kind: "untranslatable",
+				sourceTerm: "Hello",
+				definition: "Use a friendly greeting",
+			},
+		});
+		expect(
+			(
+				await request(f.t, f.reviewer.token, f.revisionId, {
+					reviewToken: before.reviewToken,
+					decision: { kind: "accept" },
+				})
+			).status,
+		).toBe(409);
+		const after = await context(f);
+		await f.owner.mutation(api.dictionaries.connect, {
+			projectId: f.projectId,
+			dictionaryId: null,
+			expectedConnectionRevision: 1,
+		});
+		expect(
+			(
+				await request(f.t, f.reviewer.token, f.revisionId, {
+					reviewToken: after.reviewToken,
+					decision: { kind: "accept" },
+				})
+			).status,
+		).toBe(409);
+	});
+
 	test("binds general voice and authorized agent Dictionary changes into review context", async () => {
 		const f = await setup();
 		await f.owner.mutation(api.projects.setAgentReviewPolicy, {

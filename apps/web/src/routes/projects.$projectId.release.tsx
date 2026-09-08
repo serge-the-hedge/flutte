@@ -24,6 +24,7 @@ import {
 	ReleaseDeliveryScope,
 	ReleaseRecordView,
 } from "@/components/localization/release-record-view";
+import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
 import { api, convexId } from "@/lib/convex-api";
 
 export const Route = createFileRoute("/projects/$projectId/release")({
@@ -31,6 +32,15 @@ export const Route = createFileRoute("/projects/$projectId/release")({
 });
 
 function ReleaseRoute() {
+	const { projectId } = Route.useParams();
+	return (
+		<RepositoryProjectOnly projectId={projectId}>
+			<RepositoryReleaseRoute />
+		</RepositoryProjectOnly>
+	);
+}
+
+function RepositoryReleaseRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/release" });
 	const project = useQuery(api.projects.get, {
 		projectId: convexId<"projects">(projectId),

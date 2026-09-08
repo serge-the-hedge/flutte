@@ -285,7 +285,7 @@ export function ManagedStrings({
 	const commit = async (input: CatalogWorkspaceCommit) => {
 		const basis = input.basis;
 		if (basis.kind === "repository" || basis.collectionId !== collectionId)
-			throw new Error("The string belongs to another collection.");
+			throw new Error("The string belongs to another project.");
 		if (basis.kind === "managedSource") {
 			if (input.intent.kind !== "save")
 				throw new Error("Source values are edited directly.");
@@ -316,7 +316,7 @@ export function ManagedStrings({
 					: next.q !== search.q
 						? undefined
 						: next.key,
-			collection: collectionId,
+			collection: undefined,
 			cursor: undefined,
 		});
 	};
@@ -342,7 +342,7 @@ export function ManagedStrings({
 				);
 				const link = document.createElement("a");
 				link.href = url;
-				link.download = `${collection?.name ?? "translations"}-${exportMode}.json`;
+				link.download = `${project?.name ?? "translations"}-${exportMode}.json`;
 				link.click();
 				URL.revokeObjectURL(url);
 			}
@@ -362,7 +362,7 @@ export function ManagedStrings({
 	return (
 		<>
 			<PageHeader
-				title={collection?.name ?? "Strings"}
+				title="Strings"
 				description="Write source text here, translate, and review it in one place."
 				action={
 					canEdit ? (
@@ -404,7 +404,7 @@ export function ManagedStrings({
 			{languagesOpen && collection && (
 				<section className="mb-5 rounded-md border p-4">
 					<fieldset disabled={busy || !canEdit}>
-						<h2 className="mb-3 font-medium">Languages in this collection</h2>
+						<h2 className="mb-3 font-medium">Project languages</h2>
 						<div className="flex flex-wrap gap-4">
 							{(locales ?? [])
 								.filter(
@@ -534,7 +534,7 @@ export function ManagedStrings({
 									context: form.context,
 								});
 								onSearch({
-									collection: collectionId,
+									collection: undefined,
 									key: messageId,
 									locales: search.locales,
 								});
@@ -670,11 +670,7 @@ export function ManagedStrings({
 				searchPlaceholder="Search keys and source text"
 				emptyContent={
 					<div className="rounded-md border p-6">
-						<p>
-							{search.q
-								? "No matching strings."
-								: "This collection has no strings yet."}
-						</p>
+						<p>{search.q ? "No matching strings." : "No strings yet."}</p>
 						{search.q && (
 							<Button
 								variant="ghost"

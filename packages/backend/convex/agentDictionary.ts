@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { authenticateAgent } from "./agentApi";
 import { encodedSize } from "./catalogWorkspaceView";
+import { guidanceState, projectDictionaryConnection } from "./dictionaryAccess";
 import { sha256Hex } from "./lib";
 import {
 	guidanceSaveResultValidator,
@@ -36,6 +37,9 @@ export const list = internalQuery({
 	},
 	returns: v.object({
 		revision: v.number(),
+		dictionaryId: v.optional(v.id("dictionaries")),
+		connectionRevision: v.optional(v.number()),
+		agentWriteEnabled: v.optional(v.boolean()),
 		terms: v.array(entryValidator),
 		nextCursor: v.union(v.string(), v.null()),
 	}),
@@ -47,16 +51,19 @@ export const list = internalQuery({
 		if (encodedSize([args.q ?? "", args.sourceTerm ?? ""]) > 2048)
 			validation("Dictionary search text exceeds 2 KiB.");
 		const q = (args.q ?? "").trim().toLowerCase();
-		const state = await ctx.db
-			.query("translationGuidanceStates")
-			.withIndex("by_project", (query) =>
-				query.eq("projectId", token.projectId),
-			)
-			.unique();
+		const connection = await projectDictionaryConnection(ctx, token.projectId);
+		const dictionaryId = connection?.dictionaryId ?? undefined;
+		const connectionRevision = connection?.revision;
+		const state = await guidanceState(
+			ctx,
+			dictionaryId ? { dictionaryId } : { projectId: token.projectId },
+		);
 		const revision = state?.revision ?? 0;
 		const basis = await sha256Hex(
 			JSON.stringify({
 				projectId: token.projectId,
+				dictionaryId,
+				connectionRevision,
 				revision,
 				q,
 				sourceTerm: args.sourceTerm,
@@ -91,7 +98,7 @@ export const list = internalQuery({
 				});
 			after = cursor.after;
 		}
-		const rows = ctx.db
+		const localRows = ctx.db
 			.query("translationGuidanceEntries")
 			.withIndex("by_project_and_key", (query) => {
 				const scoped = query.eq("projectId", token.projectId);
@@ -101,6 +108,17 @@ export const list = internalQuery({
 					? scoped.gte("key", "term:").lt("key", "term;")
 					: scoped.gt("key", after).lt("key", "term;");
 			});
+		const sharedRows = ctx.db
+			.query("translationGuidanceEntries")
+			.withIndex("by_dictionary_and_key", (query) => {
+				const scoped = query.eq("dictionaryId", dictionaryId);
+				if (args.sourceTerm !== undefined)
+					return scoped.eq("key", `term:${args.sourceTerm}`);
+				return after === null
+					? scoped.gte("key", "term:").lt("key", "term;")
+					: scoped.gt("key", after).lt("key", "term;");
+			});
+		const rows = dictionaryId ? sharedRows : localRows;
 		const terms = [];
 		let bytes = 4096;
 		let scanned = 0;
@@ -143,6 +161,11 @@ export const list = internalQuery({
 		}
 		return {
 			revision,
+			dictionaryId,
+			connectionRevision,
+			agentWriteEnabled: dictionaryId
+				? connection?.agentWriteEnabled
+				: undefined,
 			terms,
 			nextCursor: hasMore
 				? JSON.stringify({ version: 1, basis, after: lastScanned })
@@ -157,6 +180,8 @@ export const save = internalMutation({
 	args: {
 		token: v.string(),
 		expectedRevision: v.number(),
+		expectedDictionaryId: v.optional(v.id("dictionaries")),
+		expectedConnectionRevision: v.optional(v.number()),
 		terms: v.array(dictionaryTermValidator),
 	},
 	returns: v.object({
@@ -189,6 +214,8 @@ export const save = internalMutation({
 		for (const term of args.terms) {
 			const saved = await saveDictionaryTerm(ctx, {
 				projectId: token.projectId,
+				expectedDictionaryId: args.expectedDictionaryId,
+				expectedConnectionRevision: args.expectedConnectionRevision,
 				expectedRevision: revision,
 				term,
 				authoredBy: { kind: "agent", id: token._id },
@@ -207,6 +234,8 @@ export const remove = internalMutation({
 	args: {
 		token: v.string(),
 		expectedRevision: v.number(),
+		expectedDictionaryId: v.optional(v.id("dictionaries")),
+		expectedConnectionRevision: v.optional(v.number()),
 		sourceTerm: v.string(),
 	},
 	returns: guidanceSaveResultValidator,
@@ -214,6 +243,8 @@ export const remove = internalMutation({
 		const token = await authenticateAgent(ctx, args.token, "dictionary-write");
 		return await removeDictionaryTerm(ctx, {
 			projectId: token.projectId,
+			expectedDictionaryId: args.expectedDictionaryId,
+			expectedConnectionRevision: args.expectedConnectionRevision,
 			expectedRevision: args.expectedRevision,
 			sourceTerm: args.sourceTerm,
 			authoredBy: { kind: "agent", id: token._id },

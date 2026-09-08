@@ -1,18 +1,26 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { act, type ComponentProps } from "react";
+import { act, type ComponentProps, type ReactElement } from "react";
 import { convexId } from "@/lib/convex-api";
 import { createDomTest } from "@/test/dom";
-import type { TranslationGuidanceEditor as Editor } from "./translation-guidance-editor";
+import type {
+	TranslationGuidanceEditor as Editor,
+	DictionaryEditor as TermsEditor,
+} from "./translation-guidance-editor";
 
 const dom = createDomTest();
-let TranslationGuidanceEditor: typeof Editor;
+type Props = ComponentProps<typeof Editor> & ComponentProps<typeof TermsEditor>;
+let TranslationGuidanceEditor: (props: Props) => ReactElement;
 beforeAll(async () => {
-	({ TranslationGuidanceEditor } = await import(
-		"./translation-guidance-editor"
-	));
+	const { TranslationGuidanceEditor: VoiceEditor, DictionaryEditor } =
+		await import("./translation-guidance-editor");
+	TranslationGuidanceEditor = (props) => (
+		<>
+			<VoiceEditor {...props} />
+			<DictionaryEditor {...props} />
+		</>
+	);
 });
-type Props = ComponentProps<typeof Editor>;
-const saved: Props["guidance"] = {
+const saved: ComponentProps<typeof Editor>["guidance"] = {
 	revision: 2,
 	projectGuide: {
 		text: "Be clear, warm, and direct.",
@@ -153,6 +161,42 @@ describe("Translation guidance editing", () => {
 				{ localeCode: "pt", value: "Modelo" },
 			],
 		});
+	});
+
+	test("adds a canonical language independently of project locales and keeps unsaved work until saving", async () => {
+		const requests: Parameters<Props["onSaveTerm"]>[0][] = [];
+		let hasUnsaved = false;
+		await dom.render(
+			<TranslationGuidanceEditor
+				{...props({
+					allowCustomLocales: true,
+					onUnsavedWorkChange: (value) => {
+						hasUnsaved = value;
+					},
+					onSaveTerm: async (input) => {
+						requests.push(input);
+					},
+				})}
+			/>,
+		);
+		await click("Edit Build");
+		expect(hasUnsaved).toBe(false);
+		await type("term-new-locale", "pt_BR");
+		expect(hasUnsaved).toBe(true);
+		await click("Add language");
+		await type("term-pt-BR", "Modelo");
+		expect(hasUnsaved).toBe(true);
+		await click("Save term");
+		expect(requests[0]).toMatchObject({
+			expectedRevision: 2,
+			term: {
+				renderings: [
+					{ localeCode: "de", value: "Modell" },
+					{ localeCode: "pt-BR", value: "Modelo" },
+				],
+			},
+		});
+		expect(hasUnsaved).toBe(false);
 	});
 
 	test("edits the project voice and a separate Locale add-on without losing stale project drafts", async () => {

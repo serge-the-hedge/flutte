@@ -29,11 +29,11 @@ import {
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
-
 import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
 import { blablaCommand, blablaCommandPrefix } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
@@ -371,6 +371,15 @@ function BindingSetup({ setup }: { setup: SyncSetup }) {
 }
 
 function SyncRoute() {
+	const { projectId } = Route.useParams();
+	return (
+		<RepositoryProjectOnly projectId={projectId}>
+			<RepositorySyncRoute />
+		</RepositoryProjectOnly>
+	);
+}
+
+function RepositorySyncRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/sync" });
 	const setup = useQuery(api.snapshots.syncSetup, {
 		projectId: convexId<"projects">(projectId),

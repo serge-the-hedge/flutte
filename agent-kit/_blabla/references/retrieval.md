@@ -1,9 +1,10 @@
 # Retrieve useful evidence
 
-Resolve the assigned collection first. The `/workspace` routes below address
-App; for authored copy use [managed search and context](collection-api.md).
-Consult another collection deliberately for examples, preserving collection
-identity so an identical key cannot become the wrong task target.
+Resolve the assigned project first. The `/workspace` routes use its project type;
+for Basic projects follow the [plain-text contract](collection-api.md).
+Consult another project only with that project’s authorized connection, retaining
+project identity with evidence. Shared Dictionary access does not grant access
+to another project’s strings.
 
 Choose the smallest read that answers the question. Task pages, exact Workspace
 context, and candidate-review context already include applicable guidance once;

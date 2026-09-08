@@ -25,34 +25,18 @@ function ProjectIndexRoute() {
 		api.projects.get,
 		opening ? { projectId: convexId<"projects">(projectId) } : "skip",
 	);
-	const collections = useQuery(
-		api.contentCollections.list,
-		opening && project && !project.baselineSnapshotId
-			? { projectId: convexId<"projects">(projectId) }
-			: "skip",
-	);
-	const managedId = collections?.find(
-		(collection) => collection.kind === "managed",
-	)?.id;
 	useEffect(() => {
-		if (opening && project && (project.baselineSnapshotId || collections)) {
-			if (managedId) {
-				void navigate({
-					to: "/projects/$projectId/strings",
-					params: { projectId },
-					search: { collection: managedId },
-					replace: true,
-				});
-				return;
-			}
-			navigate({
-				to: "/projects/$projectId/sync",
+		if (opening && project)
+			void navigate({
+				to:
+					project.type === "basic" || project.baselineSnapshotId
+						? "/projects/$projectId/strings"
+						: "/projects/$projectId/sync",
 				params: { projectId },
 				search: {},
 				replace: true,
 			});
-		}
-	}, [navigate, opening, project, collections, managedId, projectId]);
+	}, [navigate, opening, project, projectId]);
 
 	if (pathname !== `/projects/${projectId}`) {
 		return <Outlet />;

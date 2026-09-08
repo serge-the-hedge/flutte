@@ -37,20 +37,13 @@ export const Route = createFileRoute("/projects")({
 	component: ProjectsRoute,
 });
 
-type ProjectListRow = {
-	_id: string;
-	name: string;
-	slug: string;
-	role: string;
-};
-
 function ProjectsHeader() {
 	return (
-		<div className="flex items-end justify-between gap-3">
+		<div className="flex flex-wrap items-end justify-between gap-3">
 			<div className="flex flex-col gap-1">
 				<h1 className="font-semibold text-2xl tracking-tight">Projects</h1>
 				<p className="text-muted-foreground text-sm">
-					Repository-backed catalogs, translation work, and delivery.
+					Write content here or connect a repository.
 				</p>
 			</div>
 			<Button nativeButton={false} render={<Link to="/projects/new" />}>
@@ -72,9 +65,7 @@ function ProjectsGridSkeleton() {
 }
 
 function ProjectsContent() {
-	const projects = useQuery(api.projects.listMine) as
-		| ProjectListRow[]
-		| undefined;
+	const projects = useQuery(api.projects.listMine);
 
 	return (
 		<div className="mx-auto flex h-full max-w-5xl flex-col gap-6 overflow-auto px-6 py-8">
@@ -89,8 +80,7 @@ function ProjectsContent() {
 						</EmptyMedia>
 						<EmptyTitle>No projects yet</EmptyTitle>
 						<EmptyDescription>
-							Create a project, connect its catalogs, and establish the first
-							accepted baseline.
+							Create a project to start writing or translating content.
 						</EmptyDescription>
 					</EmptyHeader>
 					<EmptyContent>
@@ -124,6 +114,9 @@ function ProjectsContent() {
 								</CardHeader>
 								<CardContent>
 									<div className="flex items-center gap-1.5">
+										<Badge variant="outline">
+											{project.type === "basic" ? "Basic" : "Repository"}
+										</Badge>
 										<Badge variant="secondary" className="capitalize">
 											{project.role}
 										</Badge>

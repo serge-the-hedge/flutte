@@ -31,13 +31,13 @@ import {
 } from "@blabla/ui/components/select";
 import { Textarea } from "@blabla/ui/components/textarea";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import type { api } from "@/lib/convex-api";
 
 type Guidance = FunctionReturnType<typeof api.translationGuidance.list>;
 type TermInput = Omit<
-	FunctionArgs<typeof api.translationGuidance.saveTerm>,
-	"projectId"
+	FunctionArgs<typeof api.dictionaries.saveTerm>,
+	"dictionaryId"
 >;
 type VoiceInput = Omit<
 	FunctionArgs<typeof api.translationGuidance.saveVoiceGuide>,
@@ -48,9 +48,11 @@ type ProjectVoiceInput = Omit<
 	"projectId"
 >;
 type Term = TermInput["term"];
-type Locale = { code: string; label?: string; active?: boolean };
-type Props = {
-	guidance: Guidance;
+export type GuidanceLocale = { code: string; label?: string; active?: boolean };
+type Locale = GuidanceLocale;
+type TermGuidance = { revision: number; terms: readonly { term: Term }[] };
+type DictionaryProps = {
+	guidance: TermGuidance;
 	locales: Locale[];
 	canEdit: boolean;
 	onSaveTerm: (input: TermInput) => Promise<unknown>;
@@ -58,6 +60,13 @@ type Props = {
 		expectedRevision: number;
 		sourceTerm: string;
 	}) => Promise<unknown>;
+	allowCustomLocales?: boolean;
+	onUnsavedWorkChange?: (hasUnsavedWork: boolean) => void;
+};
+type Props = {
+	guidance: Guidance;
+	locales: Locale[];
+	canEdit: boolean;
 	onSaveVoiceGuide: (input: VoiceInput) => Promise<unknown>;
 	onSaveProjectVoiceGuide: (input: ProjectVoiceInput) => Promise<unknown>;
 };
@@ -100,8 +109,8 @@ function DraftActions({
 			{changed ? (
 				<Alert>
 					<AlertDescription>
-						Saved guidance changed while this draft was open. Compare the
-						current saved entries below before keeping your draft.
+						Saved content changed while this draft was open. Compare the current
+						saved entries below before keeping your draft.
 						<Button
 							type="button"
 							variant="outline"
@@ -187,12 +196,16 @@ function TermEditor({
 	canEdit,
 	onSave,
 	onCancel,
+	allowCustomLocales = false,
+	onUnsavedWorkChange,
 }: {
 	term: Term | null;
-	guidance: Guidance;
+	guidance: TermGuidance;
 	locales: Locale[];
 	canEdit: boolean;
-	onSave: Props["onSaveTerm"];
+	onSave: DictionaryProps["onSaveTerm"];
+	allowCustomLocales?: boolean;
+	onUnsavedWorkChange?: (hasUnsavedWork: boolean) => void;
 	onCancel: () => void;
 }) {
 	const [sourceTerm, setSourceTerm] = useState(term?.sourceTerm ?? "");
@@ -212,9 +225,35 @@ function TermEditor({
 			? (term.renderings[0]?.localeCode ?? locales[0]?.code)
 			: locales[0]?.code,
 	);
+	const [newLocale, setNewLocale] = useState("");
+	const [addedLocales, setAddedLocales] = useState<Locale[]>([]);
+	const renderingLocales = [
+		...locales,
+		...addedLocales.filter(
+			(item) => !locales.some((locale) => locale.code === item.code),
+		),
+	];
 	const [expectedRevision, setExpectedRevision] = useState(guidance.revision);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const hasUnsavedWork =
+		busy ||
+		sourceTerm !== (term?.sourceTerm ?? "") ||
+		definition !== (term?.definition ?? "") ||
+		untranslatable !== (term?.kind === "untranslatable") ||
+		newLocale.length > 0 ||
+		Object.entries(renderings).some(
+			([code, value]) =>
+				value !==
+				(term?.kind === "translated"
+					? (term.renderings.find((item) => item.localeCode === code)?.value ??
+						"")
+					: ""),
+		);
+	useEffect(() => {
+		onUnsavedWorkChange?.(hasUnsavedWork);
+	}, [hasUnsavedWork, onUnsavedWorkChange]);
+	useEffect(() => () => onUnsavedWorkChange?.(false), [onUnsavedWorkChange]);
 	async function submit(event: FormEvent) {
 		event.preventDefault();
 		if (!canEdit || busy || expectedRevision !== guidance.revision) return;
@@ -299,10 +338,52 @@ function TermEditor({
 									.filter(([, value]) => value.trim().length > 0)
 									.map(([code]) => code)}
 								label="Rendering Locale"
-								locales={locales}
+								locales={renderingLocales}
 								value={renderingLocale}
 								onChange={setRenderingLocale}
 							/>
+							{allowCustomLocales ? (
+								<Field>
+									<FieldLabel htmlFor="term-new-locale">
+										Add rendering language
+									</FieldLabel>
+									<div className="flex gap-2">
+										<Input
+											id="term-new-locale"
+											placeholder="e.g. pt-BR"
+											value={newLocale}
+											onChange={(event) => setNewLocale(event.target.value)}
+										/>
+										<Button
+											type="button"
+											variant="outline"
+											disabled={!newLocale.trim()}
+											onClick={() => {
+												try {
+													const code = Intl.getCanonicalLocales(
+														newLocale.trim().replaceAll("_", "-"),
+													)[0];
+													if (!code) throw new Error("Enter a locale code.");
+													setAddedLocales((previous) =>
+														previous.some((item) => item.code === code)
+															? previous
+															: [...previous, { code, label: code }],
+													);
+													setRenderingLocale(code);
+													setNewLocale("");
+													setError(null);
+												} catch {
+													setError(
+														"Enter a valid language code, such as fr or pt-BR.",
+													);
+												}
+											}}
+										>
+											Add language
+										</Button>
+									</div>
+								</Field>
+							) : null}
 							{renderingLocale ? (
 								<Field>
 									<FieldLabel htmlFor={`term-${renderingLocale}`}>
@@ -524,9 +605,13 @@ function SavedVoice({
 					className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
 				>
 					<dt>{localeCode ? "Source" : "Before"}</dt>
-					<dd className="whitespace-pre-wrap">{example.source}</dd>
+					<dd className="min-w-0 whitespace-pre-wrap break-words">
+						{example.source}
+					</dd>
 					<dt>{localeCode ?? "Preferred wording"}</dt>
-					<dd className="whitespace-pre-wrap">{example.target}</dd>
+					<dd className="min-w-0 whitespace-pre-wrap break-words">
+						{example.target}
+					</dd>
 				</dl>
 			))}
 		</div>
@@ -537,12 +622,9 @@ export function TranslationGuidanceEditor({
 	guidance,
 	locales,
 	canEdit,
-	onSaveTerm,
-	onRemoveTerm,
 	onSaveVoiceGuide,
 	onSaveProjectVoiceGuide,
 }: Props) {
-	const [editingTerm, setEditingTerm] = useState<Term | null | undefined>();
 	const [editingLocale, setEditingLocale] = useState<string>();
 	const [editingProjectGuide, setEditingProjectGuide] = useState(false);
 	const [selectedLocale, setSelectedLocale] = useState(
@@ -717,6 +799,42 @@ export function TranslationGuidanceEditor({
 					</details>
 				</CardContent>
 			</Card>
+		</div>
+	);
+}
+
+export function DictionaryEditor({
+	guidance,
+	locales,
+	canEdit,
+	onSaveTerm,
+	onRemoveTerm,
+	allowCustomLocales = false,
+	onUnsavedWorkChange,
+}: DictionaryProps) {
+	const [editingTerm, setEditingTerm] = useState<Term | null | undefined>();
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	async function remove(action: () => Promise<unknown>) {
+		if (!canEdit || busy) return;
+		setBusy(true);
+		setError(null);
+		try {
+			await action();
+		} catch (error) {
+			setError(errorText(error));
+		} finally {
+			setBusy(false);
+		}
+	}
+	return (
+		<div className="flex flex-col gap-4">
+			{error ? (
+				<Alert variant="destructive">
+					<AlertDescription>{error}</AlertDescription>
+				</Alert>
+			) : null}
+
 			<Card size="sm">
 				<CardHeader>
 					<CardTitle>Dictionary</CardTitle>
@@ -732,18 +850,22 @@ export function TranslationGuidanceEditor({
 							guidance={guidance}
 							locales={locales}
 							canEdit={canEdit}
+							allowCustomLocales={allowCustomLocales}
+							onUnsavedWorkChange={onUnsavedWorkChange}
 							onSave={onSaveTerm}
 							onCancel={() => setEditingTerm(undefined)}
 						/>
 					) : canEdit ? (
-						<Button onClick={() => setEditingTerm(null)}>Add term</Button>
+						<Button disabled={busy} onClick={() => setEditingTerm(null)}>
+							Add term
+						</Button>
 					) : null}
 					{guidance.terms.length === 0 ? (
 						<Empty>
 							<EmptyHeader>
 								<EmptyTitle>No Dictionary entries</EmptyTitle>
 								<EmptyDescription>
-									Add terms when the project has agreed how to use them.
+									Add agreed terms and their preferred renderings.
 								</EmptyDescription>
 							</EmptyHeader>
 						</Empty>
@@ -753,8 +875,10 @@ export function TranslationGuidanceEditor({
 								key={term.sourceTerm}
 								className="flex flex-col gap-2 border-b pb-4 last:border-0 last:pb-0"
 							>
-								<strong>{term.sourceTerm}</strong>
-								<p className="whitespace-pre-wrap">{term.definition}</p>
+								<strong className="break-words">{term.sourceTerm}</strong>
+								<p className="whitespace-pre-wrap break-words">
+									{term.definition}
+								</p>
 								{term.kind === "untranslatable" ? (
 									<p>Keep unchanged in every Locale.</p>
 								) : (
@@ -766,7 +890,7 @@ export function TranslationGuidanceEditor({
 											{term.renderings.map((rendering) => (
 												<div key={rendering.localeCode} className="contents">
 													<dt>{rendering.localeCode}</dt>
-													<dd className="whitespace-pre-wrap">
+													<dd className="min-w-0 whitespace-pre-wrap break-words">
 														{rendering.value}
 													</dd>
 												</div>

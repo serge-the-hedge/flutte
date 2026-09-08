@@ -133,6 +133,9 @@ async function findProjectInviteByEmail(
 		.first();
 }
 
+export const projectType = (project: { type?: "basic" | "repository" }) =>
+	project.type ?? "repository";
+
 export const listMine = query({
 	args: {},
 	handler: async (ctx) => {
@@ -145,7 +148,7 @@ export const listMine = query({
 			memberships.map(async (member) => {
 				const project = await ctx.db.get(member.projectId);
 				return project && project.archivedAt === undefined
-					? { ...project, role: member.role }
+					? { ...project, type: projectType(project), role: member.role }
 					: null;
 			}),
 		);
@@ -162,7 +165,12 @@ export const get = query({
 			project.sourceLocaleId === undefined
 				? null
 				: await ctx.db.get(project.sourceLocaleId);
-		return { ...project, role: member.role, sourceLocale };
+		return {
+			...project,
+			type: projectType(project),
+			role: member.role,
+			sourceLocale,
+		};
 	},
 });
 
@@ -197,6 +205,7 @@ export const listInvites = query({
 
 export const create = mutation({
 	args: {
+		type: v.optional(v.union(v.literal("basic"), v.literal("repository"))),
 		name: v.string(),
 		slug: v.optional(v.string()),
 		sourceLocaleCode: v.string(),
@@ -216,6 +225,7 @@ export const create = mutation({
 
 		const projectId = await ctx.db.insert("projects", {
 			name: args.name.trim(),
+			type: args.type,
 			slug,
 			integrationBranch: DEFAULT_INTEGRATION_BRANCH,
 			createdByUserId: user.id,
@@ -240,6 +250,15 @@ export const create = mutation({
 			sourceLocaleId: localeId,
 			updatedAt: timestamp,
 		});
+		if (args.type === "basic") {
+			const managedCollectionId = await ctx.db.insert("contentCollections", {
+				projectId,
+				name: args.name.trim(),
+				membershipRevision: 1,
+				createdAt: timestamp,
+			});
+			await ctx.db.patch(projectId, { managedCollectionId });
+		}
 		return projectId;
 	},
 });

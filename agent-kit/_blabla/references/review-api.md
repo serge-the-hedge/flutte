@@ -10,7 +10,7 @@ Requires a separate reviewer credential and current human authorization under
 `kind: "candidate"` returns Source, current target, candidate, blank reasons,
 basis status, authorization, guidance, and an opaque `reviewToken`. Managed
 context includes `collectionId` and `format: "plain"` for independent
-[collection evidence](collection-api.md) retrieval.
+[Basic project evidence](collection-api.md) retrieval.
 `kind: "recordedReview"` instead returns `latestReview` (decision, reviewer,
 authorization, timestamp, final fingerprint when available), without a token.
 With current access, recorded results remain readable after supersession,

@@ -20,7 +20,8 @@ value, and configure the assigned agent's [connection](transport.md).
 | Dictionary authoring | `read`, `dictionary-write`; add `search` for examples |
 | Independent review | `read`, `search`, `review`, on a separate credential |
 
-Owners enable **Allow Dictionary editing** explicitly. Review requires human
+Owners enable **Allow Dictionary editing** explicitly. A connected Dictionary
+also needs a Dictionary-editor grant allowing agent writes from that project. Review requires human
 [enablement](https://github.com/serge-the-hedge/flutte/blob/main/docs/agent-review.md).
 Repository delivery uses the separate [CLI connection](https://github.com/serge-the-hedge/flutte/blob/main/cli/README.md).
 
@@ -49,7 +50,7 @@ See [scan/resume](transport.md#bounded-scans) for bounded terminal execution.
 | Contract | Open when using |
 | --- | --- |
 | [Context](context-api.md) | Project discovery, search, guidance, or work queues |
-| [Managed collections](collection-api.md) | Collection discovery, managed wording search/context, or downloads |
+| [Basic projects](collection-api.md) | Plain-text workspace search/context or downloads |
 | [Translation Tasks](translation-api.md) | Task creation, pages, and candidates |
 | [Review](review-api.md) | Exact-revision review reads and decisions |
 | [Dictionary](dictionary-api.md) | Term reads, replacements, or removals |
