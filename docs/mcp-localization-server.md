@@ -1,33 +1,16 @@
-# Planned localization MCP adapter
+# Deferred localization MCP adapter
 
-Status: **not implemented**. The supported agent transport is the HTTP
-[Agent Translation Guide](agent-api.md). A future MCP adapter should call those
-endpoints and preserve their bounds, provenance, and authorized-review boundary.
+Status: **not implemented; deferred**. Terminal-equipped coding agents use the
+[portable agent kit](../agent-kit/README.md) and supported
+[HTTP API](agent-api.md). No MCP server is needed for this workflow.
 
-| Proposed tool | HTTP endpoint under `/api/agent/v1` | Scope |
-| --- | --- | --- |
-| `localization_project` | `GET /projects/current` | `read` |
-| `localization_search` | `GET /workspace/search` | `search` |
-| `localization_work` | `GET /workspace/work` | `search` |
-| `localization_context` | `POST /workspace/context` | `read` |
-| `localization_proposal_examples` | `POST /proposal-examples/search` | `read`, `search` |
-| `localization_guidance` | `POST /guidance/context` | `read` |
-| `localization_guidance_revision` | `GET /guidance/revisions/:id` | `read` |
-| `localization_dictionary` | `GET /dictionary` | `read` |
-| `localization_save_terms` | `POST /dictionary/terms` | `dictionary-write` |
-| `localization_remove_term` | `DELETE /dictionary/terms` | `dictionary-write` |
-| `localization_create_task` | `POST /translation-tasks` | `propose` |
-| `localization_list_tasks` | `GET /translation-tasks` | `read` |
-| `localization_read_task` | `GET /translation-tasks/:id` | `read` |
-| `localization_propose_candidates` | `POST /translation-tasks/:id/candidates` | `propose` |
+Revisit MCP for a concrete client that benefits from native tools or cannot run
+the HTTP helper. Design a small evaluated workflow interface; a tool per HTTP
+endpoint is not an accepted requirement. Reuse the existing API's bounds,
+provenance, rate limits, and scope checks.
 
-Pass opaque cursors and task identities through unchanged. Return candidates as
-proposed until authorized review succeeds. Translation tools cannot accept or
-apply them; a future reviewer tool must use a separate reviewer credential and
-the exact-revision API in [Agent Review](agent-review.md).
-Mirror HTTP validation and rate-limit responses rather than inventing a second
-policy. Read the HTTP guide for each endpoint's complete scope checks.
-
-Release construction stays in the authenticated human UI, and Git delivery stays
-with the local Repository Adapter. Legacy search, context, Change Set, tag, and
-export addresses return `410 Gone` and are not MCP tool targets.
+A future reviewer connection must belong to a separate agent with its own
+credential and preserve [exact-revision review authorization](agent-review.md).
+Translation tools submit candidates; they cannot grant themselves review access.
+Release construction remains in the authenticated human UI, and Git delivery
+remains with the local Repository Adapter.

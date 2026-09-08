@@ -15,7 +15,8 @@ when a product decision changes.
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
-| MCP adapter | Planned; HTTP is the supported agent transport |
+| Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
+| MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
 
 Charted by [Wayfinder: Make Blabla Brickit's trusted localization control
 plane](https://github.com/serge-the-hedge/flutte/issues/4) and locked by [Lock
