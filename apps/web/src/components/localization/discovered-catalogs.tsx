@@ -1,0 +1,249 @@
+import { Alert, AlertDescription } from "@blabla/ui/components/alert";
+import { Button } from "@blabla/ui/components/button";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@blabla/ui/components/card";
+import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
+import { Input } from "@blabla/ui/components/input";
+import { Link } from "@tanstack/react-router";
+import { useAction, useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import { useId, useState } from "react";
+import { toast } from "sonner";
+import { api, convexId } from "@/lib/convex-api";
+
+type Discovery = FunctionReturnType<typeof api.locales.discoveredCatalogs>;
+type DiscoveredFile = Discovery["files"][number];
+type AddLanguage = (
+	file: DiscoveredFile,
+	code: string,
+	label: string,
+) => Promise<unknown>;
+
+function languageName(code: string) {
+	try {
+		return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+	} catch {
+		return code;
+	}
+}
+
+function DiscoveredFileRow({
+	file,
+	canEdit,
+	onAdd,
+}: {
+	file: DiscoveredFile;
+	canEdit: boolean;
+	onAdd: AddLanguage;
+}) {
+	const id = useId();
+	const [code, setCode] = useState(file.suggestedCode);
+	const [label, setLabel] = useState(
+		file.suggestedLabel || languageName(file.suggestedCode),
+	);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	return (
+		<form
+			className="flex flex-col gap-3 rounded-md border p-4"
+			onSubmit={async (event) => {
+				event.preventDefault();
+				setSaving(true);
+				setError(null);
+				try {
+					await onAdd(
+						file,
+						code.trim(),
+						label.trim() || languageName(code.trim()),
+					);
+				} catch (cause) {
+					setError(
+						cause instanceof Error
+							? cause.message
+							: "Could not add this language. Retry.",
+					);
+				} finally {
+					setSaving(false);
+				}
+			}}
+		>
+			<code className="break-all text-sm">{file.catalogPath}</code>
+			<p className="text-muted-foreground text-sm">
+				{file.declaredLocaleCode
+					? `Declared locale: ${file.declaredLocaleCode}`
+					: "No @@locale declaration. Confirm the language before adding it."}
+				{file.messageCount !== null ? ` · ${file.messageCount} messages` : ""}
+			</p>
+			{file.issue ? (
+				<Alert>
+					<AlertDescription>{file.issue}</AlertDescription>
+				</Alert>
+			) : canEdit ? (
+				<>
+					<FieldGroup className="grid gap-3 sm:grid-cols-2">
+						<Field>
+							<FieldLabel htmlFor={`${id}-code`}>Language code</FieldLabel>
+							<Input
+								id={`${id}-code`}
+								value={code}
+								required
+								readOnly={
+									file.declaredLocaleCode !== null ||
+									file.existingLocaleId !== null
+								}
+								disabled={saving}
+								onChange={(event) => {
+									setCode(event.target.value);
+									if (!file.suggestedLabel)
+										setLabel(languageName(event.target.value));
+								}}
+							/>
+						</Field>
+						<Field>
+							<FieldLabel htmlFor={`${id}-label`}>Language name</FieldLabel>
+							<Input
+								id={`${id}-label`}
+								value={label}
+								readOnly={file.existingLocaleId !== null}
+								disabled={saving}
+								onChange={(event) => setLabel(event.target.value)}
+							/>
+						</Field>
+					</FieldGroup>
+					{error ? (
+						<p role="alert" className="text-destructive text-sm">
+							{error}
+						</p>
+					) : null}
+					<Button
+						className="self-start"
+						type="submit"
+						disabled={saving || !code.trim()}
+					>
+						{saving ? "Adding language…" : "Add language"}
+					</Button>
+				</>
+			) : (
+				<p className="text-muted-foreground text-sm">
+					An editor can add this language.
+				</p>
+			)}
+		</form>
+	);
+}
+
+export function DiscoveredCatalogFiles({
+	files,
+	canEdit,
+	onAdd,
+}: {
+	files: Discovery["files"];
+	canEdit: boolean;
+	onAdd: AddLanguage;
+}) {
+	if (files.length === 0) return null;
+	return (
+		<Card id="discovered-catalogs" size="sm">
+			<CardHeader>
+				<CardTitle>Discovered catalog files ({files.length})</CardTitle>
+				<CardDescription>
+					These files are in the accepted repository snapshot but are not
+					included in Strings. Add a language to import its messages now; no new
+					sync is needed. Imported translations still need review unless Blabla
+					already holds matching review evidence.
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-3">
+				{files.map((file) => (
+					<DiscoveredFileRow
+						key={file.id}
+						file={file}
+						canEdit={canEdit}
+						onAdd={onAdd}
+					/>
+				))}
+			</CardContent>
+		</Card>
+	);
+}
+
+export function DiscoveredCatalogs({ projectId }: { projectId: string }) {
+	const id = convexId<"projects">(projectId);
+	const discovery = useQuery(api.locales.discoveredCatalogs, { projectId: id });
+	const locales = useQuery(api.locales.list, {
+		projectId: id,
+		includeArchived: true,
+	});
+	const create = useMutation(api.locales.create);
+	const bind = useAction(api.locales.bind);
+	if (!discovery?.snapshotId || !locales) return null;
+	const snapshotId = discovery.snapshotId;
+	return (
+		<DiscoveredCatalogFiles
+			key={snapshotId}
+			files={discovery.files}
+			canEdit={discovery.canEdit}
+			onAdd={async (file, code, label) => {
+				const normalizedCode = code
+					.trim()
+					.replaceAll("_", "-")
+					.split("-")
+					.filter(Boolean)
+					.map((part, index) =>
+						index === 0 ? part.toLowerCase() : part.toUpperCase(),
+					)
+					.join("-");
+				const existing = locales.find(
+					(locale) => locale.code === normalizedCode,
+				);
+				if (existing?.archivedAt !== undefined)
+					throw new Error("Restore the archived language before binding it.");
+				if (existing?.isSource || existing?.catalogPath)
+					throw new Error(
+						"This language already has a catalog. Review its binding in Sync.",
+					);
+				const localeId =
+					existing?._id ??
+					(await create({ projectId: id, code: normalizedCode, label }));
+				await bind({
+					localeId,
+					catalogPath: file.catalogPath,
+					expectedSnapshotId: snapshotId,
+					expectedUnboundFileId: file.id,
+				});
+				toast.success(`${label} added to Strings`);
+			}}
+		/>
+	);
+}
+
+/** Keep languages found in Git visible where translators already work. */
+export function DiscoveredCatalogNotice({ projectId }: { projectId: string }) {
+	const discovery = useQuery(api.locales.discoveredCatalogs, {
+		projectId: convexId<"projects">(projectId),
+	});
+	if (!discovery?.files.length) return null;
+	return (
+		<Alert>
+			<AlertDescription>
+				<span>
+					{discovery.files.length} catalog file(s) found in Git are not yet
+					included in Strings.
+				</span>
+				<Link
+					className="underline underline-offset-4"
+					to="/projects/$projectId/sync"
+					params={{ projectId }}
+					hash="discovered-catalogs"
+				>
+					Review discovered languages
+				</Link>
+			</AlertDescription>
+		</Alert>
+	);
+}

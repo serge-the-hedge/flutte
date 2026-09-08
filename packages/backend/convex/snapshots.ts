@@ -24,6 +24,7 @@ import {
 	preserveArchivedTargetSourceFingerprint,
 	restoreByteIdenticalArchivedTargets,
 } from "./archiveReconciliation";
+import { readCatalogDiscovery } from "./catalogDiscovery";
 import {
 	type CatalogDocument,
 	type JsonObject,
@@ -2823,21 +2824,24 @@ export const repositoryAdapterReceipt = internalQuery({
 				message: "Ingestion diagnostics exceed the supported receipt envelope.",
 			});
 		}
-		let unboundLocaleFileCount = 0;
+		let unboundLocaleFiles: Array<{
+			catalogPath: string;
+			declaredLocaleCode: string | null;
+			messageCount: number | null;
+		}> = [];
 		let absentTargetLocaleCount = 0;
 		const snapshotId = run.snapshotId;
 		if (snapshotId) {
-			const unbound = await ctx.db
-				.query("sourceSnapshotUnboundFiles")
-				.withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshotId))
-				.take(MAX_SNAPSHOT_FILES + 1);
-			if (unbound.length > MAX_SNAPSHOT_FILES) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Unbound Locale evidence exceeds the receipt envelope.",
-				});
-			}
-			unboundLocaleFileCount = unbound.length;
+			const { files } = await readCatalogDiscovery(
+				ctx,
+				run.projectId,
+				snapshotId,
+			);
+			unboundLocaleFiles = files.map((file) => ({
+				catalogPath: file.catalogPath,
+				declaredLocaleCode: file.declaredLocaleCode ?? null,
+				messageCount: file.messageCount ?? null,
+			}));
 			const absent = await ctx.db
 				.query("sourceSnapshotAbsentLocales")
 				.withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshotId))
@@ -2850,8 +2854,23 @@ export const repositoryAdapterReceipt = internalQuery({
 			}
 			absentTargetLocaleCount = absent.length;
 		}
+		let syncUrl: string | null = null;
+		if (process.env.SITE_URL) {
+			try {
+				const url = new URL(
+					`/projects/${run.projectId}/sync#discovered-catalogs`,
+					process.env.SITE_URL,
+				);
+				if (url.protocol === "https:" || url.protocol === "http:")
+					syncUrl = url.href;
+			} catch {
+				/* Missing or invalid web configuration must not fail an accepted sync. */
+			}
+		}
+
 		return {
 			version: 1,
+			syncUrl,
 			run: {
 				id: run._id,
 				status: run.status,
@@ -2861,7 +2880,8 @@ export const repositoryAdapterReceipt = internalQuery({
 					...(catalogPath === undefined ? {} : { catalogPath }),
 					message,
 				})),
-				unboundLocaleFileCount,
+				unboundLocaleFileCount: unboundLocaleFiles.length,
+				unboundLocaleFiles,
 				absentTargetLocaleCount,
 			},
 		};

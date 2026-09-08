@@ -76,6 +76,27 @@ that commit is later accepted.
 The language is then ordinary translation and release work in Strings. Adding
 it does not reopen older messages' frozen First Review scope.
 
+## Import a language already in Git
+
+Sync discovers sibling ARB files even when no language is bound to them. Its
+receipt names each unresolved file and the locale declared by `@@locale` (or
+says the declaration is missing).
+
+**Strings** links to unresolved discoveries. **Sync** and **Settings → Languages** show **Discovered catalog files** from the
+current accepted snapshot. Each card shows the repository path, declared locale,
+and message count. The form suggests the declared locale, or the existing language
+configuration for that exact path when no locale is declared. Missing identity
+requires an editor to choose it; filenames alone do not decide language identity.
+Conflicting, source, and archived language bindings explain what needs resolving.
+
+Choose **Add language** to bind and import that file immediately, without another
+sync. A snapshot change invalidates the open binding request. Files disappear from
+discovery after binding; re-syncing the same commit no longer warns about them.
+Adding a language is deliberate because it changes the active translation and
+release scope. Ordinary Git imports remain unconfirmed; matching reviewed delivery
+evidence keeps its existing review provenance. Merely finding a file never approves
+its translations or activates its language.
+
 ## Several languages and capacity
 
 Prepare several configured languages in parallel. Deliver one new language per

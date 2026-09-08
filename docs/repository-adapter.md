@@ -66,3 +66,17 @@ chunks; failed or abandoned builds clean them up in batches. Version 2 delivery
 captures retain a manifest and original input-file references instead of one
 combined catalog JSON blob. Generated outputs are temporary download artifacts,
 not an additional permanent catalog history.
+
+### Discovered catalog files in sync receipts
+
+The snapshot receipt includes `syncUrl` (a direct web link when configured) and
+`run.unboundLocaleFiles`, a bounded list of
+`{ catalogPath, declaredLocaleCode, messageCount }` records. Missing declarations
+or counts are `null`. `unboundLocaleFileCount` counts this unresolved list; active
+bindings are excluded even when the snapshot was originally ingested unbound.
+The immutable snapshot evidence is retained. Older clients can ignore the additive
+field; newer clients accept older receipts without it. CLI protocol remains 1.
+
+The web discovery list uses the current accepted Baseline, independently of the
+latest run (which may fail or create a Preview). It suggests explicit declared
+locale identity or an exact configured catalog path and requires editor binding.

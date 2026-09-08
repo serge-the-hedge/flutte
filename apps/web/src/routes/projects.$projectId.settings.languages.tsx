@@ -2,6 +2,7 @@ import { buttonVariants } from "@blabla/ui/components/button";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { DiscoveredCatalogs } from "@/components/localization/discovered-catalogs";
 import { LanguageIntroductionEditor } from "@/components/localization/language-introduction-editor";
 import {
 	PageHeader,
@@ -29,6 +30,7 @@ function LanguagesRoute() {
 				title="Languages"
 				description="Configure each new language once, then prepare, review, and deliver its catalog."
 			/>
+			<DiscoveredCatalogs projectId={projectId} />
 			{project && targets && locales ? (
 				<LanguageIntroductionEditor
 					key={projectId}

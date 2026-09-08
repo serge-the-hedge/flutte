@@ -72,6 +72,8 @@ class SnapshotSyncReceipt {
     required this.diagnostics,
     required this.unboundLocaleFileCount,
     required this.absentTargetLocaleCount,
+    this.unboundLocaleFiles = const [],
+    this.syncUrl,
   });
 
   final int version;
@@ -82,8 +84,19 @@ class SnapshotSyncReceipt {
   final List<SnapshotDiagnostic> diagnostics;
   final int unboundLocaleFileCount;
   final int absentTargetLocaleCount;
+  final List<UnboundCatalogFile> unboundLocaleFiles;
+  final String? syncUrl;
 
   bool get succeeded => status == 'succeeded';
+}
+
+class UnboundCatalogFile {
+  const UnboundCatalogFile({
+    required this.catalogPath,
+    this.declaredLocaleCode,
+  });
+  final String catalogPath;
+  final String? declaredLocaleCode;
 }
 
 class SnapshotDiagnostic {
@@ -235,6 +248,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
         .toList(growable: false);
     return SnapshotSyncReceipt(
       version: _requiredInt(response, 'version'),
+      syncUrl: _optionalString(response, 'syncUrl'),
       runId: _requiredString(run, 'id'),
       status: _requiredString(run, 'status'),
       snapshotId: _optionalString(run, 'snapshotId'),
@@ -242,6 +256,20 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       diagnostics: diagnostics,
       unboundLocaleFileCount: _requiredInt(run, 'unboundLocaleFileCount'),
       absentTargetLocaleCount: _requiredInt(run, 'absentTargetLocaleCount'),
+      unboundLocaleFiles: run['unboundLocaleFiles'] == null
+          ? const []
+          : _requiredList(run, 'unboundLocaleFiles')
+                .map((value) {
+                  final file = _object(value);
+                  return UnboundCatalogFile(
+                    catalogPath: _requiredString(file, 'catalogPath'),
+                    declaredLocaleCode: _optionalString(
+                      file,
+                      'declaredLocaleCode',
+                    ),
+                  );
+                })
+                .toList(growable: false),
     );
   }
 
@@ -371,7 +399,18 @@ class RepositorySyncAdapter {
     }
     if (receipt.unboundLocaleFileCount > 0) {
       write(
-        'Observed ${receipt.unboundLocaleFileCount} unbound catalog file(s); bind them in Blabla to include them in the working catalog.',
+        'Found ${receipt.unboundLocaleFileCount} catalog file(s) not yet included in Blabla:',
+      );
+      for (final file in receipt.unboundLocaleFiles) {
+        // Quote repository-controlled text so unusual paths cannot inject terminal controls.
+        write(
+          '  ${jsonEncode(file.catalogPath)} — locale: ${file.declaredLocaleCode == null ? "not declared (@@locale missing)" : jsonEncode(file.declaredLocaleCode)}',
+        );
+      }
+      if (receipt.syncUrl != null)
+        write('Review discovered files: ${receipt.syncUrl}');
+      write(
+        'Open Blabla → Sync → Discovered catalog files to review and add each language. No new sync is needed for files in the accepted catalog.',
       );
     }
     return receipt;
