@@ -494,7 +494,7 @@ _Avoid_: page, full catalog
 A composable narrowing of the catalog — search text, key prefix, Code Area, tag,
 Locale, a waiting state, an Unconfirmed Import, a Sibling Set, expansion, or a
 Work Hand-off — carried in the URL and shown as a dismissible chip. Scopes
-combine as AND and select keys within the current working Locale view.
+combine as AND and select keys within the selected Locale view.
 _Avoid_: Release Scope, saved view
 
 **Work Hand-off**:

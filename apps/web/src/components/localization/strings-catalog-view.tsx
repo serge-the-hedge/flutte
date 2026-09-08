@@ -86,12 +86,13 @@ import {
 } from "@/lib/strings-catalog-presentation";
 import {
 	collectStringsWindowMessageIds,
+	estimateStringsCardHeight,
 	isCatalogWorkspaceFieldVisible,
 	quantizeStringsWindowBounds,
 	StringsCardMeasurementCache,
 	type StringsWindowCards,
 	sameStringsWindowMessageIds,
-	WINDOW_KEY_CAP,
+	stringsWindowKeyCap,
 } from "@/lib/strings-window";
 import { CatalogDraftRecovery } from "./catalog-draft-recovery";
 
@@ -1293,14 +1294,14 @@ function VirtualizedCatalog({
 	const virtualizer = useVirtualizer({
 		count: digests.length,
 		getScrollElement: () => scrollParent,
-		// Six quiet rows plus a header, rather than six bordered cards. A card
+		// Estimate every selected language row until the actual card is measured. A card
 		// measured before keeps its last known height instead of collapsing to
 		// the stable estimate on re-entry.
 		estimateSize: (index) =>
 			cardMeasurementCache.estimate(
-				projectionId,
+				`${projectionId}:${digests[index]?.targets.length ?? 0}`,
 				digests[index]?.messageId ?? "",
-				208,
+				estimateStringsCardHeight(digests[index]?.targets.length ?? 0),
 			),
 		initialRect: INITIAL_CATALOG_RECT,
 		scrollMargin,
@@ -1388,6 +1389,12 @@ function VirtualizedCatalog({
 	// owns the Window subscription; this callback fires with a stable,
 	// stride-aligned identifier list whenever the desired window changes.
 	const virtualItems = virtualizer.getVirtualItems();
+	const visibleStart =
+		virtualizer.range?.startIndex ?? virtualItems[0]?.index ?? 0;
+	const visibleEnd = (virtualizer.range?.endIndex ?? visibleStart) + 1;
+	const windowKeyCap = stringsWindowKeyCap(
+		Math.max(0, ...digests.map((digest) => digest.targets.length)),
+	);
 	// Record hydrated rows' measured heights so the cache can seed later
 	// estimates. Skeleton rows never write: their height is the estimate.
 	useEffect(() => {
@@ -1396,7 +1403,7 @@ function VirtualizedCatalog({
 			if (!digest) continue;
 			if (!hydratedCards.has(digest.messageId)) continue;
 			cardMeasurementCache.record(
-				projectionId,
+				`${projectionId}:${digest.targets.length}`,
 				digest.messageId,
 				virtualRow.size,
 			);
@@ -1414,13 +1421,13 @@ function VirtualizedCatalog({
 			onWindowMessageIdsChange([]);
 			return;
 		}
-		const first = virtualItems[0]?.index ?? 0;
-		const last = virtualItems[virtualItems.length - 1]?.index ?? first;
+		const first = visibleStart;
+		const last = visibleEnd - 1;
 		const bounds = quantizeStringsWindowBounds(
 			first,
 			last + 1,
 			digests.length,
-			WINDOW_KEY_CAP,
+			windowKeyCap,
 		);
 		const messageIds = collectStringsWindowMessageIds({
 			orderedMessageIds: digests.map((digest) => digest.messageId),
@@ -1431,7 +1438,8 @@ function VirtualizedCatalog({
 					? []
 					: [pendingWorkspaceFocus.messageId]),
 			],
-			cap: WINDOW_KEY_CAP,
+			cap: windowKeyCap,
+			visibleBounds: { start: visibleStart, end: visibleEnd },
 		});
 		if (
 			lastWindowRequestRef.current.projectionId === projectionId &&
@@ -1445,6 +1453,9 @@ function VirtualizedCatalog({
 		lastWindowRequestRef.current = { projectionId, messageIds };
 		onWindowMessageIdsChange(messageIds);
 	}, [
+		visibleStart,
+		visibleEnd,
+		windowKeyCap,
 		virtualItems,
 		digests,
 		projectionId,
@@ -1488,7 +1499,15 @@ function VirtualizedCatalog({
 				return;
 			}
 			if (attempts >= 24) {
-				setPendingWorkspaceFocus(null);
+				const card = hydratedCards.get(pendingWorkspaceFocus.messageId);
+				const valueArrived =
+					card?.source.localeId === pendingWorkspaceFocus.localeId ||
+					card?.targets.some(
+						(value) => value.localeId === pendingWorkspaceFocus.localeId,
+					);
+				// Queued language batches may take longer than a layout retry.
+				// Stop polling, but retry when hydration supplies the requested field.
+				if (valueArrived) setPendingWorkspaceFocus(null);
 				return;
 			}
 			if (!requestedScroll) {
@@ -1500,11 +1519,23 @@ function VirtualizedCatalog({
 			attempts++;
 			animationFrame = requestAnimationFrame(focusPendingField);
 		};
+		const cancelOnOtherFocus = (event: FocusEvent) => {
+			const target = event.target;
+			if (
+				target instanceof HTMLElement &&
+				(target.dataset.workspaceMessageId !==
+					pendingWorkspaceFocus.messageId ||
+					target.dataset.workspaceLocaleId !== pendingWorkspaceFocus.localeId)
+			)
+				setPendingWorkspaceFocus(null);
+		};
+		document.addEventListener("focusin", cancelOnOtherFocus);
 		focusPendingField();
 		return () => {
+			document.removeEventListener("focusin", cancelOnOtherFocus);
 			if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
 		};
-	}, [pendingWorkspaceFocus, scrollParent, virtualizer]);
+	}, [pendingWorkspaceFocus, scrollParent, virtualizer, hydratedCards]);
 
 	if (digests.length === 0) return <EmptySearchResult />;
 

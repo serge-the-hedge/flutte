@@ -10,6 +10,18 @@ export const STRINGS_WINDOW_STRIDE = 8;
  * MAX_CATALOG_WORKSPACE_WINDOW_KEYS. */
 export const WINDOW_KEY_CAP = 32;
 
+/** Bound lookahead by target values as the selected language set grows. */
+export function stringsWindowKeyCap(targetCount: number): number {
+	return Math.min(
+		WINDOW_KEY_CAP,
+		Math.max(1, Math.floor(128 / Math.max(1, targetCount))),
+	);
+}
+
+export function estimateStringsCardHeight(targetCount: number): number {
+	return 64 + 32 * (Math.max(0, targetCount) + 1);
+}
+
 /** A focused field should move only when it has actually left the viewport;
  * partial clipping is enough to justify restoring it after a reactive update. */
 export function isCatalogWorkspaceFieldVisible(input: {
@@ -41,7 +53,9 @@ export function quantizeStringsWindowBounds(
 	const end = Math.max(start, Math.min(visibleEnd, totalCount));
 	const visibleSpan = Math.min(windowSize, Math.max(1, end - start));
 	const leadingBuffer = Math.floor((windowSize - visibleSpan) / 2);
-	const alignedStart = Math.floor((start - leadingBuffer) / stride) * stride;
+	const safeStride = Math.max(1, Math.min(stride, Math.floor(windowSize / 2)));
+	const alignedStart =
+		Math.floor((start - leadingBuffer) / safeStride) * safeStride;
 	const windowStart = Math.min(
 		Math.max(0, totalCount - windowSize),
 		Math.max(0, alignedStart),
@@ -62,10 +76,6 @@ export type StringsWindowCardCache = {
 	cards: StringsWindowCards;
 };
 
-/** Keep two Window responses at most: enough for calm forward/backward
- * scrolling without gradually rebuilding the complete catalog in memory. */
-export const STRINGS_WINDOW_CARD_CACHE_CAP = WINDOW_KEY_CAP * 2;
-
 export function createStringsWindowCardCache(): StringsWindowCardCache {
 	return { projectionId: undefined, cards: new Map() };
 }
@@ -75,6 +85,7 @@ export function updateStringsWindowCardCache(
 	input: {
 		projectionId: string | undefined;
 		cards: StringsWindowCards | undefined;
+		requestedMessageIds?: readonly string[];
 		maxCards: number;
 	},
 ): StringsWindowCardCache {
@@ -85,6 +96,11 @@ export function updateStringsWindowCardCache(
 	}
 
 	const cards = new Map(sameProjection ? cache.cards : []);
+	// A completed response may suppress a requested key whose split reads disagree.
+	// Remove its older editable card while retaining unrelated scrolling lookahead.
+	for (const messageId of input.requestedMessageIds ?? []) {
+		if (!input.cards.has(messageId)) cards.delete(messageId);
+	}
 	for (const [messageId, card] of input.cards) {
 		// Reinserting marks the currently subscribed Window as most recent.
 		cards.delete(messageId);
@@ -139,11 +155,24 @@ export function collectStringsWindowMessageIds(input: {
 	orderedMessageIds: readonly string[];
 	bounds: StringsWindowBounds;
 	extraMessageIds: readonly string[];
+	visibleBounds?: StringsWindowBounds;
 	cap: number;
 }): string[] {
 	const { orderedMessageIds, bounds, extraMessageIds, cap } = input;
 	const catalogIds = new Set(orderedMessageIds);
 	const fullSlice = orderedMessageIds.slice(bounds.start, bounds.end);
+	if (input.visibleBounds) {
+		const visible = orderedMessageIds.slice(
+			input.visibleBounds.start,
+			input.visibleBounds.end,
+		);
+		const chosen = new Set<string>();
+		for (const id of [...visible, ...extraMessageIds, ...fullSlice]) {
+			if (chosen.size >= cap) break;
+			if (catalogIds.has(id)) chosen.add(id);
+		}
+		return orderedMessageIds.filter((id) => chosen.has(id));
+	}
 	const extras = [...new Set(extraMessageIds)]
 		.filter((messageId) => catalogIds.has(messageId))
 		.slice(0, cap);

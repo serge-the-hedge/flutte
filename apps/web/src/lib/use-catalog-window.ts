@@ -1,75 +1,82 @@
 import { useQueries } from "convex/react";
-import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { useEffect, useMemo, useState } from "react";
-import { splitOversizedCatalogWindow } from "./catalog-window-requests";
+import {
+	advanceWindowBatches,
+	type CatalogWindowArgs,
+	type CatalogWindowBatch,
+	type CatalogWindowResult,
+	initialWindowBatches,
+	mergeWindowCards,
+	windowBatchKey,
+} from "./catalog-window-requests";
 import { api } from "./convex-api";
 
-type WindowArgs = FunctionArgs<typeof api.catalogWorkspaceNavigation.window>;
-type WindowResult = FunctionReturnType<
-	typeof api.catalogWorkspaceNavigation.window
->;
-
-/** Keep one subscription for normal windows. Exceptionally large values split
- * only the failed batch; every leaf stays reactive and the full window remains
- * available to the existing card cache once its requests finish. */
-export function useCatalogWindow(
-	input: WindowArgs | "skip",
-): WindowResult | undefined {
+/** Load at most four new language/key batches concurrently. Completed visible
+ * batches remain subscribed, so edits continue to update partial and full cards. */
+export function useCatalogWindow(input: CatalogWindowArgs | "skip"): {
+	cards: CatalogWindowResult | undefined;
+	isLoading: boolean;
+} {
 	const requestKey = JSON.stringify(input);
-	// useQueries replaces its subscription when the query map identity changes.
-	// Callers may construct equivalent arguments on every render, so memoize by
-	// their serialized values before deriving the query map.
 	const args = useMemo(
-		() => JSON.parse(requestKey) as WindowArgs | "skip",
+		() => JSON.parse(requestKey) as CatalogWindowArgs | "skip",
 		[requestKey],
 	);
-	const [split, setSplit] = useState<{
+	const [state, setState] = useState<{
 		requestKey: string;
-		batches: string[][];
+		batches: CatalogWindowBatch[];
 	} | null>(null);
 	const batches = useMemo(
 		() =>
 			args === "skip"
 				? []
-				: split?.requestKey === requestKey
-					? split.batches
-					: [args.messageIds],
-		[args, requestKey, split],
+				: state?.requestKey === requestKey
+					? state.batches
+					: initialWindowBatches(args),
+		[args, requestKey, state],
 	);
 	const queries = useMemo(
 		() =>
 			Object.fromEntries(
-				batches.map((messageIds) => [
-					JSON.stringify(messageIds),
-					{
-						query: api.catalogWorkspaceNavigation.window,
-						args: args === "skip" ? {} : { ...args, messageIds },
-					},
-				]),
+				batches
+					.filter((batch) => batch.started)
+					.map((batch) => [
+						windowBatchKey(batch),
+						{
+							query: api.catalogWorkspaceNavigation.window,
+							args:
+								args === "skip"
+									? {}
+									: {
+											...args,
+											messageIds: batch.messageIds,
+											...(batch.localeIds === undefined
+												? {}
+												: { localeIds: batch.localeIds }),
+										},
+						},
+					]),
 			),
 		[args, batches],
 	);
-	// Convex's multi-query hook intentionally erases individual return types. All
-	// requests here use this one generated, typed query.
+	// Every entry uses this one generated query; Convex deliberately erases the
+	// individual result types in its multi-query API.
 	const results = useQueries(queries) as Record<
 		string,
-		WindowResult | Error | undefined
+		CatalogWindowResult | Error | undefined
 	>;
 	const next = useMemo(
-		() => splitOversizedCatalogWindow(batches, results),
+		() => advanceWindowBatches(batches, results),
 		[batches, results],
 	);
 	useEffect(() => {
-		if (next) setSplit({ requestKey, batches: next });
+		if (next) setState({ requestKey, batches: next });
 	}, [requestKey, next]);
-	return useMemo(() => {
-		if (args === "skip" || next) return undefined;
-		const combined: WindowResult = [];
-		for (const batch of batches) {
-			const result = results[JSON.stringify(batch)];
-			if (result === undefined || result instanceof Error) return undefined;
-			combined.push(...result);
-		}
-		return combined;
-	}, [args, batches, next, results]);
+	return useMemo(
+		() =>
+			args === "skip"
+				? { cards: undefined, isLoading: false }
+				: mergeWindowCards(args, batches, results),
+		[args, batches, results],
+	);
 }

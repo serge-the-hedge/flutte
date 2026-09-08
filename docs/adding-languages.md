@@ -81,10 +81,12 @@ the release’s same Baseline Snapshot, using the Release screen’s optional
 language selector or `deliver --release <id> --locale-proposal <proposal-id>`.
 
 The working catalog no longer has a 10- or 16-language ceiling. Ingestion
-processes bounded groups of keys, and Strings loads a page of keys for one
-working language alongside Source. Search checks the key, Source, and selected
-language with literal substring matching. Switch the working language to inspect
-another catalog; unsaved edits retain the normal navigation guard.
+processes bounded groups of keys. Strings defaults to all active, bound languages
+alongside Source. Use the language picker to select a subset or show Source only;
+explicit selections are shareable in the URL. Search checks the key, Source, and
+any selected language with literal substring matching. Cards load progressively
+in bounded requests, with less key lookahead as more languages are selected.
+Changing the selection retains the unsaved-edit navigation guard.
 
 Resource guards still apply together: 8,192 active Source keys, 1,000,000 projected values,
 1,000 Locale identities, and 8 MiB per uploaded catalog file. These are structural

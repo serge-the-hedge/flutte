@@ -1,8 +1,9 @@
 import { useBlocker } from "@tanstack/react-router";
 import { useCallback } from "react";
+import { stringsLanguageSelectionKey } from "./strings-languages";
 
 /** Search, scopes, and handoffs stay inside the mounted Strings view. Leaving
- * that pathname or changing the working language ends its draft session; sent writes may still finish. */
+ * that pathname or changing the selected languages ends its draft session; sent writes may still finish. */
 export function useCatalogNavigationGuard(hasUnsavedWork: boolean) {
 	useBlocker({
 		disabled: !hasUnsavedWork,
@@ -11,8 +12,8 @@ export function useCatalogNavigationGuard(hasUnsavedWork: boolean) {
 		shouldBlockFn: useCallback(({ current, next }) => {
 			if (
 				current.pathname === next.pathname &&
-				("locale" in current.search ? current.search.locale : undefined) ===
-					("locale" in next.search ? next.search.locale : undefined)
+				stringsLanguageSelectionKey(current.search) ===
+					stringsLanguageSelectionKey(next.search)
 			)
 				return false;
 			return !window.confirm(
