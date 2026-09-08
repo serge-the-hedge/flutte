@@ -75,6 +75,22 @@ async function recover(target, stage) {
 	if (!info.isDirectory() || info.isSymbolicLink())
 		throw new Error(`Refusing invalid recovery directory: ${stage}`);
 	const journalInfo = await existing(join(stage, "journal.json"));
+	if (!journalInfo) {
+		// Before the first journal is published, no copies or live moves start.
+		const names = await readdir(stage);
+		const pending = await existing(join(stage, "journal.next"));
+		if (
+			names.length === 0 ||
+			(names.length === 1 &&
+				names[0] === "journal.next" &&
+				pending?.isFile() &&
+				!pending.isSymbolicLink() &&
+				pending.size <= 4096)
+		) {
+			await rm(stage, { recursive: true, force: true });
+			return;
+		}
+	}
 	if (
 		!journalInfo?.isFile() ||
 		journalInfo.isSymbolicLink() ||

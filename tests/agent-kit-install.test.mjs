@@ -163,12 +163,19 @@ const fs = require('node:fs');
 const { syncBuiltinESMExports } = require('node:module');
 const original = fs.promises.rename;
 const originalCopy = fs.promises.cp;
+const originalMkdtemp = fs.promises.mkdtemp;
+fs.promises.mkdtemp = async function(prefix) {
+  const result = await originalMkdtemp.call(this, prefix);
+  if (process.env.KILL_PHASE === 'empty-stage') process.kill(process.pid, 'SIGKILL');
+  return result;
+};
 fs.promises.cp = async function(from, to, options) {
   const result = await originalCopy.call(this, from, to, options);
   if (process.env.KILL_PHASE === 'staging') process.kill(process.pid, 'SIGKILL');
   return result;
 };
 fs.promises.rename = async function(from, to) {
+  if (process.env.KILL_PHASE === 'initial-journal' && to.endsWith('/journal.json')) process.kill(process.pid, 'SIGKILL');
   const result = await original.call(this, from, to);
   const hit = process.env.KILL_PHASE === 'backup'
     ? to.endsWith('blabla-translate.previous')
@@ -179,7 +186,13 @@ fs.promises.rename = async function(from, to) {
 syncBuiltinESMExports();
 `,
 		);
-		for (const phase of ["staging", "backup", "install"]) {
+		for (const phase of [
+			"empty-stage",
+			"initial-journal",
+			"staging",
+			"backup",
+			"install",
+		]) {
 			const target = join(temporary, phase);
 			assert.equal(install(target).status, 0);
 			const bundle = [
