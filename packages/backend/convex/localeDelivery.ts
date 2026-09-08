@@ -139,7 +139,7 @@ export const observe = internalMutation({
 				locale.projectId !== args.projectId ||
 				locale.code !== proposal.localeCode ||
 				locale.isSource ||
-				locale.archivedAt !== undefined
+				(locale.archivedAt !== undefined && !locale.pendingBinding)
 			)
 				throw new ConvexError({
 					code: "INTEGRITY",

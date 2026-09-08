@@ -14,7 +14,7 @@ git pull --ff-only origin develop
 blabla sync
 ```
 
-`sync` reads the bound ARB files from the checkout, uploads each catalog separately,
+`sync` reads the bound ARB files and tracked sibling catalogs from the checkout, uploads each catalog separately,
 then finalizes one durable Source Snapshot and prints the receipt. Each file is
 limited to 8 MiB; there is no combined upload byte limit. Uploaded files remain
 private staging evidence until finalization succeeds. Incomplete uploads expire
@@ -26,6 +26,11 @@ and the agent permissions together, then gives you the one-time `login`
 command. If setup is incomplete, `sync` prints the exact missing binding or
 project configuration instead of requiring a project id or a hand-built HTTP
 request.
+
+Unbound files are listed by repository path and declared locale. Open **Sync →
+Discovered catalog files** in Blabla (also available in **Settings → Languages**)
+to review the prefilled language and add it to Strings without another sync.
+Discovery never activates a language automatically.
 
 The current Brickit integration branch is `develop`. Sync refuses another
 branch so the accepted Source Snapshot and later delivery stay on the same

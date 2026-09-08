@@ -29,6 +29,7 @@ import {
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DiscoveredCatalogs } from "@/components/localization/discovered-catalogs";
 import {
 	PageHeader,
 	ProjectShell,
@@ -102,7 +103,7 @@ function SyncCommand({
 					Connect the local adapter
 				</CardTitle>
 				<CardDescription>
-					The adapter reads the checkout and sends only the bound ARB bytes. It
+					The adapter reads bound ARB files and discovers sibling catalogs. It
 					never edits, fetches, pushes, or opens a pull request.
 				</CardDescription>
 			</CardHeader>
@@ -440,6 +441,7 @@ function RepositorySyncRoute() {
 					</Alert>
 				)}
 
+				<DiscoveredCatalogs projectId={projectId} />
 				<BindingSetup setup={setup} />
 				<SyncCommand
 					projectId={projectId}
@@ -498,7 +500,8 @@ function RepositorySyncRoute() {
 							{setup.latestRun.unboundLocaleFileCount > 0 ||
 							setup.latestRun.absentTargetLocaleCount > 0 ? (
 								<div className="text-muted-foreground text-xs">
-									{setup.latestRun.unboundLocaleFileCount} unbound file(s),{" "}
+									{setup.latestRun.unboundLocaleFileCount} unbound file(s) when
+									this snapshot was ingested,{" "}
 									{setup.latestRun.absentTargetLocaleCount} target Locale
 									file(s) absent in this commit.
 								</div>
