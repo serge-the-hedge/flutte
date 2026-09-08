@@ -9,8 +9,10 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { readCatalogDiscovery } from "./catalogDiscovery";
 import { normalizeCatalogPath } from "./catalogPaths";
 import { normalizeLocaleCode, now } from "./lib";
+import { configuredIntroductionTargets } from "./localeIntroductionTargets";
 import {
 	assertProjectExists,
 	requireEditor,
@@ -67,9 +69,244 @@ export const list = query({
 			.query("locales")
 			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
 			.collect();
-		return args.includeArchived
-			? locales
-			: locales.filter((locale) => locale.archivedAt === undefined);
+		return locales.filter(
+			(locale) =>
+				!locale.pendingBinding &&
+				(args.includeArchived || locale.archivedAt === undefined),
+		);
+	},
+});
+
+/** Suggest bindings only from the accepted catalog, never a failed run or Preview. */
+export const discoveredCatalogs = query({
+	args: { projectId: v.id("projects") },
+	returns: v.object({
+		canEdit: v.boolean(),
+		snapshotId: v.union(v.id("sourceSnapshots"), v.null()),
+		files: v.array(
+			v.object({
+				id: v.id("sourceSnapshotUnboundFiles"),
+				catalogPath: v.string(),
+				declaredLocaleCode: v.union(v.string(), v.null()),
+				messageCount: v.union(v.number(), v.null()),
+				suggestedCode: v.string(),
+				suggestedLabel: v.string(),
+				existingLocaleId: v.union(v.id("locales"), v.null()),
+				issue: v.union(v.string(), v.null()),
+			}),
+		),
+	}),
+	handler: async (ctx, { projectId }) => {
+		const { member } = await requireViewer(ctx, projectId);
+		const project = await assertProjectExists(ctx, projectId);
+		const canEdit =
+			(member.role === "owner" || member.role === "editor") &&
+			!project.migrationPending;
+		const snapshotId = project.baselineSnapshotId ?? null;
+		if (!snapshotId || project.type === "basic")
+			return { canEdit, snapshotId: null, files: [] };
+		const [{ files, locales }, targets] = await Promise.all([
+			readCatalogDiscovery(ctx, projectId, snapshotId),
+			configuredIntroductionTargets(ctx, projectId),
+		]);
+		return {
+			canEdit,
+			snapshotId,
+			files: files.map((file) => {
+				const configured = targets.find(
+					(target) => target.catalogPath === file.catalogPath,
+				);
+				const suggestedCode =
+					file.declaredLocaleCode ?? configured?.localeCode ?? "";
+				const existing = locales.find(
+					(locale) => locale.code === suggestedCode,
+				);
+				const claimant = locales.find(
+					(locale) => locale.catalogPath === file.catalogPath,
+				);
+				let issue: string | null = null;
+				if (existing?.pendingBinding) {
+					issue = "This language is being added. Please wait for it to finish.";
+				} else if (
+					claimant?.archivedAt !== undefined ||
+					existing?.archivedAt !== undefined
+				) {
+					issue =
+						"This file or language is archived. Restore the language before binding it.";
+				} else if (existing?.isSource) {
+					issue =
+						"This file declares the source language. Source changes require ordinary sync.";
+				} else if (existing?.catalogPath) {
+					issue = `This language already uses ${existing.catalogPath}. Review its binding in Sync.`;
+				} else if (
+					configured &&
+					file.declaredLocaleCode &&
+					configured.localeCode !== file.declaredLocaleCode
+				) {
+					issue = `The file declares ${file.declaredLocaleCode}, but this path is configured for ${configured.localeCode}. Correct the configuration or file first.`;
+				}
+				return {
+					id: file._id,
+					catalogPath: file.catalogPath,
+					declaredLocaleCode: file.declaredLocaleCode ?? null,
+					messageCount: file.messageCount ?? null,
+					suggestedCode,
+					suggestedLabel: existing?.label ?? configured?.label ?? "",
+					existingLocaleId: existing?._id ?? null,
+					issue,
+				};
+			}),
+		};
+	},
+});
+
+const discoveredBindingArgs = {
+	projectId: v.id("projects"),
+	snapshotId: v.id("sourceSnapshots"),
+	unboundFileId: v.id("sourceSnapshotUnboundFiles"),
+	code: v.string(),
+	label: v.string(),
+};
+
+export const discardPendingBinding = internalMutation({
+	args: { localeId: v.id("locales") },
+	returns: v.null(),
+	handler: async (ctx, { localeId }) => {
+		const locale = await ctx.db.get(localeId);
+		if (
+			locale?.pendingBinding &&
+			locale.archivedAt !== undefined &&
+			!locale.catalogPath
+		)
+			await ctx.db.delete(localeId);
+		return null;
+	},
+});
+
+/** Reserve a hidden identity only after rechecking the user's displayed evidence. */
+export const prepareDiscoveredBinding = internalMutation({
+	args: discoveredBindingArgs,
+	returns: v.object({
+		localeId: v.id("locales"),
+		catalogPath: v.string(),
+		pending: v.boolean(),
+	}),
+	handler: async (ctx, args) => {
+		await requireEditor(ctx, args.projectId);
+		const project = await assertProjectExists(ctx, args.projectId);
+		const file = await ctx.db.get(args.unboundFileId);
+		if (
+			project.type === "basic" ||
+			project.baselineSnapshotId !== args.snapshotId ||
+			!file ||
+			file.snapshotId !== args.snapshotId ||
+			file.projectId !== args.projectId
+		)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"The accepted catalog changed. Review the discovered file and retry.",
+			});
+		const code = normalizeLocaleCode(args.code);
+		if (!code || (file.declaredLocaleCode && file.declaredLocaleCode !== code))
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Choose the language declared by this catalog, or provide its language if no locale is declared.",
+			});
+		const claimant = await ctx.db
+			.query("locales")
+			.withIndex("by_project_catalogPath", (q) =>
+				q.eq("projectId", args.projectId).eq("catalogPath", file.catalogPath),
+			)
+			.first();
+		if (claimant)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "This catalog path already has a language binding.",
+			});
+		const existing = await ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", args.projectId).eq("code", code),
+			)
+			.unique();
+		if (existing) {
+			if (existing.pendingBinding)
+				throw new ConvexError({
+					code: "CONFLICT",
+					message: "This language is being added. Retry shortly.",
+				});
+			if (
+				existing.isSource ||
+				existing.archivedAt !== undefined ||
+				existing.catalogPath
+			)
+				throw new ConvexError({
+					code: "CONFLICT",
+					message:
+						"Restore or review this language's existing binding in Sync first.",
+				});
+			return {
+				localeId: existing._id,
+				catalogPath: file.catalogPath,
+				pending: false,
+			};
+		}
+		const locales = await ctx.db
+			.query("locales")
+			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+			.take(1000);
+		if (locales.length >= 1000)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "A project supports at most 1,000 languages.",
+			});
+		const timestamp = now();
+		const localeId = await ctx.db.insert("locales", {
+			projectId: args.projectId,
+			code,
+			label: args.label.trim() || code,
+			isSource: false,
+			createdAt: timestamp,
+			archivedAt: timestamp,
+			pendingBinding: true,
+		});
+		// Reclaim abandoned reservations even if the action never reaches its catch block.
+		await ctx.scheduler.runAfter(
+			24 * 60 * 60 * 1000,
+			internal.locales.discardPendingBinding,
+			{ localeId },
+		);
+		return { localeId, catalogPath: file.catalogPath, pending: true };
+	},
+});
+
+export const addDiscovered = action({
+	args: discoveredBindingArgs,
+	returns: v.null(),
+	handler: async (ctx, args): Promise<null> => {
+		const prepared = await ctx.runMutation(
+			internal.locales.prepareDiscoveredBinding,
+			args,
+		);
+		try {
+			await realizeLocaleBinding(ctx, {
+				projectId: args.projectId,
+				localeId: prepared.localeId,
+				catalogPath: prepared.catalogPath,
+				snapshotId: args.snapshotId,
+				unboundFileId: args.unboundFileId,
+				pendingLocale: prepared.pending,
+			});
+		} catch (error) {
+			if (prepared.pending)
+				await ctx.runMutation(internal.locales.discardPendingBinding, {
+					localeId: prepared.localeId,
+				});
+			throw error;
+		}
+		return null;
 	},
 });
 
@@ -90,6 +327,11 @@ export const create = mutation({
 				q.eq("projectId", args.projectId).eq("code", code),
 			)
 			.unique();
+		if (existing?.pendingBinding)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "This language is being added. Retry shortly.",
+			});
 		if (existing && existing.archivedAt === undefined) {
 			throw new ConvexError({
 				code: "CONFLICT",
@@ -149,8 +391,11 @@ export const create = mutation({
  */
 export const bindingPlan = internalQuery({
 	args: {
+		allowPending: v.optional(v.boolean()),
 		localeId: v.id("locales"),
 		catalogPath: v.string(),
+		expectedSnapshotId: v.optional(v.id("sourceSnapshots")),
+		expectedUnboundFileId: v.optional(v.id("sourceSnapshotUnboundFiles")),
 	},
 	handler: async (ctx, args) => {
 		const locale = await ctx.db.get(args.localeId);
@@ -196,6 +441,28 @@ export const bindingPlan = internalQuery({
 					)
 					.unique()
 			: null;
+		if (
+			args.expectedUnboundFileId &&
+			locale.catalogPath &&
+			locale.catalogPath !== catalogPath
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"This language already has a catalog. Review its binding in Sync.",
+			});
+		}
+		if (
+			(args.expectedSnapshotId && snapshot?._id !== args.expectedSnapshotId) ||
+			(args.expectedUnboundFileId &&
+				unboundFile?._id !== args.expectedUnboundFileId)
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"The accepted catalog changed. Review the discovered file and retry.",
+			});
+		}
 		const realized = snapshot
 			? await ctx.db
 					.query("localeBindingRealizations")
@@ -204,7 +471,10 @@ export const bindingPlan = internalQuery({
 					)
 					.unique()
 			: null;
-		if (locale.archivedAt !== undefined)
+		if (
+			locale.archivedAt !== undefined &&
+			!(args.allowPending && locale.pendingBinding)
+		)
 			throw new ConvexError({
 				code: "VALIDATION",
 				message: "Restore the Locale before binding it.",
@@ -288,7 +558,12 @@ export const commitUnobservedBinding = internalMutation({
 /** Binding an already observed file stages its complete derived projection and
  * publishes the binding with that projection. The Baseline identity is unchanged. */
 export const bind = action({
-	args: { localeId: v.id("locales"), catalogPath: v.string() },
+	args: {
+		localeId: v.id("locales"),
+		catalogPath: v.string(),
+		expectedSnapshotId: v.optional(v.id("sourceSnapshots")),
+		expectedUnboundFileId: v.optional(v.id("sourceSnapshotUnboundFiles")),
+	},
 	handler: async (ctx, args): Promise<null> => {
 		const plan = await ctx.runQuery(internal.locales.bindingPlan, args);
 		if (plan.snapshot && plan.unboundFile) {
@@ -447,6 +722,11 @@ export const archive = mutation({
 				message: "Locale not found.",
 			});
 		await requireEditor(ctx, locale.projectId);
+		if (locale.pendingBinding)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "This language is being added. Retry shortly.",
+			});
 		if (locale.isSource) {
 			throw new ConvexError({
 				code: "VALIDATION",

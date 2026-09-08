@@ -10,6 +10,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { DiscoveredCatalogNotice } from "@/components/localization/discovered-catalogs";
 import { LegacyContentLink } from "@/components/localization/legacy-content-projects";
 import { ManagedStrings } from "@/components/localization/managed-strings";
 import {
@@ -116,7 +117,10 @@ function StringsRoute() {
 					</p>
 				)
 			) : (
-				<RepositoryStrings />
+				<>
+					<DiscoveredCatalogNotice projectId={projectId} />
+					<RepositoryStrings />
+				</>
 			)}
 		</ProjectShell>
 	);

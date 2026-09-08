@@ -47,6 +47,8 @@ void main() {
                   ? {}
                   : {
                       'version': 1,
+                      'syncUrl':
+                          'https://blabla.example/projects/project_1/sync#discovered-catalogs',
                       'run': {
                         'id': 'run_1',
                         'status': succeeded ? 'succeeded' : 'failed',
@@ -57,7 +59,14 @@ void main() {
                             : [
                                 {'message': 'Catalog rejected'},
                               ],
-                        'unboundLocaleFileCount': 0,
+                        'unboundLocaleFileCount': succeeded ? 1 : 0,
+                        if (succeeded)
+                          'unboundLocaleFiles': [
+                            {
+                              'catalogPath': 'intl_fr.arb',
+                              'declaredLocaleCode': 'fr',
+                            },
+                          ],
                         'absentTargetLocaleCount': 0,
                       },
                     },
@@ -81,6 +90,16 @@ void main() {
         );
         expect(code, succeeded ? 0 : 1);
         if (!succeeded) expect(output.join('\n'), contains('Catalog rejected'));
+        if (succeeded) {
+          expect(output.join('\n'), contains('"intl_fr.arb" — locale: "fr"'));
+          expect(output.join('\n'), contains('Discovered catalog files'));
+          expect(
+            output.join('\n'),
+            contains(
+              'https://blabla.example/projects/project_1/sync#discovered-catalogs',
+            ),
+          );
+        }
       },
     );
   }
@@ -588,6 +607,12 @@ class RecordingSnapshotGateway implements SnapshotSyncGateway {
       diagnosticCount: 0,
       diagnostics: [],
       unboundLocaleFileCount: 1,
+      unboundLocaleFiles: [
+        UnboundCatalogFile(
+          catalogPath: 'packages/brickit_generated/lib/l10n/intl_fr.arb',
+          declaredLocaleCode: 'fr',
+        ),
+      ],
       absentTargetLocaleCount: 0,
     );
   }

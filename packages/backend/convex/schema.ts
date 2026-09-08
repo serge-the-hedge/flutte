@@ -479,6 +479,8 @@ export default defineSchema({
 		catalogPath: v.optional(v.string()),
 		createdAt: v.number(),
 		archivedAt: v.optional(v.number()),
+		// Hidden, archived identity reserved while a discovered catalog is staged.
+		pendingBinding: v.optional(v.boolean()),
 	})
 		.index("by_project", ["projectId"])
 		.index("by_project_code", ["projectId", "code"])
