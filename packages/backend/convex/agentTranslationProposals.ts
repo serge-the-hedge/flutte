@@ -42,7 +42,11 @@ import {
 	finalizeProposal,
 	type LocaleProposalCarryForwardResult,
 } from "./localeProposals";
-import { commitManagedTarget, readManagedTarget } from "./managedContent";
+import {
+	commitManagedTarget,
+	managedMessageName,
+	readManagedTarget,
+} from "./managedContent";
 import { requireEditor, requireViewer } from "./permissions";
 import { guidanceContextValidator, readGuidance } from "./translationGuidance";
 
@@ -485,11 +489,14 @@ type TaskActor =
 	| { kind: "agent"; id: Id<"apiTokens"> };
 
 function managedSourceContext(source: {
+	key: string;
+	name?: string | null;
 	sourceValue: string;
 	context?: string;
 }) {
 	return {
 		value: source.sourceValue,
+		name: managedMessageName(source),
 		context: source.context,
 		icuType: "plain" as const,
 		argumentNames: [],
@@ -2279,7 +2286,9 @@ export const getForReview = query({
 					code: "VALIDATION",
 					message: "Review page limit must be between 1 and 32.",
 				});
-			const taskTargets: Doc<"translationTaskTargets">[] = [];
+			const taskTargets: (Doc<"translationTaskTargets"> & {
+				name?: string | null;
+			})[] = [];
 			const candidates: {
 				candidate: Doc<"agentTranslationCandidates">;
 				revision: Doc<"agentTranslationCandidateRevisions"> | null;
@@ -2344,6 +2353,7 @@ export const getForReview = query({
 					? {
 							...target,
 							sourceValue: current.source.value,
+							name: "name" in current.source ? current.source.name : undefined,
 							targetValue: current.value,
 							basis: current.basis,
 						}
@@ -2432,6 +2442,7 @@ export const contextForReview = query({
 					localeCode: current.localeCode,
 					source: {
 						value: current.source.value,
+						name: "name" in current.source ? current.source.name : undefined,
 						context:
 							"context" in current.source ? current.source.context : undefined,
 						icuType: current.source.icuType,
@@ -3063,6 +3074,7 @@ const agentReviewContextValidator = v.object({
 	localeCode: v.string(),
 	source: v.object({
 		value: v.string(),
+		name: v.optional(v.union(v.string(), v.null())),
 		context: v.optional(v.string()),
 		icuType: v.union(v.literal("plain"), v.literal("icu")),
 		argumentNames: v.array(v.string()),

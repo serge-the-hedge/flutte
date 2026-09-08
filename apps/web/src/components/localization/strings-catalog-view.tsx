@@ -62,6 +62,7 @@ import {
 	createCatalogWorkspaceDraft,
 	editCatalogWorkspaceDraft,
 	refreshCatalogWorkspaceDraft,
+	stringDisplayName,
 } from "@/lib/strings-catalog";
 import {
 	CatalogEditorDrafts,
@@ -306,12 +307,14 @@ function CatalogValue({
 
 function EditableCatalogValue({
 	messageId,
+	messageLabel,
 	value,
 	sourceValue,
 	onCommitValue,
 	onMoveFocus,
 }: {
 	messageId: string;
+	messageLabel?: string;
 	value: EditableCatalogWorkspaceValue;
 	sourceValue?: string;
 	onCommitValue: CommitCatalogValue;
@@ -615,6 +618,7 @@ function EditableCatalogValue({
 				<IcuMessageSegmentEditor
 					format={basis.kind === "repository" ? "icu" : "plain"}
 					messageId={messageId}
+					messageLabel={messageLabel}
 					localeId={value.localeId}
 					localeCode={value.localeCode}
 					sourceValue={value.isSource ? undefined : sourceValue}
@@ -743,6 +747,7 @@ function EditableCatalogValue({
  * opaque value is editable and renders the shared field shape. */
 function CatalogWorkspaceValueField({
 	messageId,
+	messageLabel,
 	value,
 	sourceValue,
 	canEdit,
@@ -750,6 +755,7 @@ function CatalogWorkspaceValueField({
 	onMoveFocus,
 }: {
 	messageId: string;
+	messageLabel?: string;
 	value: CatalogWorkspaceValue;
 	sourceValue?: string;
 	canEdit: boolean;
@@ -760,6 +766,7 @@ function CatalogWorkspaceValueField({
 	return isEditableCatalogWorkspaceValue(editor) ? (
 		<EditableCatalogValue
 			messageId={messageId}
+			messageLabel={messageLabel}
 			value={editor.value}
 			sourceValue={sourceValue}
 			onCommitValue={editor.onCommitValue}
@@ -815,6 +822,11 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 	const controls = useContext(CatalogControlsContext);
 	const keyPresentation = presentCatalogKey(catalogKey.targets);
 	const hasMultiArmIcu = hasMultipleIcuArms(catalogKey);
+	const { title, label: accessibleTitle } = stringDisplayName({
+		id: catalogKey.id,
+		name: catalogKey.name,
+		sourceValue: catalogKey.source.value,
+	});
 	return (
 		<section
 			data-highlighted={highlighted || undefined}
@@ -836,7 +848,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						onCheckedChange={(checked) =>
 							onSelectedChange(catalogKey.id, checked === true)
 						}
-						aria-label={`${selected ? "Remove" : "Add"} ${catalogKey.id} ${selected ? "from" : "to"} Translation Task`}
+						aria-label={`${selected ? "Remove" : "Add"} ${accessibleTitle} ${selected ? "from" : "to"} Translation Task`}
 						className={cn(
 							"translate-y-0.5 transition-opacity",
 							selected
@@ -848,16 +860,23 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 				<button
 					type="button"
 					onClick={() => onNavigationChange({ query: "", key: catalogKey.id })}
-					className="min-w-0 truncate rounded-sm font-mono text-[13px] text-foreground/90 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					aria-label={`Open ${catalogKey.id} permalink`}
+					className={cn(
+						"min-w-0 rounded-sm text-left text-[13px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+						catalogKey.name === undefined
+							? "truncate font-mono text-foreground/90"
+							: "break-words font-medium",
+						catalogKey.name === null && "text-muted-foreground",
+					)}
+					aria-label={`Open ${accessibleTitle} permalink`}
 				>
-					{catalogKey.id}
+					{title}
 				</button>
 				{controls.onManageKey ? (
 					<Button
 						variant="ghost"
 						size="xs"
 						onClick={() => controls.onManageKey?.(catalogKey)}
+						aria-label={`Details for ${accessibleTitle}`}
 					>
 						Details
 					</Button>
@@ -898,6 +917,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 			<div className="-ml-0.5 flex flex-col">
 				<CatalogWorkspaceValueField
 					messageId={catalogKey.id}
+					messageLabel={accessibleTitle}
 					value={catalogKey.source}
 					sourceValue={catalogKey.source.value}
 					canEdit={canEdit}
@@ -909,6 +929,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						<CatalogWorkspaceValueField
 							key={value.localeId ?? value.localeCode}
 							messageId={catalogKey.id}
+							messageLabel={accessibleTitle}
 							value={value}
 							sourceValue={catalogKey.source.value}
 							canEdit={canEdit}
@@ -1217,7 +1238,7 @@ function CatalogSearch({
 				</Button>
 			) : null}
 			<p className="shrink-0 text-muted-foreground text-xs" aria-live="polite">
-				{matchingKeyCount} of {keyCount} key
+				{matchingKeyCount} of {keyCount} string
 				{keyCount === 1 ? "" : "s"}
 			</p>
 		</div>
@@ -1659,7 +1680,7 @@ function TranslationTaskSelection({
 		const nextLocale = selectedLocale ?? locales[0];
 		if (nextLocale) setLocaleId(nextLocale.localeId);
 		setTitle(
-			`Improve ${nextLocale?.localeCode ?? "translations"} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "key" : "keys"}`,
+			`Improve ${nextLocale?.localeCode ?? "translations"} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "string" : "strings"}`,
 		);
 		setError(null);
 	};
@@ -1714,7 +1735,7 @@ function TranslationTaskSelection({
 					<AlertDialogHeader>
 						<AlertDialogTitle>Start a Translation Task</AlertDialogTitle>
 						<AlertDialogDescription>
-							Freeze these keys for one existing Locale. An agent can prepare
+							Freeze these strings for one existing Locale. An agent can prepare
 							candidates; nothing changes until you review them.
 						</AlertDialogDescription>
 					</AlertDialogHeader>
@@ -1735,7 +1756,7 @@ function TranslationTaskSelection({
 									onClick={() => {
 										setLocaleId(locale.localeId);
 										setTitle(
-											`Improve ${locale.localeCode} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "key" : "keys"}`,
+											`Improve ${locale.localeCode} · ${selectedMessageIds.length} ${selectedMessageIds.length === 1 ? "string" : "strings"}`,
 										);
 									}}
 								>
@@ -1750,7 +1771,7 @@ function TranslationTaskSelection({
 							placeholder="Task title"
 						/>
 						<p className="text-muted-foreground text-xs">
-							{selectedMessageIds.length} key
+							{selectedMessageIds.length} string
 							{selectedMessageIds.length === 1 ? "" : "s"} ·{" "}
 							{selectedLocale?.localeCode}
 						</p>

@@ -156,15 +156,12 @@ describe("Basic project workflow", () => {
 		expect(dom.container.textContent).toContain("Build {anything}");
 		expect(dom.container.textContent).toContain("Store subtitle");
 		expect(dom.container.textContent).not.toContain("Raw ICU");
-		await act(async () => button("Add string").click());
-		const key = dom.container.querySelector<HTMLInputElement>(
-			"#managed-source-key",
-		);
-		const source = dom.container.querySelector<HTMLTextAreaElement>(
-			"#managed-source-text",
-		);
-		if (!key || !source) throw new Error("Missing source form");
-		await type(key, "new_line");
+		const name =
+			dom.container.querySelector<HTMLInputElement>("#new-string-name");
+		const source =
+			dom.container.querySelector<HTMLTextAreaElement>("#new-string-text");
+		if (!name || !source) throw new Error("Missing composer");
+		await type(name, "App Store subtitle");
 		await type(source, "Keep {braces} literal");
 		const beforeUnload = new dom.window.Event("beforeunload", {
 			cancelable: true,
@@ -180,17 +177,14 @@ describe("Basic project workflow", () => {
 				);
 		});
 		expect(source.closest("fieldset")?.disabled).toBe(true);
-		expect(button("Add string").disabled).toBe(true);
-		expect(button("Languages").disabled).toBe(true);
+		expect(button("Adding…").disabled).toBe(true);
 		await act(async () => {
 			pendingCreate?.resolve("new_line");
 		});
 		pendingCreate = undefined;
-		expect(searches.at(-1)).toEqual({
-			collection: undefined,
-			key: "new_line",
-			locales: undefined,
-		});
+		expect(searches).toEqual([]);
+		expect(source.value).toBe("");
+		expect(document.activeElement).toBe(source);
 		const savedUnload = new dom.window.Event("beforeunload", {
 			cancelable: true,
 		});
@@ -202,7 +196,7 @@ describe("Basic project workflow", () => {
 			args: {
 				projectId: "project",
 				collectionId: "marketing",
-				key: "new_line",
+				name: "App Store subtitle",
 				sourceValue: "Keep {braces} literal",
 				context: "",
 			},
@@ -287,6 +281,7 @@ describe("Basic project workflow", () => {
 			},
 		};
 		const seen: number[] = [];
+		const pageLimits: number[] = [];
 		watch.mockImplementation((query, args) => {
 			const name = getFunctionName(query);
 			const ids: string[] = Array.isArray(args.localeIds)
@@ -308,9 +303,12 @@ describe("Basic project workflow", () => {
 						}
 					: many[name];
 			if (name === "managedContent:context") seen.push(ids.length);
+			if (name === "managedContent:page") pageLimits.push(Number(args.limit));
 			return {
 				onUpdate: () => () => {},
 				localQueryResult: () => {
+					if (name === "managedContent:page" && Number(args.limit) > 2)
+						throw new ConvexError({ code: "LIMIT_EXCEEDED" });
 					if (name === "managedContent:context" && ids.length > 2)
 						throw new ConvexError({ code: "LIMIT_EXCEEDED" });
 					return result as never;
@@ -338,6 +336,7 @@ describe("Basic project workflow", () => {
 		await router.load();
 		await dom.render(<RouterProvider router={router} />);
 		expect(seen.some((size) => size > 2)).toBe(true);
+		expect([...new Set(pageLimits)]).toEqual([16, 8, 4, 2]);
 		expect(seen.every((size) => size <= 4)).toBe(true);
 		expect(
 			dom.container.querySelectorAll('[data-workspace-message-id="subtitle"]'),

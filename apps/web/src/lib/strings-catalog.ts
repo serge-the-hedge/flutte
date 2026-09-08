@@ -58,10 +58,30 @@ export type CatalogWorkspaceKey = {
 
 export type StringsCatalogKey = {
 	id: string;
+	/** Undefined keeps repository key labels; null is an unnamed Basic string. */
+	name?: string | null;
 	context?: string;
 	source: CatalogWorkspaceValue;
 	targets: readonly CatalogWorkspaceValue[];
 };
+
+/** Human names label Basic content; stable IDs label repository and legacy keys. */
+export function stringDisplayName({
+	id,
+	name,
+	sourceValue,
+}: {
+	id: string;
+	name?: string | null;
+	sourceValue: string;
+}) {
+	const title = name === undefined ? id : (name ?? "Unnamed string");
+	const preview =
+		name === null
+			? sourceValue.slice(0, 160).replace(/\s+/g, " ").trim().slice(0, 100)
+			: "";
+	return { title, label: preview ? `${title}: ${preview}` : title };
+}
 
 /** The route carries this opaque compare-and-save input to the Catalog
  * Workspace. Presentation code never derives or alters its concurrency data. */

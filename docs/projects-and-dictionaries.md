@@ -15,12 +15,23 @@ project from **Projects**. Project types are not an in-place format conversion.
 
 ## Basic projects
 
-Add keys with source text and optional context, then choose project languages.
+Write source text in the inline composer, then press **Add string** or
+**Cmd/Ctrl+Enter**. The editor clears and stays focused for the next string;
+Enter inserts a line break. Failed saves keep the draft, and adding does not
+change your search or page. Name and context are optional details.
+
+Names accept spaces and Unicode, can repeat, and can be changed or cleared from
+**Details**. Unnamed strings need no invented label. Stable IDs are assigned
+automatically and remain unchanged in links, tasks and exports. Existing keys
+initially appear as names. Strings stay in creation order when renamed; search
+finds names and source text. Large text pages automatically use smaller batches.
+
+Choose project languages to start translating.
 The source/target editor and Translation Tasks use the same review policy as
 repository work. Braces and line breaks are literal plain text. Source edits are
 direct and revision-checked; translations become stale when their source content
-changes. Context-only edits preserve currency. Archiving keeps history and
-reserves the key.
+changes. Name/context-only edits preserve currency. Archiving keeps history and
+reserves the ID.
 
 All active target languages are selected initially. Reads hydrate language chunks
 and split oversized requests. A focused value can be copied with its current
@@ -31,7 +42,9 @@ source/reviewed/stale/draft status visible. JSON output offers:
 - **Partial**: reviewed pairs only, with an omission report.
 - **Draft**: working values, labelled as draft.
 
-A download is one consistent read, not a claim of external publication. Context
+A download keeps values under stable IDs and includes a separate `names` map
+for readable labels; renaming never changes the output identity. It is one
+consistent read, not a claim of external publication. Context
 accepts at most 50 keys, 20 languages and 128 pairs; downloads accept 128 keys,
 1,000 languages and 1,024 pairs. Both enforce byte budgets. Larger selections
 must be divided; nothing is silently truncated. Values are limited to 256 KiB,

@@ -52,6 +52,162 @@ async function setup() {
 }
 
 describe("managed content", () => {
+	test("browses creation order independently of keys or renames and never repeats name matches", async () => {
+		const s = await setup();
+		for (const key of ["zeta", "alpha", "middle"])
+			await s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key,
+				name: "Shared name",
+				sourceValue: "Ordinary",
+			});
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: "zeta",
+			sourceValue: "Ordinary",
+			name: "Shared name renamed",
+			expectedSourceRevision: 1,
+		});
+		expect(
+			(await s.owner.query(api.managedContent.page, s.address)).items.map(
+				(item) => item.key,
+			),
+		).toEqual(["title", "zeta", "alpha", "middle"]);
+		const oldPageLink = await s.owner.query(api.managedContent.page, {
+			...s.address,
+			limit: 1,
+			cursor: JSON.stringify({
+				collectionId: s.address.collectionId,
+				q: "",
+				key: "middle",
+			}),
+		});
+		expect(oldPageLink.items.map((item) => item.key)).toEqual(["title"]);
+		expect(JSON.parse(oldPageLink.nextCursor ?? "null").version).toBe(2);
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		let requests = 0;
+		do {
+			const page = await s.owner.query(api.managedContent.page, {
+				...s.address,
+				q: "Shared name",
+				limit: 1,
+				cursor,
+			});
+			keys.push(...page.items.map((item) => item.key));
+			cursor = page.nextCursor ?? undefined;
+			expect(++requests).toBeLessThan(10);
+		} while (cursor);
+		expect(keys).toEqual(["zeta", "alpha", "middle"]);
+	});
+
+	test("creates optional duplicate names independently from generated stable keys", async () => {
+		const s = await setup();
+		const ids = [];
+		for (const name of [
+			"  Café — 東京  ",
+			"Café — 東京",
+			null,
+			"   ",
+			undefined,
+		])
+			ids.push(
+				await s.owner.mutation(api.managedContent.createMessage, {
+					...s.address,
+					name,
+					sourceValue: "Source",
+				}),
+			);
+		expect(new Set(ids).size).toBe(5);
+		const page = await s.owner.query(api.managedContent.page, { ...s.address });
+		expect(
+			ids.map((id) => page.items.find((item) => item.messageId === id)?.name),
+		).toEqual(["Café — 東京", "Café — 東京", null, null, null]);
+		expect(page.items.find((item) => item.messageId === "title")?.name).toBe(
+			"title",
+		);
+		for (const name of ["bad\u007fname", "bad\nname", "x".repeat(257)])
+			await expect(
+				s.owner.mutation(api.managedContent.createMessage, {
+					...s.address,
+					name,
+					sourceValue: "Source",
+				}),
+			).rejects.toThrow();
+		expect(
+			(
+				await s.owner.query(api.managedContent.page, {
+					...s.address,
+					q: "東京",
+				})
+			).items,
+		).toHaveLength(2);
+	});
+	test("renames preserve identity and settled translations while retaining name history", async () => {
+		const s = await setup();
+		const initial = await s.current();
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis: initial.basis,
+			intent: { kind: "save", value: "Tradução" },
+		});
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: s.target.messageId,
+			sourceValue: initial.sourceValue,
+			name: "Welcome headline",
+			expectedSourceRevision: 1,
+		});
+		const renamed = await s.current();
+		expect(renamed.name).toBe("Welcome headline");
+		expect(renamed.messageId).toBe(s.target.messageId);
+		expect(renamed.basis.sourceFingerprint).toBe(
+			initial.basis.sourceFingerprint,
+		);
+		expect(renamed.valueState).toBe("settled");
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: s.target.messageId,
+			sourceValue: initial.sourceValue,
+			expectedSourceRevision: 2,
+		});
+		expect((await s.current()).name).toBe("Welcome headline");
+		await s.owner.mutation(api.managedContent.saveSource, {
+			...s.address,
+			messageId: s.target.messageId,
+			sourceValue: initial.sourceValue,
+			name: " ",
+			expectedSourceRevision: 3,
+		});
+		expect((await s.current()).name).toBeNull();
+		const history = await s.t.run((ctx) =>
+			ctx.db
+				.query("managedSourceRevisions")
+				.withIndex("by_message", (q) =>
+					q
+						.eq("collectionId", s.collectionId)
+						.eq("messageId", s.target.messageId),
+				)
+				.collect(),
+		);
+		expect(history.map((revision) => revision.name)).toEqual([
+			"title",
+			"Welcome headline",
+			"Welcome headline",
+			null,
+		]);
+		const exported = await s.owner.query(api.managedContent.exportSelection, {
+			...s.address,
+			messageIds: [s.target.messageId],
+			localeIds: [s.localeId],
+			mode: "reviewed",
+		});
+		expect(JSON.parse(exported.text)).toMatchObject({
+			names: { title: null },
+			values: { title: { "pt-BR": "Tradução" } },
+		});
+	});
+
 	test("authors and exports literal plain text without a Snapshot", async () => {
 		const s = await setup();
 		expect((await s.current()).valueState).toBe("waiting");
@@ -238,18 +394,24 @@ describe("managed content", () => {
 				key: `a${String(i).padStart(2, "0")}`,
 				sourceValue: "Ordinary",
 			});
+		await s.owner.mutation(api.managedContent.createMessage, {
+			...s.address,
+			key: "late",
+			name: "Late named match",
+			sourceValue: "Ordinary",
+		});
 		const first = await s.owner.query(api.managedContent.page, {
 			...s.address,
-			q: "anything",
+			q: "Late named match",
 		});
 		expect(first.items).toEqual([]);
 		expect(first.nextCursor).not.toBeNull();
 		const next = await s.owner.query(api.managedContent.page, {
 			...s.address,
-			q: "anything",
+			q: "Late named match",
 			cursor: first.nextCursor ?? undefined,
 		});
-		expect(next.items.map((item) => item.key)).toEqual(["title"]);
+		expect(next.items.map((item) => item.key)).toEqual(["late"]);
 		expect(next.nextCursor).toBeNull();
 		const focused = await s.owner.query(api.managedContent.page, {
 			...s.address,
@@ -281,9 +443,28 @@ describe("managed content", () => {
 				localeIds: [s.localeId],
 			}),
 		).rejects.toThrow("fewer pairs");
-		const page = await s.owner.query(api.managedContent.page, s.address);
-		expect(page.items.length).toBeGreaterThan(0);
-		expect(page.nextCursor).not.toBeNull();
+		await expect(
+			s.owner.query(api.managedContent.page, s.address),
+		).rejects.toThrow("Request fewer strings");
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await s.owner.query(api.managedContent.page, {
+				...s.address,
+				limit: 2,
+				cursor,
+			});
+			keys.push(...page.items.map((item) => item.key));
+			cursor = page.nextCursor ?? undefined;
+		} while (cursor);
+		expect(keys).toEqual([
+			"title",
+			"large0",
+			"large1",
+			"large2",
+			"large3",
+			"large4",
+		]);
 	});
 	test("an oversized encoded source never becomes false end-of-results", async () => {
 		const s = await setup();

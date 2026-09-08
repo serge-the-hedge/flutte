@@ -143,7 +143,10 @@ export const currentProject = internalQuery({
 				download: project.type === "basic",
 				search: {
 					engine: "literal",
-					fields: ["key", "source", "target"],
+					fields:
+						project.type === "basic"
+							? ["key", "name", "source", "target"]
+							: ["key", "source", "target"],
 					modes: ["substring", "exact"],
 					maxResults: 50,
 					continuation: true,

@@ -225,10 +225,32 @@ export async function commitManagedTarget(
 		basis: { ...current.basis, targetRevision: revision },
 	};
 }
+/** Missing names belong to older key-based clients; explicit null is unnamed. */
+export function managedMessageName(source: {
+	key: string;
+	name?: string | null;
+}): string | null {
+	return source.name === undefined ? source.key : source.name;
+}
+function normalizedName(name: string | null): string | null {
+	if (name === null) return null;
+	if (
+		Array.from(name).some((character) => {
+			const code = character.codePointAt(0) ?? 0;
+			return code < 32 || (code >= 127 && code <= 159);
+		})
+	)
+		fail("VALIDATION", "String names cannot contain control characters.");
+	const trimmed = name.trim();
+	if (Array.from(trimmed).length > 256)
+		fail("VALIDATION", "String names support at most 256 characters.");
+	return trimmed || null;
+}
 function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
 	return {
 		messageId: source.key,
 		key: source.key,
+		name: managedMessageName(source),
 		sourceValue: source.sourceValue,
 		context: source.context,
 		sourceRevision: source.sourceRevision,
@@ -238,6 +260,7 @@ function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
 function contextEntry(current: Awaited<ReturnType<typeof readManagedTarget>>) {
 	return {
 		messageId: current.source.key,
+		name: managedMessageName(current.source),
 		localeId: current.locale._id,
 		localeCode: current.locale.code,
 		sourceValue: current.source.sourceValue,
@@ -254,28 +277,47 @@ function parseCursor(
 	collectionId: Id<"contentCollections">,
 	q: string,
 ) {
-	if (cursor === undefined) return undefined;
+	if (cursor === undefined) return null;
+	if (cursor.length > 8192)
+		fail("VALIDATION", "Invalid browse cursor. Restart from the first page.");
 	try {
 		const parsed: unknown = JSON.parse(cursor);
+		// Old key-sorted page links restart when switching to creation order.
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"collectionId" in parsed &&
+			parsed.collectionId === collectionId &&
+			"q" in parsed &&
+			parsed.q === q &&
+			!("version" in parsed) &&
+			"key" in parsed &&
+			typeof parsed.key === "string" &&
+			parsed.key.length <= 256
+		)
+			return null;
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&
 			"collectionId" in parsed &&
 			"q" in parsed &&
-			"key" in parsed &&
+			"version" in parsed &&
+			parsed.version === 2 &&
+			"cursor" in parsed &&
 			parsed.collectionId === collectionId &&
 			parsed.q === q &&
-			typeof parsed.key === "string" &&
-			parsed.key.length <= 256
+			typeof parsed.cursor === "string" &&
+			parsed.cursor.length > 0
 		)
-			return parsed.key;
+			return parsed.cursor;
 	} catch {}
 	fail(
 		"VALIDATION",
-		"This cursor does not belong to the collection and search.",
+		"This cursor does not belong to the collection and search. Restart from the first page.",
 	);
 }
-/** Bounded source-key discovery; a continuation can accompany an empty matching page. */
+/** Creation-ordered browse with one native pagination call. Whole pages are consumed,
+ * including filtered rows; oversized pages are retried by the client with a lower limit. */
 export async function readManagedPage(
 	ctx: ReadCtx,
 	input: CollectionAddress & {
@@ -310,56 +352,51 @@ export async function readManagedPage(
 			.unique();
 		const items =
 			source && source.archivedAt === undefined ? [sourceEntry(source)] : [];
-		if (bytes(items) > MAX_MANAGED_RESPONSE_BYTES)
+		const result = { items, nextCursor: null };
+		if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 			fail(
 				"LIMIT_EXCEEDED",
 				"This source string exceeds the 1 MiB encoded browse limit. Shorten its text or context before browsing it.",
 			);
-		return { items, nextCursor: null };
+		return result;
 	}
-	const after = parseCursor(input.cursor, input.collectionId, q);
-	const rows = await ctx.db
+	const cursor = parseCursor(input.cursor, input.collectionId, q);
+	const page = await ctx.db
 		.query("managedMessages")
-		.withIndex("by_collection_key", (index) =>
-			after === undefined
-				? index.eq("collectionId", input.collectionId)
-				: index.eq("collectionId", input.collectionId).gt("key", after),
+		.withIndex("by_collection", (index) =>
+			index.eq("collectionId", input.collectionId),
 		)
-		.take(17);
-	const items: ReturnType<typeof sourceEntry>[] = [];
-	let last = after;
-	let consumed = 0;
-	for (const row of rows.slice(0, 16)) {
-		if (
-			row.archivedAt === undefined &&
-			(q.length === 0 ||
-				row.key.toLowerCase().includes(q) ||
-				row.sourceValue.toLowerCase().includes(q))
-		) {
-			const entry = sourceEntry(row);
-			if (items.length >= limit) break;
-			if (bytes([...items, entry]) > MAX_MANAGED_RESPONSE_BYTES) {
-				if (items.length === 0)
-					fail(
-						"LIMIT_EXCEEDED",
-						"This source string exceeds the 1 MiB encoded browse limit. Shorten its text or context before browsing it.",
-					);
-				break;
-			}
-			items.push(entry);
-		}
-		last = row.key;
-		consumed++;
-	}
-	const hasMore = consumed < rows.length;
-	return {
+		.order("asc")
+		.paginate({ cursor, numItems: limit, maximumRowsRead: 16 });
+	const items = page.page
+		.filter(
+			(row) =>
+				row.archivedAt === undefined &&
+				(q.length === 0 ||
+					row.key.toLowerCase().includes(q) ||
+					(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
+					row.sourceValue.toLowerCase().includes(q)),
+		)
+		.map(sourceEntry);
+	const result = {
 		items,
-		nextCursor:
-			hasMore && last !== undefined
-				? JSON.stringify({ collectionId: input.collectionId, q, key: last })
-				: null,
+		nextCursor: page.isDone
+			? null
+			: JSON.stringify({
+					version: 2,
+					collectionId: input.collectionId,
+					q,
+					cursor: page.continueCursor,
+				}),
 	};
+	if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
+		fail(
+			"LIMIT_EXCEEDED",
+			"This page exceeds the 1 MiB encoded browse limit. Request fewer strings; if one string still exceeds it, shorten its text or context.",
+		);
+	return result;
 }
+
 async function readContextPairs(
 	ctx: ReadCtx,
 	input: CollectionAddress & {
@@ -457,8 +494,11 @@ export async function exportManagedSelection(
 			"NEEDS_REVIEW",
 			"Selected strings include missing or stale translations. Review them, or explicitly choose partial or draft output.",
 		);
+	const names: Record<string, string | null> = Object.create(null);
+	for (const item of items) names[item.messageId] = item.name;
 	const text = JSON.stringify(
 		{
+			names,
 			collectionId: input.collectionId,
 			mode: input.mode,
 			values,
@@ -529,7 +569,8 @@ export const commit = mutation({
 export const createMessage = mutation({
 	args: {
 		...addressFields,
-		key: v.string(),
+		key: v.optional(v.string()),
+		name: v.optional(v.union(v.string(), v.null())),
 		sourceValue: v.string(),
 		context: v.optional(v.string()),
 	},
@@ -538,40 +579,57 @@ export const createMessage = mutation({
 		await requireManagedCollection(ctx, args.projectId, args.collectionId);
 		assertText(args.sourceValue, args.context);
 		if (
-			args.key.length === 0 ||
-			args.key.length > 256 ||
-			args.key !== args.key.trim() ||
-			Array.from(args.key).some((character) => character.charCodeAt(0) < 32)
+			args.key !== undefined &&
+			(args.key.length === 0 ||
+				args.key.length > 256 ||
+				args.key !== args.key.trim() ||
+				Array.from(args.key).some((character) => character.charCodeAt(0) < 32))
 		)
 			fail(
 				"VALIDATION",
 				"Choose a stable key of 1–256 characters without surrounding whitespace or control characters.",
 			);
-		const existing = await ctx.db
-			.query("managedMessages")
-			.withIndex("by_collection_key", (q) =>
-				q.eq("collectionId", args.collectionId).eq("key", args.key),
-			)
-			.unique();
+		const providedKey = args.key;
+		const existing =
+			providedKey === undefined
+				? null
+				: await ctx.db
+						.query("managedMessages")
+						.withIndex("by_collection_key", (q) =>
+							q.eq("collectionId", args.collectionId).eq("key", providedKey),
+						)
+						.unique();
 		if (existing)
 			fail(
 				"CONFLICT",
 				"This key already exists, including archived history. Choose a new key.",
 			);
+		const name =
+			args.name === undefined
+				? args.key === undefined
+					? null
+					: undefined
+				: normalizedName(args.name);
 		const timestamp = Date.now();
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const sourceRevision = 1;
-		await ctx.db.insert("managedMessages", {
+		const id = await ctx.db.insert("managedMessages", {
 			...args,
+			key: args.key ?? "",
+			name,
 			sourceRevision,
 			sourceFingerprint,
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		});
+		const key = args.key ?? String(id);
+		// The generated key becomes visible with its row in the same transaction.
+		if (args.key === undefined) await ctx.db.patch(id, { key });
 		await ctx.db.insert("managedSourceRevisions", {
 			projectId: args.projectId,
 			collectionId: args.collectionId,
-			messageId: args.key,
+			messageId: key,
+			name: name === undefined ? key : name,
 			sourceValue: args.sourceValue,
 			context: args.context,
 			sourceRevision,
@@ -579,7 +637,7 @@ export const createMessage = mutation({
 			actor: { kind: "user", id: userId },
 			createdAt: timestamp,
 		});
-		return args.key;
+		return key;
 	},
 });
 export const saveSource = mutation({
@@ -587,6 +645,7 @@ export const saveSource = mutation({
 		...addressFields,
 		messageId: v.string(),
 		sourceValue: v.string(),
+		name: v.optional(v.union(v.string(), v.null())),
 		context: v.optional(v.string()),
 		expectedSourceRevision: v.number(),
 	},
@@ -598,11 +657,16 @@ export const saveSource = mutation({
 			fail("CONFLICT", "Source changed. Reload before saving.");
 		assertText(args.sourceValue, args.context);
 		const context = args.context ?? source.context;
+		const name =
+			args.name === undefined
+				? managedMessageName(source)
+				: normalizedName(args.name);
 		const sourceRevision = source.sourceRevision + 1;
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const timestamp = Date.now();
 		await ctx.db.patch(source._id, {
 			sourceValue: args.sourceValue,
+			name,
 			context,
 			sourceRevision,
 			sourceFingerprint,
@@ -613,6 +677,7 @@ export const saveSource = mutation({
 			collectionId: args.collectionId,
 			messageId: args.messageId,
 			sourceValue: args.sourceValue,
+			name,
 			context,
 			sourceRevision,
 			sourceFingerprint,
@@ -646,6 +711,7 @@ export const archiveMessage = mutation({
 			collectionId: args.collectionId,
 			messageId: args.messageId,
 			sourceValue: source.sourceValue,
+			name: managedMessageName(source),
 			context: source.context,
 			sourceRevision,
 			sourceFingerprint: source.sourceFingerprint,

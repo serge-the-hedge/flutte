@@ -72,6 +72,41 @@ async function setup() {
 	};
 }
 describe("managed agent retrieval", () => {
+	test("returns and searches display names without treating them as stable keys", async () => {
+		const f = await setup();
+		const messageId = await f.owner.mutation(api.managedContent.createMessage, {
+			projectId: f.projectId,
+			collectionId: f.collectionId,
+			name: "Café headline",
+			sourceValue: "Welcome",
+		});
+		const path = `/collections/${f.collectionId}`;
+		const found = await (
+			await f.request(
+				`${path}/search?q=${encodeURIComponent("Café headline")}&match=exact&localeCode=fr-CA`,
+			)
+		).json();
+		expect(found.items).toMatchObject([
+			{ messageId, name: "Café headline", matchedFields: ["name"] },
+		]);
+		const keysOnly = await (
+			await f.request(
+				`${path}/search?q=${encodeURIComponent("Café headline")}&match=exact&searchIn=key&localeCode=fr-CA`,
+			)
+		).json();
+		expect(keysOnly.items).toEqual([]);
+		const context = await (
+			await f.request(`${path}/context`, {
+				keys: [messageId],
+				locales: ["fr-CA"],
+			})
+		).json();
+		expect(context.items[0]).toMatchObject({
+			messageId,
+			name: "Café headline",
+		});
+	});
+
 	test("discovers collections, searches exact reviewed target text, and preserves continuation", async () => {
 		const f = await setup();
 		await f.create("one", "Make it", "Créez {Brickit}");

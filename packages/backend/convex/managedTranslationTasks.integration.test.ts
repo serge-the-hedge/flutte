@@ -399,3 +399,56 @@ test("task review pages stay bounded when large edited reviews exceed a whole-ta
 	expect(seen).toEqual(keys);
 	expect(pages).toBe(3);
 });
+
+test("task review uses live optional names while retaining immutable message identities", async () => {
+	const f = await setup();
+	const address = {
+		projectId: f.projectId,
+		collectionId: f.collectionId,
+		messageId: "hero",
+		sourceValue: "hero {literal}",
+	};
+	await f.owner.mutation(api.managedContent.saveSource, {
+		...address,
+		expectedSourceRevision: 1,
+		name: "Store headline",
+	});
+	const waiting = await f.owner.query(
+		api.agentTranslationProposals.getForReview,
+		{ proposalId: f.taskId },
+	);
+	expect(
+		waiting?.taskTargets.find((target) => target.messageId === "hero"),
+	).toMatchObject({ messageId: "hero", name: "Store headline" });
+	expect(
+		waiting?.taskTargets.find((target) => target.messageId === "footer"),
+	).toMatchObject({ messageId: "footer", name: "footer" });
+	const submitted = await f.request(
+		f.translator.token,
+		`/translation-tasks/${f.taskId}/candidates`,
+		{ items: [{ messageId: "hero", value: "Titel" }] },
+	);
+	expect(submitted.status).toBe(200);
+	const result = (await submitted.json()) as {
+		revisions: { revisionId: Id<"agentTranslationCandidateRevisions"> }[];
+	};
+	const revisionId = result.revisions[0]?.revisionId;
+	if (!revisionId) throw new Error("Missing candidate revision");
+	const original = await f.t.run((ctx) => ctx.db.get(revisionId));
+	expect(
+		await f.owner.query(api.agentTranslationProposals.contextForReview, {
+			revisionId,
+		}),
+	).toMatchObject({ source: { name: "Store headline" } });
+	await f.owner.mutation(api.managedContent.saveSource, {
+		...address,
+		expectedSourceRevision: 2,
+		name: null,
+	});
+	expect(
+		await f.owner.query(api.agentTranslationProposals.contextForReview, {
+			revisionId,
+		}),
+	).toMatchObject({ source: { name: null } });
+	expect(await f.t.run((ctx) => ctx.db.get(revisionId))).toEqual(original);
+});
