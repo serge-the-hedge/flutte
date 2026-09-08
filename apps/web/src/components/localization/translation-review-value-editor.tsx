@@ -28,6 +28,7 @@ type ReviewEditorActions = {
 type ReviewEditorMeta = {
 	format?: "icu" | "plain";
 	messageId: string;
+	messageLabel?: string;
 	localeId: string;
 	localeCode: string;
 	sourceValue: string;
@@ -108,6 +109,7 @@ function Field() {
 			<IcuMessageSegmentEditor
 				format={meta.format}
 				messageId={meta.messageId}
+				messageLabel={meta.messageLabel}
 				localeId={meta.localeId}
 				localeCode={meta.localeCode}
 				sourceValue={meta.sourceValue}

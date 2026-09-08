@@ -20,6 +20,7 @@ import type {
 import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
+import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
 import { StringsCatalogView } from "./strings-catalog-view";
 import { StringsLanguageSelector } from "./strings-language-selector";
@@ -161,10 +162,11 @@ export function ManagedStrings({
 	const createTask = useMutation(api.agentTranslationProposals.createTask);
 	const convex = useConvex();
 	const [hasUnsaved, setHasUnsaved] = useState(false);
+	const [composerDirty, setComposerDirty] = useState(false);
 	const [form, setForm] = useState<{
-		messageId?: string;
-		sourceRevision?: number;
-		key: string;
+		messageId: string;
+		sourceRevision: number;
+		name: string;
 		value: string;
 		context: string;
 	} | null>(null);
@@ -182,6 +184,7 @@ export function ManagedStrings({
 	const [exportNote, setExportNote] = useState("");
 	const [previous, setPrevious] = useState<Array<string | undefined>>([]);
 	const hasUnsavedForms =
+		composerDirty ||
 		formDirty ||
 		languageDraft !== null ||
 		newCode.length > 0 ||
@@ -220,6 +223,7 @@ export function ManagedStrings({
 		if (!sourceLocale || !collection) continue;
 		cards.set(item.messageId, {
 			id: item.messageId,
+			name: item.name,
 			context: item.context,
 			source: {
 				localeId: sourceLocale._id,
@@ -347,7 +351,7 @@ export function ManagedStrings({
 				URL.revokeObjectURL(url);
 			}
 			setExportNote(
-				`${copy ? "Copied" : "Downloaded"} ${selectedKeys.length ? "selected keys" : "this page"}. ${result.omitted.length} values omitted.`,
+				`${copy ? "Copied" : "Downloaded"} ${selectedKeys.length ? "selected strings" : "this page"}. ${result.omitted.length} values omitted.`,
 			);
 		} catch (error) {
 			toast.error(
@@ -382,20 +386,6 @@ export function ManagedStrings({
 								}}
 							>
 								Languages
-							</Button>
-							<Button
-								disabled={busy}
-								onClick={() => {
-									if (
-										formDirty &&
-										!window.confirm("Discard unsaved string details?")
-									)
-										return;
-									setForm({ key: "", value: "", context: "" });
-									setFormDirty(false);
-								}}
-							>
-								Add string
 							</Button>
 						</div>
 					) : undefined
@@ -518,27 +508,14 @@ export function ManagedStrings({
 						if (busy) return;
 						setBusy(true);
 						try {
-							if (form.messageId && form.sourceRevision !== undefined)
-								await saveSource({
-									...address,
-									messageId: form.messageId,
-									sourceValue: form.value,
-									context: form.context,
-									expectedSourceRevision: form.sourceRevision,
-								});
-							else {
-								const messageId = await createMessage({
-									...address,
-									key: form.key.trim(),
-									sourceValue: form.value,
-									context: form.context,
-								});
-								onSearch({
-									collection: undefined,
-									key: messageId,
-									locales: search.locales,
-								});
-							}
+							await saveSource({
+								...address,
+								messageId: form.messageId,
+								sourceValue: form.value,
+								name: form.name.trim() || null,
+								context: form.context,
+								expectedSourceRevision: form.sourceRevision,
+							});
 
 							setForm(null);
 							setFormDirty(false);
@@ -554,18 +531,15 @@ export function ManagedStrings({
 					}}
 				>
 					<fieldset disabled={busy || !canEdit} className="contents">
-						<h2 className="font-medium">
-							{form.messageId ? "String details" : "Add string"}
-						</h2>
-						<label className="text-sm" htmlFor="managed-source-key">
-							Key
+						<h2 className="font-medium">String details</h2>
+						<label className="text-sm" htmlFor="managed-source-name">
+							Name <span className="text-muted-foreground">(optional)</span>
 							<Input
-								id="managed-source-key"
-								value={form.key}
-								required
-								disabled={!!form.messageId}
+								id="managed-source-name"
+								value={form.name}
+								placeholder="App Store subtitle"
 								onChange={(event) => {
-									setForm({ ...form, key: event.target.value });
+									setForm({ ...form, name: event.target.value });
 									setFormDirty(true);
 								}}
 							/>
@@ -660,6 +634,15 @@ export function ManagedStrings({
 					Source always shown{context.loading ? " · Loading languages…" : ""}
 				</span>
 			</div>
+			{canEdit && (
+				<ManagedStringComposer
+					onCreate={(input) => createMessage({ ...address, ...input })}
+					onOpen={(messageId) =>
+						changeSearch({ locales: search.locales, key: messageId })
+					}
+					onUnsavedWorkChange={setComposerDirty}
+				/>
+			)}
 			{context.error && (
 				<p role="alert" className="text-destructive text-sm">
 					{context.error.message}
@@ -667,7 +650,7 @@ export function ManagedStrings({
 			)}
 			<StringsCatalogView
 				key={`${collectionId}:${JSON.stringify(search.locales ?? "all")}`}
-				searchPlaceholder="Search keys and source text"
+				searchPlaceholder="Search names and source text"
 				emptyContent={
 					<div className="rounded-md border p-6">
 						<p>{search.q ? "No matching strings." : "No strings yet."}</p>
@@ -705,7 +688,7 @@ export function ManagedStrings({
 								setForm({
 									messageId: key.id,
 									sourceRevision: basis.sourceRevision,
-									key: key.id,
+									name: key.name === undefined ? key.id : (key.name ?? ""),
 									value: key.source.value,
 									context: key.context ?? "",
 								});

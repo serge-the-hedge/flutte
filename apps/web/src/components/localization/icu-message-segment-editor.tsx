@@ -34,6 +34,7 @@ type EditorFocusEventHandler = FocusEventHandler<HTMLElement>;
 type IcuMessageSegmentEditorProps = {
 	format?: "icu" | "plain";
 	messageId: string;
+	messageLabel?: string;
 	localeId: string;
 	localeCode: string;
 	sourceValue?: string;
@@ -54,7 +55,13 @@ type IcuMessageSegmentEditorProps = {
 
 type FieldProps = Pick<
 	IcuMessageSegmentEditorProps,
-	"messageId" | "localeId" | "disabled" | "onKeyDown" | "onFocus" | "onBlur"
+	| "messageId"
+	| "messageLabel"
+	| "localeId"
+	| "disabled"
+	| "onKeyDown"
+	| "onFocus"
+	| "onBlur"
 >;
 
 const MONO = "font-mono text-[11px]";
@@ -567,7 +574,7 @@ function StructuredMessageEditor({
 			<Textarea
 				{...fieldProps(
 					field,
-					`Edit ${localeCode} value for ${field.messageId}`,
+					`Edit ${localeCode} value for ${field.messageLabel ?? field.messageId}`,
 				)}
 				value={message.value}
 				onChange={(event) => onValueChange(event.target.value)}
@@ -816,7 +823,7 @@ export function IcuMessageSegmentEditor({
 			<Textarea
 				{...fieldProps(
 					props,
-					`Edit ${props.localeCode} value for ${props.messageId}`,
+					`Edit ${props.localeCode} value for ${props.messageLabel ?? props.messageId}`,
 				)}
 				value={props.value}
 				onChange={(event) => props.onValueChange(event.target.value)}
@@ -831,6 +838,7 @@ export function IcuMessageSegmentEditor({
 
 function StructuredIcuEditor({
 	messageId,
+	messageLabel,
 	localeId,
 	localeCode,
 	sourceValue,
@@ -849,7 +857,15 @@ function StructuredIcuEditor({
 		() => readMessageSegments({ value, localeCode, sourceValue }),
 		[localeCode, sourceValue, value],
 	);
-	const field = { messageId, localeId, disabled, onKeyDown, onFocus, onBlur };
+	const field = {
+		messageId,
+		messageLabel,
+		localeId,
+		disabled,
+		onKeyDown,
+		onFocus,
+		onBlur,
+	};
 	const rawMode = raw || message.kind === "raw";
 	const rawReason =
 		message.kind === "raw"
@@ -866,7 +882,10 @@ function StructuredIcuEditor({
 						<p className="text-muted-foreground text-xs">{rawReason}</p>
 					) : null}
 					<Textarea
-						{...fieldProps(field, `Edit ${localeCode} value for ${messageId}`)}
+						{...fieldProps(
+							field,
+							`Edit ${localeCode} value for ${messageLabel ?? messageId}`,
+						)}
 						value={value}
 						onChange={(event) => onValueChange(event.target.value)}
 						className={cn("min-h-24 font-mono text-xs", fieldClassName)}

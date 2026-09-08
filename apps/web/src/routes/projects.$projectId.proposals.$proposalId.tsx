@@ -28,6 +28,7 @@ import { TranslationReviewEditor } from "@/components/localization/translation-r
 import { WhitespaceFacts } from "@/components/localization/whitespace-facts";
 import { canRecordIntentionalBlank } from "@/lib/catalog-value-lifecycle";
 import { api, convexId } from "@/lib/convex-api";
+import { stringDisplayName } from "@/lib/strings-catalog";
 import {
 	convexApplicationErrorMessage,
 	exactTaskBatchRevisionIds,
@@ -51,6 +52,7 @@ function CandidateReviewContext({
 		context: {
 			basisState: TranslationTaskBasisState;
 			sourceValue: string;
+			name?: string | null;
 			localeCode: string;
 		},
 	) => void;
@@ -69,6 +71,10 @@ function CandidateReviewContext({
 		onContextChange(revisionId, {
 			basisState,
 			sourceValue: context?.available ? context.source.value : "",
+			name:
+				context?.available && "name" in context.source
+					? context.source.name
+					: undefined,
 			localeCode: context?.available ? context.localeCode : "target",
 		});
 	}, [context, onContextChange, revisionId]);
@@ -230,6 +236,7 @@ function ProposalDetailContent() {
 			| {
 					basisState: TranslationTaskBasisState;
 					sourceValue: string;
+					name?: string | null;
 					localeCode: string;
 			  }
 			| undefined
@@ -241,12 +248,14 @@ function ProposalDetailContent() {
 			context: {
 				basisState: TranslationTaskBasisState;
 				sourceValue: string;
+				name?: string | null;
 				localeCode: string;
 			},
 		) => {
 			setReviewContext((previous) =>
 				previous[revisionId]?.basisState === context.basisState &&
 				previous[revisionId]?.sourceValue === context.sourceValue &&
+				previous[revisionId]?.name === context.name &&
 				previous[revisionId]?.localeCode === context.localeCode
 					? previous
 					: { ...previous, [revisionId]: context },
@@ -601,7 +610,13 @@ function ProposalDetailContent() {
 					<Card key={target._id} className="border-dashed">
 						<CardHeader className="gap-2 sm:flex-row sm:items-start sm:justify-between">
 							<CardTitle className="truncate text-sm">
-								{target.messageId}
+								{
+									stringDisplayName({
+										id: target.messageId,
+										name: target.name,
+										sourceValue: target.sourceValue ?? "",
+									}).title
+								}
 							</CardTitle>
 							<Badge variant="outline">awaiting candidate</Badge>
 						</CardHeader>
@@ -632,6 +647,11 @@ function ProposalDetailContent() {
 					const draft = drafts[revision._id] ?? savedValue;
 					const isReviewed = review !== undefined;
 					const revisionContext = reviewContext[revision._id];
+					const display = stringDisplayName({
+						id: revision.messageId,
+						name: revisionContext?.name,
+						sourceValue: revisionContext?.sourceValue ?? "",
+					});
 					const revisionBasisState = revisionContext?.basisState;
 					const revisionBasisIsCurrent = revisionBasisState === "current";
 					const isDirty = draft !== savedValue;
@@ -643,7 +663,7 @@ function ProposalDetailContent() {
 								<div className="flex min-w-0 items-center gap-2">
 									<Bot aria-hidden className="size-4 text-muted-foreground" />
 									<CardTitle className="truncate text-sm">
-										{revision.messageId}
+										{display.title}
 									</CardTitle>
 								</div>
 								<Badge
@@ -716,6 +736,7 @@ function ProposalDetailContent() {
 											meta={{
 												format: managed ? "plain" : "icu",
 												messageId: revision.messageId,
+												messageLabel: display.label,
 												localeId: revision.localeId ?? "target",
 												localeCode: revisionContext?.localeCode ?? "target",
 												sourceValue: revisionContext?.sourceValue ?? "",
@@ -730,7 +751,7 @@ function ProposalDetailContent() {
 										</TranslationReviewEditor.Provider>
 										{canRecordIntentionalBlank(draft) ? (
 											<Input
-												aria-label={`Reason for intentionally blank ${revision.messageId}`}
+												aria-label={`Reason for intentionally blank ${display.label}`}
 												placeholder="Reason for an intentional blank"
 												value={blankReasons[revision._id] ?? ""}
 												onChange={(event) =>

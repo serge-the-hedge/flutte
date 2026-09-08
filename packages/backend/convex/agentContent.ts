@@ -16,6 +16,7 @@ import {
 import { sha256Hex } from "./lib";
 import {
 	exportManagedSelection,
+	managedMessageName,
 	readManagedContext,
 	readManagedTarget,
 } from "./managedContent";
@@ -41,6 +42,7 @@ function searchEntry(
 	return {
 		collectionId: current.collection._id,
 		messageId: current.source.key,
+		name: managedMessageName(current.source),
 		localeCode: current.locale.code,
 		source: {
 			value: current.source.sourceValue,
@@ -308,7 +310,17 @@ export const search = internalQuery({
 					source: source.sourceValue,
 					target: current.value,
 				};
-				const matchedFields = findMatchedFields(options, fields);
+				const matchedFields: string[] = findMatchedFields(options, fields);
+				const name = managedMessageName(source);
+				if (
+					options.searchIn === "all" &&
+					name !== null &&
+					source.key.startsWith(options.keyPrefix) &&
+					(options.match === "exact"
+						? name === options.q
+						: name.toLowerCase().includes(options.q))
+				)
+					matchedFields.push("name");
 				if (
 					matchedFields.length === 0 ||
 					(args.quality === "confirmed" && current.valueState !== "settled")

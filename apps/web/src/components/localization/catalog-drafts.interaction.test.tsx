@@ -144,6 +144,66 @@ async function commit(input = field()) {
 }
 
 describe("Catalog editor draft lifecycle", () => {
+	test.each(["App Store subtitle", null])(
+		"uses %s as presentation while keeping a Basic string's identity",
+		async (name) => {
+			const next = props({ messageIds: ["generated-id"] });
+			const card = next.hydratedCards.get("generated-id");
+			if (!card) throw new Error("Missing card fixture");
+			const navigation: unknown[] = [];
+			const selections: string[][] = [];
+			const display = name ?? "Unnamed string: Welcome";
+			await render({
+				...next,
+				hydratedCards: new Map([
+					[
+						card.id,
+						{
+							...card,
+							name,
+							targets: card.targets.map((value) => ({
+								...value,
+								editBasis: {
+									kind: "managed" as const,
+									collectionId: "basic-store",
+									sourceRevision: 1,
+									targetRevision: 0,
+									sourceFingerprint: "source",
+									membershipRevision: 1,
+								},
+							})),
+						},
+					],
+				]),
+				onNavigationChange: (state) => navigation.push(state),
+				onSelectionChange: (ids) => selections.push([...ids]),
+			});
+			const permalink = testDom.container.querySelector<HTMLButtonElement>(
+				`[aria-label="Open ${display} permalink"]`,
+			);
+			expect(permalink?.textContent).toBe(name ?? "Unnamed string");
+			expect(permalink?.classList.contains("font-mono")).toBe(false);
+			const input = testDom.container.querySelector<HTMLTextAreaElement>(
+				'textarea[data-workspace-message-id="generated-id"]',
+			);
+			expect(input?.getAttribute("aria-label")).toBe(
+				`Edit fr value for ${display}`,
+			);
+			await act(async () => {
+				permalink?.click();
+			});
+			expect(navigation).toEqual([{ query: "", key: "generated-id" }]);
+			await act(async () => {
+				testDom.container
+					.querySelector<HTMLElement>(
+						`[aria-label="Add ${display} to Translation Task"]`,
+					)
+					?.click();
+			});
+			expect(selections.at(-1)).toEqual(["generated-id"]);
+		},
+	);
+
 	test("managed literal text retains its collection and stale source basis across filtering", async () => {
 		const commits: CatalogWorkspaceCommit[] = [];
 		const onCommitValue: NonNullable<Props["onCommitValue"]> = async (

@@ -6,6 +6,9 @@
 or `repository`. A Basic project owns one plain-text workspace. Its enabled
 languages come from `locales`; source authoring and language setup use the editor.
 Project-scoped routes below need no collection selector or extra credential.
+Strings have stable `messageId`/`key` identities and a separate nullable `name`.
+Names are editable plain text and need not be unique. Always address reads and
+tasks by the returned identity, never by name; old keys initially serve as names.
 
 ## Search
 
@@ -13,9 +16,11 @@ Project-scoped routes below need no collection selector or extra credential.
 (`all`, `key`, `source`, `target`), `match` (`substring`, `exact`), `keyPrefix`,
 `quality` (`all`, `confirmed`), `limit` (1–50), and `cursor`.
 
-Hits carry project content/key/Locale identity, Source and target values, fingerprints,
+Hits carry project content/key/Locale identity, `name`, Source and target values, fingerprints,
 revision basis, value state, matching fields, and confirmation attribution.
-Plain text is searched literally, including braces. Search scans at most 64
+Plain text is searched literally, including braces. `searchIn: "all"` also matches
+names and can return `"name"` in `matchedFields`; `"key"` still matches identity.
+Search scans at most 64
 key/Locale pairs per page and caps result payload at 1 MiB; a short or empty page
 can have `nextCursor`. The terminal helper supports this endpoint with `scan`.
 
@@ -40,7 +45,9 @@ guidance also enforces its own text budget. Braces are ordinary text.
 
 `POST /workspace/download` (`read`) accepts the same `keys`/`locales` and
 `mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text` keyed by
-message then Locale, omissions, and revision evidence for that read.
+message then Locale, omissions, and revision evidence for that read. The JSON
+contains `values` and a separate `names` map keyed by the same stable identities;
+unnamed strings have `null` names.
 
 - `reviewed`: every selected pair must be current and confirmed, including
   explicitly confirmed blanks; otherwise returns `NEEDS_REVIEW` (409).

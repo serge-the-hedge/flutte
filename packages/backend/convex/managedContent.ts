@@ -225,10 +225,32 @@ export async function commitManagedTarget(
 		basis: { ...current.basis, targetRevision: revision },
 	};
 }
+/** Missing names belong to older key-based clients; explicit null is unnamed. */
+export function managedMessageName(source: {
+	key: string;
+	name?: string | null;
+}): string | null {
+	return source.name === undefined ? source.key : source.name;
+}
+function normalizedName(name: string | null): string | null {
+	if (name === null) return null;
+	if (
+		Array.from(name).some((character) => {
+			const code = character.codePointAt(0) ?? 0;
+			return code < 32 || (code >= 127 && code <= 159);
+		})
+	)
+		fail("VALIDATION", "String names cannot contain control characters.");
+	const trimmed = name.trim();
+	if (Array.from(trimmed).length > 256)
+		fail("VALIDATION", "String names support at most 256 characters.");
+	return trimmed || null;
+}
 function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
 	return {
 		messageId: source.key,
 		key: source.key,
+		name: managedMessageName(source),
 		sourceValue: source.sourceValue,
 		context: source.context,
 		sourceRevision: source.sourceRevision,
@@ -238,6 +260,7 @@ function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
 function contextEntry(current: Awaited<ReturnType<typeof readManagedTarget>>) {
 	return {
 		messageId: current.source.key,
+		name: managedMessageName(current.source),
 		localeId: current.locale._id,
 		localeCode: current.locale.code,
 		sourceValue: current.source.sourceValue,
@@ -334,6 +357,7 @@ export async function readManagedPage(
 			row.archivedAt === undefined &&
 			(q.length === 0 ||
 				row.key.toLowerCase().includes(q) ||
+				(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
 				row.sourceValue.toLowerCase().includes(q))
 		) {
 			const entry = sourceEntry(row);
@@ -457,8 +481,11 @@ export async function exportManagedSelection(
 			"NEEDS_REVIEW",
 			"Selected strings include missing or stale translations. Review them, or explicitly choose partial or draft output.",
 		);
+	const names: Record<string, string | null> = Object.create(null);
+	for (const item of items) names[item.messageId] = item.name;
 	const text = JSON.stringify(
 		{
+			names,
 			collectionId: input.collectionId,
 			mode: input.mode,
 			values,
@@ -529,7 +556,8 @@ export const commit = mutation({
 export const createMessage = mutation({
 	args: {
 		...addressFields,
-		key: v.string(),
+		key: v.optional(v.string()),
+		name: v.optional(v.union(v.string(), v.null())),
 		sourceValue: v.string(),
 		context: v.optional(v.string()),
 	},
@@ -538,40 +566,57 @@ export const createMessage = mutation({
 		await requireManagedCollection(ctx, args.projectId, args.collectionId);
 		assertText(args.sourceValue, args.context);
 		if (
-			args.key.length === 0 ||
-			args.key.length > 256 ||
-			args.key !== args.key.trim() ||
-			Array.from(args.key).some((character) => character.charCodeAt(0) < 32)
+			args.key !== undefined &&
+			(args.key.length === 0 ||
+				args.key.length > 256 ||
+				args.key !== args.key.trim() ||
+				Array.from(args.key).some((character) => character.charCodeAt(0) < 32))
 		)
 			fail(
 				"VALIDATION",
 				"Choose a stable key of 1–256 characters without surrounding whitespace or control characters.",
 			);
-		const existing = await ctx.db
-			.query("managedMessages")
-			.withIndex("by_collection_key", (q) =>
-				q.eq("collectionId", args.collectionId).eq("key", args.key),
-			)
-			.unique();
+		const providedKey = args.key;
+		const existing =
+			providedKey === undefined
+				? null
+				: await ctx.db
+						.query("managedMessages")
+						.withIndex("by_collection_key", (q) =>
+							q.eq("collectionId", args.collectionId).eq("key", providedKey),
+						)
+						.unique();
 		if (existing)
 			fail(
 				"CONFLICT",
 				"This key already exists, including archived history. Choose a new key.",
 			);
+		const name =
+			args.name === undefined
+				? args.key === undefined
+					? null
+					: undefined
+				: normalizedName(args.name);
 		const timestamp = Date.now();
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const sourceRevision = 1;
-		await ctx.db.insert("managedMessages", {
+		const id = await ctx.db.insert("managedMessages", {
 			...args,
+			key: args.key ?? "",
+			name,
 			sourceRevision,
 			sourceFingerprint,
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		});
+		const key = args.key ?? String(id);
+		// The generated key becomes visible with its row in the same transaction.
+		if (args.key === undefined) await ctx.db.patch(id, { key });
 		await ctx.db.insert("managedSourceRevisions", {
 			projectId: args.projectId,
 			collectionId: args.collectionId,
-			messageId: args.key,
+			messageId: key,
+			name: name === undefined ? key : name,
 			sourceValue: args.sourceValue,
 			context: args.context,
 			sourceRevision,
@@ -579,7 +624,7 @@ export const createMessage = mutation({
 			actor: { kind: "user", id: userId },
 			createdAt: timestamp,
 		});
-		return args.key;
+		return key;
 	},
 });
 export const saveSource = mutation({
@@ -587,6 +632,7 @@ export const saveSource = mutation({
 		...addressFields,
 		messageId: v.string(),
 		sourceValue: v.string(),
+		name: v.optional(v.union(v.string(), v.null())),
 		context: v.optional(v.string()),
 		expectedSourceRevision: v.number(),
 	},
@@ -598,11 +644,16 @@ export const saveSource = mutation({
 			fail("CONFLICT", "Source changed. Reload before saving.");
 		assertText(args.sourceValue, args.context);
 		const context = args.context ?? source.context;
+		const name =
+			args.name === undefined
+				? managedMessageName(source)
+				: normalizedName(args.name);
 		const sourceRevision = source.sourceRevision + 1;
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const timestamp = Date.now();
 		await ctx.db.patch(source._id, {
 			sourceValue: args.sourceValue,
+			name,
 			context,
 			sourceRevision,
 			sourceFingerprint,
@@ -613,6 +664,7 @@ export const saveSource = mutation({
 			collectionId: args.collectionId,
 			messageId: args.messageId,
 			sourceValue: args.sourceValue,
+			name,
 			context,
 			sourceRevision,
 			sourceFingerprint,
@@ -646,6 +698,7 @@ export const archiveMessage = mutation({
 			collectionId: args.collectionId,
 			messageId: args.messageId,
 			sourceValue: source.sourceValue,
+			name: managedMessageName(source),
 			context: source.context,
 			sourceRevision,
 			sourceFingerprint: source.sourceFingerprint,
