@@ -151,3 +151,138 @@ test("replacing a destination cannot remove a checkout nested in one of its bund
 		await rm(temporary, { recursive: true, force: true });
 	}
 });
+
+test("interrupted swaps restore the previous bundle before overwrite permission is checked", async () => {
+	const temporary = await mkdtemp(join(tmpdir(), "blabla-skills-crash-"));
+	try {
+		const preload = join(temporary, "kill-rename.cjs");
+		await writeFile(
+			preload,
+			`
+const fs = require('node:fs');
+const { syncBuiltinESMExports } = require('node:module');
+const original = fs.promises.rename;
+const originalCopy = fs.promises.cp;
+fs.promises.cp = async function(from, to, options) {
+  const result = await originalCopy.call(this, from, to, options);
+  if (process.env.KILL_PHASE === 'staging') process.kill(process.pid, 'SIGKILL');
+  return result;
+};
+fs.promises.rename = async function(from, to) {
+  const result = await original.call(this, from, to);
+  const hit = process.env.KILL_PHASE === 'backup'
+    ? to.endsWith('blabla-translate.previous')
+    : from.includes('.blabla-install-') && from.endsWith('/blabla-translate');
+  if (hit) process.kill(process.pid, 'SIGKILL');
+  return result;
+};
+syncBuiltinESMExports();
+`,
+		);
+		for (const phase of ["staging", "backup", "install"]) {
+			const target = join(temporary, phase);
+			assert.equal(install(target).status, 0);
+			const bundle = [
+				"blabla-context",
+				"blabla-translate",
+				"blabla-review",
+				"blabla-dictionary",
+				"_blabla",
+			];
+			for (const entry of bundle)
+				await writeFile(join(target, entry, "old-version"), entry);
+			await writeFile(join(target, "unrelated.txt"), "keep");
+			const killed = spawnSync(
+				process.execPath,
+				["--require", preload, installer, "--to", target, "--replace"],
+				{
+					encoding: "utf8",
+					env: { ...process.env, KILL_PHASE: phase },
+				},
+			);
+			assert.equal(killed.signal, "SIGKILL", killed.stderr);
+			const resumed = install(target);
+			assert.notEqual(resumed.status, 0);
+			assert.match(resumed.stderr, /already exists/);
+			for (const entry of bundle)
+				assert.equal(
+					await readFile(join(target, entry, "old-version"), "utf8"),
+					entry,
+				);
+			assert.equal(
+				await readFile(join(target, "unrelated.txt"), "utf8"),
+				"keep",
+			);
+			assert.equal(
+				(await readdir(target)).some((name) =>
+					name.startsWith(".blabla-install"),
+				),
+				false,
+			);
+			assert.equal(install(target, ["--replace"]).status, 0);
+		}
+	} finally {
+		await rm(temporary, { recursive: true, force: true });
+	}
+});
+
+test("a committed interrupted cleanup retains the new bundle; invalid recovery evidence is preserved", async () => {
+	const temporary = await mkdtemp(join(tmpdir(), "blabla-skills-commit-"));
+	try {
+		const target = join(temporary, "skills");
+		assert.equal(install(target).status, 0);
+		await writeFile(join(target, "blabla-context/old-version"), "old");
+		const preload = join(temporary, "kill-commit.cjs");
+		await writeFile(
+			preload,
+			`
+const fs = require('node:fs');
+const { syncBuiltinESMExports } = require('node:module');
+const original = fs.promises.rename;
+fs.promises.rename = async function(from, to) {
+  const result = await original.call(this, from, to);
+  if (to.endsWith('/journal.json') && JSON.parse(fs.readFileSync(to, 'utf8')).state === 'committed')
+    process.kill(process.pid, 'SIGKILL');
+  return result;
+};
+syncBuiltinESMExports();
+`,
+		);
+		const killed = spawnSync(
+			process.execPath,
+			["--require", preload, installer, "--to", target, "--replace"],
+			{ encoding: "utf8" },
+		);
+		assert.equal(killed.signal, "SIGKILL", killed.stderr);
+		assert.match(install(target).stderr, /already exists/);
+		assert.equal(
+			(await readdir(join(target, "blabla-context"))).includes("old-version"),
+			false,
+		);
+		assert.equal(
+			(await readdir(target)).some((name) =>
+				name.startsWith(".blabla-install"),
+			),
+			false,
+		);
+		const stage = join(target, ".blabla-install-invalid");
+		await mkdir(stage);
+		await writeFile(
+			join(stage, "journal.json"),
+			JSON.stringify({ version: 1, state: "ready", previous: ["../outside"] }),
+		);
+		const refused = install(target, ["--replace"]);
+		assert.notEqual(refused.status, 0);
+		assert.match(refused.stderr, /journal is invalid/);
+		assert.match(
+			await readFile(join(stage, "journal.json"), "utf8"),
+			/outside/,
+		);
+		assert.match(
+			await readFile(join(target, "blabla-context/SKILL.md"), "utf8"),
+			/name: blabla-context/,
+		);
+	} finally {
+		await rm(temporary, { recursive: true, force: true });
+	}
+});
