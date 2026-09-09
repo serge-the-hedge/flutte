@@ -21,6 +21,7 @@ import {
 	repositoryAdapterActorValidator,
 	requireViewer,
 } from "./permissions";
+import { syncSummaryValidator } from "./syncSummary";
 
 /** Increment when preserved Locale review evidence must be rederived on Snapshot replay. */
 export const LOCALE_REVIEW_EVIDENCE_VERSION = 1;
@@ -1258,6 +1259,7 @@ export const setWorkingCatalogEnvelope = internalMutation({
 	args: {
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
+		syncSummary: v.optional(syncSummaryValidator),
 		expectedKeyCount: v.number(),
 		expectedMessageCount: v.number(),
 		expectedByteLength: v.number(),
@@ -1307,6 +1309,7 @@ export const setWorkingCatalogEnvelope = internalMutation({
 			});
 		}
 		await ctx.db.patch(projection._id, {
+			...(args.syncSummary ? { syncSummary: args.syncSummary } : {}),
 			expectedKeyCount: args.expectedKeyCount,
 			expectedMessageCount: args.expectedMessageCount,
 			expectedByteLength: args.expectedByteLength,

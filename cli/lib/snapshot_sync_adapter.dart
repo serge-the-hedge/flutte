@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -75,6 +76,10 @@ class SnapshotSyncReceipt {
     required this.absentTargetLocaleCount,
     this.unboundLocaleFiles = const [],
     this.syncUrl,
+    this.commit,
+    this.snapshotKind,
+    this.reused = false,
+    this.summary,
   });
 
   final int version;
@@ -87,8 +92,41 @@ class SnapshotSyncReceipt {
   final int absentTargetLocaleCount;
   final List<UnboundCatalogFile> unboundLocaleFiles;
   final String? syncUrl;
+  final String? commit;
+  final String? snapshotKind;
+  final bool reused;
+  final SnapshotSyncSummary? summary;
 
   bool get succeeded => status == 'succeeded';
+}
+
+/// Server-owned changes for this recorded sync, not counts inferred from uploads.
+class SnapshotSyncSummary {
+  const SnapshotSyncSummary({
+    required this.outcome,
+    required this.sourceKeyCount,
+    required this.addedKeyCount,
+    required this.changedSourceKeyCount,
+    required this.removedKeyCount,
+    required this.targetValueChangeCount,
+  });
+
+  final String outcome;
+  final int sourceKeyCount;
+  final int addedKeyCount;
+  final int changedSourceKeyCount;
+  final int removedKeyCount;
+  final int targetValueChangeCount;
+
+  factory SnapshotSyncSummary.fromJson(Map<String, Object?> json) =>
+      SnapshotSyncSummary(
+        outcome: _requiredString(json, 'outcome'),
+        sourceKeyCount: _requiredInt(json, 'sourceKeyCount'),
+        addedKeyCount: _requiredInt(json, 'addedKeyCount'),
+        changedSourceKeyCount: _requiredInt(json, 'changedSourceKeyCount'),
+        removedKeyCount: _requiredInt(json, 'removedKeyCount'),
+        targetValueChangeCount: _requiredInt(json, 'targetValueChangeCount'),
+      );
 }
 
 class UnboundCatalogFile {
@@ -145,16 +183,24 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     required this.baseUrl,
     required this.token,
     this.onWarning,
+    this.onProgress,
+    this.progressInterval = const Duration(seconds: 10),
   });
 
   final Uri baseUrl;
   final String token;
   final void Function(String line)? onWarning;
+  final void Function(String line)? onProgress;
+  final Duration progressInterval;
   final _compatibility = CliCompatibility();
 
   @override
   Future<SnapshotSyncContext> readContext() async {
-    final response = await _request('GET', '/snapshot-context');
+    final response = await _request(
+      'GET',
+      '/snapshot-context',
+      waitingFor: 'Waiting for project settings',
+    );
     final bindings = _requiredList(response, 'bindings')
         .map((value) {
           final object = _object(value);
@@ -207,6 +253,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     final upload = await _request(
       'POST',
       '/snapshot-uploads',
+      waitingFor: 'Waiting to start the upload',
       body: {
         'repository': repository,
         'commit': commit,
@@ -220,10 +267,14 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       },
     );
     final sessionId = _requiredString(upload, 'sessionId');
-    for (final file in files) {
+    onProgress?.call('Uploading catalogs: 0/${files.length}');
+    for (var index = 0; index < files.length; index++) {
+      final file = files[index];
       await _request(
         'POST',
         '/snapshot-uploads/file',
+        waitingFor:
+            'Waiting for catalog ${index + 1}/${files.length} to upload',
         body: {
           'sessionId': sessionId,
           'catalogPath': file.catalogPath,
@@ -231,10 +282,13 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
           'contentHash': sha256.convert(utf8.encode(file.content)).toString(),
         },
       );
+      onProgress?.call('Uploading catalogs: ${index + 1}/${files.length}');
     }
+    onProgress?.call('Waiting for Blabla to validate and apply the snapshot…');
     final response = await _request(
       'POST',
       '/snapshot-uploads/finalize',
+      waitingFor: 'Still waiting for Blabla to validate and apply the snapshot',
       body: {'sessionId': sessionId},
     );
     final run = _object(response['run']);
@@ -252,6 +306,12 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       syncUrl: _optionalString(response, 'syncUrl'),
       runId: _requiredString(run, 'id'),
       status: _requiredString(run, 'status'),
+      commit: _optionalString(run, 'commit'),
+      snapshotKind: _optionalString(run, 'snapshotKind'),
+      reused: run['reused'] == null ? false : _requiredBool(run, 'reused'),
+      summary: run['summary'] == null
+          ? null
+          : SnapshotSyncSummary.fromJson(_object(run['summary'])),
       snapshotId: _optionalString(run, 'snapshotId'),
       diagnosticCount: _requiredInt(run, 'diagnosticCount'),
       diagnostics: diagnostics,
@@ -278,7 +338,14 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     String method,
     String suffix, {
     Map<String, Object?>? body,
+    required String waitingFor,
   }) async {
+    final elapsed = Stopwatch()..start();
+    final progress = onProgress == null
+        ? null
+        : Timer.periodic(progressInterval, (_) {
+            onProgress!('$waitingFor (${elapsed.elapsed.inSeconds}s elapsed)…');
+          });
     final client = HttpClient();
     try {
       final request = await (method == 'GET'
@@ -315,6 +382,8 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
         'Could not reach Blabla to sync the checkout: ${error.message}',
       );
     } finally {
+      progress?.cancel();
+      elapsed.stop();
       client.close(force: true);
     }
   }
@@ -348,8 +417,12 @@ class RepositorySyncAdapter {
     required Directory checkout,
     required SnapshotSyncGateway gateway,
     required void Function(String line) write,
+    void Function(String line)? onProgress,
+    void Function(String line)? writeError,
   }) async {
+    onProgress?.call('Checking checkout…');
     final root = await _repositoryRoot(checkout);
+    onProgress?.call('Reading project settings…');
     final context = await gateway.readContext();
     if (!context.canSubmit) {
       throw RepositoryAdapterException(
@@ -371,30 +444,69 @@ class RepositorySyncAdapter {
       );
     }
     final commit = await _git(root, ['rev-parse', 'HEAD']);
-    final files = await _readCommittedFiles(root, context);
+    onProgress?.call('Reading and verifying committed catalogs…');
+    final files = await _readCommittedFiles(root, context, onProgress);
     final capturedHead = await _git(root, ['rev-parse', 'HEAD']);
     if (capturedHead != commit) {
       throw RepositoryAdapterException(
         'Brickit HEAD changed while the catalogs were being read. Retry sync from a stable checkout.',
       );
     }
+    onProgress?.call('Checking Git history…');
     final lineage = await _lineage(root, context.baseline?.commit, commit);
+    onProgress?.call('Starting snapshot upload…');
     final receipt = await gateway.submit(
       repository: repository,
       commit: commit,
       files: files,
       lineage: lineage,
     );
-    write(
-      receipt.succeeded
-          ? 'Sync succeeded: ${receipt.snapshotId ?? 'preview'} (${files.length} files).'
-          : 'Sync recorded a failed run ${receipt.runId}.',
+    final summary = receipt.summary;
+    final shortCommit = commit.substring(
+      0,
+      commit.length < 8 ? commit.length : 8,
     );
-    for (final diagnostic in receipt.diagnostics) {
+    if (!receipt.succeeded) {
+      (writeError ?? write)(
+        'Sync failed at $shortCommit (run ${receipt.runId}).',
+      );
+    } else if (receipt.snapshotKind == 'preview') {
       write(
+        'Snapshot saved as a preview at $shortCommit; the accepted catalog is unchanged.',
+      );
+    } else if (receipt.reused) {
+      write('Already synced: $shortCommit (${files.length} catalog files).');
+    } else {
+      write('Sync succeeded: $shortCommit (${files.length} catalog files).');
+      if (summary != null) {
+        write('${summary.sourceKeyCount} keys in the accepted catalog.');
+        if (summary.addedKeyCount == 0 &&
+            summary.changedSourceKeyCount == 0 &&
+            summary.removedKeyCount == 0 &&
+            summary.targetValueChangeCount == 0) {
+          write('No catalog changes.');
+        } else {
+          write(
+            'Keys: ${summary.addedKeyCount} new, '
+            '${summary.changedSourceKeyCount} source changed, '
+            '${summary.removedKeyCount} removed.',
+          );
+          write(
+            'Translation values changed: ${summary.targetValueChangeCount}.',
+          );
+        }
+      }
+    }
+    for (final diagnostic in receipt.diagnostics) {
+      (writeError ?? write)(
         diagnostic.catalogPath == null
             ? 'Diagnostic: ${diagnostic.message}'
             : 'Diagnostic (${diagnostic.catalogPath}): ${diagnostic.message}',
+      );
+    }
+    if (receipt.absentTargetLocaleCount > 0) {
+      (writeError ?? write)(
+        '${receipt.absentTargetLocaleCount} configured language catalogs are missing from this snapshot.',
       );
     }
     if (receipt.unboundLocaleFileCount > 0) {
@@ -407,12 +519,11 @@ class RepositorySyncAdapter {
           '  ${jsonEncode(file.catalogPath)} — locale: ${file.declaredLocaleCode == null ? "not declared (@@locale missing)" : jsonEncode(file.declaredLocaleCode)}',
         );
       }
-      if (receipt.syncUrl != null)
-        write('Review discovered files: ${receipt.syncUrl}');
       write(
         'Open Blabla → Sync → Discovered catalog files to review and add each language. No new sync is needed for files in the accepted catalog.',
       );
     }
+    if (receipt.syncUrl != null) write('Sync details: ${receipt.syncUrl}');
     return receipt;
   }
 
@@ -442,6 +553,7 @@ class RepositorySyncAdapter {
   Future<List<SnapshotFile>> _readCommittedFiles(
     Directory root,
     SnapshotSyncContext context,
+    void Function(String line)? onProgress,
   ) async {
     final files = <SnapshotFile>[];
     final directories = <String>{};
@@ -483,6 +595,9 @@ class RepositorySyncAdapter {
       }
     }
     for (final path in committedPaths) {
+      onProgress?.call(
+        'Reading catalogs: ${files.length}/${committedPaths.length}',
+      );
       files.add(
         SnapshotFile(
           catalogPath: path,
@@ -490,6 +605,9 @@ class RepositorySyncAdapter {
         ),
       );
     }
+    onProgress?.call(
+      'Reading catalogs: ${files.length}/${committedPaths.length}',
+    );
     files.sort((left, right) => left.catalogPath.compareTo(right.catalogPath));
     if (files.length > context.maxFiles || files.length > _maxFiles) {
       throw RepositoryAdapterException(

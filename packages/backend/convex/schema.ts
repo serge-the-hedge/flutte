@@ -7,6 +7,7 @@ import {
 import { managedBasisValidator } from "./contentModel";
 import { tokenScopeValidator } from "./lib";
 import { releaseAssessmentFields } from "./releaseRecordModel";
+import { syncSummaryValidator } from "./syncSummary";
 import {
 	guidanceAuthorshipFields,
 	guidanceContentValidator,
@@ -858,6 +859,7 @@ export default defineSchema({
 	// Normalized workflow fields derived from Catalog Documents. A projection
 	// becomes visible only when its Source Snapshot becomes the baseline.
 	catalogProjections: defineTable({
+		syncSummary: v.optional(syncSummaryValidator),
 		// Completed review-evidence derivation; absent on older published generations.
 		localeReviewEvidenceVersion: v.optional(v.number()),
 		localeBindingRevision: v.optional(v.number()),

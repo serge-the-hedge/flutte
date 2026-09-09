@@ -105,6 +105,8 @@ export type StringsNavigationRead = {
 		message: string;
 		failedAt: number;
 	} | null;
+	/** Catalog-wide totals for the selected languages, independent of the page. */
+	introducedMessageCount?: number;
 	valueStateCounts?: {
 		waiting: number;
 		unconfirmedImport: number;

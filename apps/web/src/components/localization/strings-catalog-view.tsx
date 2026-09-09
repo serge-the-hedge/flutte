@@ -1085,8 +1085,8 @@ function CatalogScopeStrip({
 	onStartOrdinaryImportRun,
 	workHandoff,
 }: {
-	counts: NonNullable<StringsNavigationRead["valueStateCounts"]>;
-	introducedMessageCount: number;
+	counts: StringsNavigationRead["valueStateCounts"];
+	introducedMessageCount: number | undefined;
 	navigationState: StringsCatalogNavigationState;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	ordinaryImports?: StringsOrdinaryImportsSummary;
@@ -1119,7 +1119,9 @@ function CatalogScopeStrip({
 			{CATALOG_SCOPE_DEFINITIONS.map(({ scope, label, countKey }) => {
 				const active = navigationState.scope === scope;
 				const count =
-					countKey === "introduced" ? introducedMessageCount : counts[countKey];
+					countKey === "introduced"
+						? introducedMessageCount
+						: counts?.[countKey];
 				return (
 					<Button
 						key={scope}
@@ -1127,7 +1129,12 @@ function CatalogScopeStrip({
 						size="xs"
 						variant={active ? "secondary" : "ghost"}
 						aria-pressed={active}
-						aria-label={`${active ? "Clear" : "Show"} ${label} scope (${count})`}
+						title={
+							countKey === "introduced"
+								? "Keys across the selected languages"
+								: "Values across the selected languages"
+						}
+						aria-label={`${active ? "Clear" : "Show"} ${label} scope (${count ?? "counting"})`}
 						onClick={() =>
 							onNavigationChange({
 								...navigationState,
@@ -1136,7 +1143,7 @@ function CatalogScopeStrip({
 							})
 						}
 					>
-						{label} · <span className="tabular-nums">{count}</span>
+						{label} · <span className="tabular-nums">{count ?? "…"}</span>
 						{active ? <X aria-hidden="true" /> : null}
 					</Button>
 				);
@@ -1803,13 +1810,7 @@ function StringsCatalogNavigator({
 	);
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
-	const introducedMessageCount = useMemo(
-		() =>
-			(navigation.keys ?? []).filter(
-				(digest) => digest.introductionReviewPending > 0,
-			).length,
-		[navigation.keys],
-	);
+	const introducedMessageCount = navigation.introducedMessageCount;
 	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -1905,18 +1906,16 @@ function StringsCatalogNavigator({
 
 	return (
 		<div className="flex flex-col gap-3">
-			{navigation.valueStateCounts ? (
-				<CatalogScopeStrip
-					counts={navigation.valueStateCounts}
-					introducedMessageCount={introducedMessageCount}
-					navigationState={navigationState}
-					onNavigationChange={onNavigationChange}
-					ordinaryImports={ordinaryImports}
-					projectionId={projectionId}
-					onStartOrdinaryImportRun={onStartOrdinaryImportRun}
-					workHandoff={workHandoff}
-				/>
-			) : null}
+			<CatalogScopeStrip
+				counts={navigation.valueStateCounts}
+				introducedMessageCount={introducedMessageCount}
+				navigationState={navigationState}
+				onNavigationChange={onNavigationChange}
+				ordinaryImports={ordinaryImports}
+				projectionId={projectionId}
+				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
+				workHandoff={workHandoff}
+			/>
 			<CatalogSearch
 				query={navigationState.query}
 				matchingKeyCount={matching.matchingDigests.length}

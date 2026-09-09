@@ -223,12 +223,15 @@ Future<int> _sync(
     final gateway = HttpSnapshotSyncGateway(
       baseUrl: server,
       token: token,
-      onWarning: write,
+      onWarning: writeError,
+      onProgress: writeError,
     );
     final receipt = await RepositorySyncAdapter().sync(
       checkout: checkout,
       gateway: gateway,
       write: write,
+      onProgress: writeError,
+      writeError: writeError,
     );
     return receipt.succeeded ? 0 : 1;
   } on RepositoryAdapterException catch (error) {

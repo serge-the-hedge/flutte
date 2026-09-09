@@ -39,6 +39,7 @@ function windowedProps(catalog: {
 			projectionId: "test-projection",
 			canEdit: catalog.canEdit ?? false,
 			valueStateCounts: catalog.valueStateCounts,
+			introducedMessageCount: catalog.introducedMessageIds?.size ?? 0,
 			keys: keys.map((key, index) => ({
 				messageId: key.id,
 				catalogIndex: index,
@@ -66,6 +67,58 @@ function windowedProps(catalog: {
 		onWindowMessageIdsChange: () => {},
 	};
 }
+
+test("focus controls show pending totals without claiming zero", () => {
+	const markup = renderToStaticMarkup(
+		<StringsCatalogView
+			{...navigationProps}
+			navigation={{
+				kind: "ready",
+				projectionId: "projection",
+				keyCount: 450,
+				keys: [],
+			}}
+			hydratedCards={new Map()}
+			onWindowMessageIdsChange={() => {}}
+		/>,
+	);
+	expect(markup).toContain("Show New from Git scope (counting)");
+	expect(markup).toContain("Show Waiting scope (counting)");
+	expect(markup).not.toContain("scope (0)");
+});
+
+test("focus totals do not depend on the visible page or selected focus", () => {
+	const counts = {
+		waiting: 81,
+		unconfirmedImport: 120,
+		stale: 4,
+		settled: 200,
+	};
+	for (const scope of [undefined, "waiting", "introduced"] as const) {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				navigationState={{ query: "", scope }}
+				navigation={{
+					kind: "ready",
+					projectionId: "projection",
+					keyCount: 450,
+					keys: [],
+					valueStateCounts: counts,
+					introducedMessageCount: 7,
+				}}
+				hydratedCards={new Map()}
+				onWindowMessageIdsChange={() => {}}
+			/>,
+		);
+		expect(markup).toContain(
+			`${scope === "introduced" ? "Clear" : "Show"} New from Git scope (7)`,
+		);
+		expect(markup).toContain(
+			`${scope === "waiting" ? "Clear" : "Show"} Waiting scope (81)`,
+		);
+	}
+});
 
 describe("StringsCatalogView", () => {
 	test("maps the editor shortcut to save, imported confirmation, or no-op", () => {
@@ -682,7 +735,9 @@ describe("StringsCatalogView", () => {
 		expect(markup).toContain('aria-label="Edit de value for greeting"');
 		// The key permalink is the only control on a fully settled key: no Save,
 		// no Confirm, no Render nothing, no raw-ICU toggle.
-		expect(markup).not.toContain('data-slot="button"');
+		expect(
+			markup.slice(markup.indexOf('data-workspace-message-id="greeting"')),
+		).not.toContain('data-slot="button"');
 		expect(markup).not.toContain("needs a value");
 		expect(markup).not.toContain("⌘↵");
 		expect(markup).not.toContain("waiting");

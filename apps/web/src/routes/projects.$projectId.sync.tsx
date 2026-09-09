@@ -17,13 +17,13 @@ import { Input } from "@blabla/ui/components/input";
 import { Skeleton } from "@blabla/ui/components/skeleton";
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useAction, useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
 	Check,
 	Clipboard,
 	GitBranch,
 	Pencil,
 	Plus,
-	RefreshCw,
 	TriangleAlert,
 } from "lucide-react";
 import type { FormEvent } from "react";
@@ -35,6 +35,7 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
+import { SyncResult } from "@/components/localization/sync-result";
 import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
 
@@ -42,41 +43,7 @@ export const Route = createFileRoute("/projects/$projectId/sync")({
 	component: SyncRoute,
 });
 
-type SyncSetup = {
-	version: number;
-	project: {
-		id: string;
-		name: string;
-		repository: string | null;
-	};
-	integrationBranch: string;
-	bindings: Array<{
-		id: string;
-		code: string;
-		label: string;
-		isSource: boolean;
-		catalogPath: string | null;
-	}>;
-	setupIssues: string[];
-	canSync: boolean;
-	baseline: {
-		id: string;
-		repository: string;
-		commit: string;
-		kind: "baseline" | "preview";
-		createdAt: number;
-	} | null;
-	latestRun: {
-		id: string;
-		status: "succeeded" | "failed";
-		snapshotId: string | null;
-		createdAt: number;
-		diagnosticCount: number;
-		diagnostics: Array<{ catalogPath?: string; message: string }>;
-		unboundLocaleFileCount: number;
-		absentTargetLocaleCount: number;
-	} | null;
-};
+type SyncSetup = FunctionReturnType<typeof api.snapshots.syncSetup>;
 
 function copyCommand(command: string) {
 	void navigator.clipboard
@@ -94,7 +61,9 @@ function SyncCommand({
 	repository: string | null;
 	integrationBranch: string;
 }) {
-	const command = blablaCommand("sync --checkout /path/to/brickit-flutter");
+	const command = blablaCommand(
+		`sync --checkout ${import.meta.env.DEV ? "/path/to/brickit-flutter" : "."} --profile YOUR_PROFILE`,
+	);
 	return (
 		<Card size="sm">
 			<CardHeader>
@@ -147,7 +116,9 @@ function SyncCommand({
 							<span className="font-medium text-sm">Read the checkout</span>
 						</div>
 						<p className="text-muted-foreground text-xs">
-							Use your checkout path. Run again after new commits.
+							{import.meta.env.DEV
+								? "Use your application checkout path and saved profile."
+								: "Run in your application checkout, using the profile saved during setup."}
 						</p>
 						<div className="flex items-start gap-2 rounded-md bg-muted/50 p-2.5">
 							<code className="min-w-0 flex-1 break-all font-mono text-xs">
@@ -379,7 +350,7 @@ function RepositorySyncRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/sync" });
 	const setup = useQuery(api.snapshots.syncSetup, {
 		projectId: convexId<"projects">(projectId),
-	}) as SyncSetup | undefined;
+	});
 
 	if (setup === undefined) {
 		return (
@@ -412,6 +383,7 @@ function RepositorySyncRoute() {
 				}
 			/>
 			<div className="flex flex-col gap-4">
+				{setup.latestRun ? <SyncResult run={setup.latestRun} /> : null}
 				{needsSetup ? (
 					<Alert>
 						<TriangleAlert className="size-4" />
@@ -427,12 +399,23 @@ function RepositorySyncRoute() {
 				) : null}
 
 				<DiscoveredCatalogs projectId={projectId} />
-				<BindingSetup setup={setup} />
+				{needsSetup ? <BindingSetup setup={setup} /> : null}
 				<SyncCommand
 					projectId={projectId}
 					repository={setup.project.repository}
 					integrationBranch={setup.integrationBranch}
 				/>
+
+				{!needsSetup ? (
+					<details>
+						<summary className="cursor-pointer text-muted-foreground text-sm">
+							Catalog settings
+						</summary>
+						<div className="mt-3">
+							<BindingSetup setup={setup} />
+						</div>
+					</details>
+				) : null}
 
 				<Card size="sm">
 					<CardHeader>
@@ -455,56 +438,6 @@ function RepositorySyncRoute() {
 						)}
 					</CardContent>
 				</Card>
-
-				{setup.latestRun ? (
-					<Card size="sm">
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<RefreshCw className="size-4" />
-								Latest sync
-								<Badge
-									variant={
-										setup.latestRun.status === "succeeded"
-											? "secondary"
-											: "destructive"
-									}
-								>
-									{setup.latestRun.status}
-								</Badge>
-							</CardTitle>
-							<CardDescription>
-								Run <code>{setup.latestRun.id}</code>
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="flex flex-col gap-3 text-sm">
-							{setup.latestRun.unboundLocaleFileCount > 0 ||
-							setup.latestRun.absentTargetLocaleCount > 0 ? (
-								<div className="text-muted-foreground text-xs">
-									{setup.latestRun.unboundLocaleFileCount} unbound file(s) when
-									this snapshot was ingested,{" "}
-									{setup.latestRun.absentTargetLocaleCount} target language
-									file(s) absent in this commit.
-								</div>
-							) : null}
-							{setup.latestRun.diagnostics.length > 0 ? (
-								<ul className="space-y-1 text-destructive text-xs">
-									{setup.latestRun.diagnostics.map((diagnostic) => (
-										<li
-											key={`${diagnostic.catalogPath ?? "run"}-${diagnostic.message}`}
-										>
-											{diagnostic.catalogPath
-												? `${diagnostic.catalogPath}: `
-												: ""}
-											{diagnostic.message}
-										</li>
-									))}
-								</ul>
-							) : (
-								<p className="text-muted-foreground text-xs">No diagnostics.</p>
-							)}
-						</CardContent>
-					</Card>
-				) : null}
 			</div>
 		</ProjectShell>
 	);

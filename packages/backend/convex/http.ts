@@ -868,7 +868,7 @@ http.route({
 						);
 						return await ctx.runQuery(
 							internalApi.snapshots.repositoryAdapterReceipt,
-							{ runId: result.runId, actor },
+							{ runId: result.runId, reused: result.reused, actor },
 						);
 					},
 				),
