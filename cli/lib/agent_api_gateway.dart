@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'api_diagnostics.dart';
 import 'cli_version.dart';
 import 'locale_proposal_adapter.dart';
 import 'repository_policy.dart';
@@ -80,6 +81,7 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
     final client = HttpClient();
     try {
       final request = await client.getUrl(uri);
+      request.followRedirects = false;
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       _compatibility.stamp(request.headers);
@@ -90,7 +92,10 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
           'Blabla rejected the Locale proposal request (${response.statusCode}). ${_errorMessage(body)}',
         );
       }
-      _compatibility.check(response.headers, onWarning: onWarning);
+      _compatibility.check(
+        response.headers,
+        onWarning: (line) => onWarning?.call(redactApiToken(line, token)),
+      );
       try {
         return _object(jsonDecode(body));
       } on FormatException {
@@ -107,20 +112,11 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
     }
   }
 
-  String _errorMessage(String body) {
-    try {
-      final response = _object(jsonDecode(body));
-      final error = response['error'];
-      if (error is String && error.isNotEmpty) return error;
-      if (error is Map) {
-        final message = error['message'];
-        if (message is String && message.isNotEmpty) return message;
-      }
-    } on FormatException {
-      // A non-JSON error is still safe to summarize by status alone.
-    }
-    return 'Check the proposal id and the token scopes.';
-  }
+  String _errorMessage(String body) => apiErrorMessage(
+    body,
+    token: token,
+    fallback: 'Check the proposal id and the token scopes.',
+  );
 }
 
 Map<String, Object?> _object(Object? value) {

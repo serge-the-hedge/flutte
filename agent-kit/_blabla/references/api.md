@@ -75,7 +75,7 @@ server and token inputs needed to create the selected profile.
 An existing named profile is replaced only with `login --replace`.
 Legacy CLI login without `--profile` still uses
 `~/.config/blabla/credentials.json`; the helper does not implicitly load that file.
-Loopback HTTP is allowed for local testing. The helper rejects redirects.
+Loopback HTTP is allowed for local testing. Both tools reject redirects.
 
 ## Scopes
 
