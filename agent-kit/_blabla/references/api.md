@@ -11,8 +11,33 @@ need no CLI version headers. Artifact delivery has a separate [protocol floor](a
 
 ## Human Setup
 
-Create a project token in **Settings → API tokens**, copy its one-time-visible
-value, and configure the assigned agent's [connection](transport.md).
+Create a token in **Settings → API tokens** for the assigned project and role.
+Copy its one-time-visible value, then save a named local profile with the
+[CLI](https://github.com/serge-the-hedge/flutte/blob/main/cli/README.md#install) (v0.3.0 or newer):
+
+```sh
+blabla login --profile brickit-workspace --server https://example.convex.site
+```
+
+Paste the token at the hidden prompt. The server is the Convex HTTP API origin,
+not the frontend or a review link. For automation, use `--token-stdin` and pipe
+from the host's secret manager; keep secret values out of shell arguments,
+history, prompts, and repository files.
+
+Select the profile explicitly for every CLI or helper invocation. `sync` requires
+`snapshot-submission`; delivery requires `export` (see [scopes](#scopes)). A
+translation-only token cannot sync.
+
+```sh
+blabla sync --profile brickit-workspace
+node <helper-path> request GET /projects/current --profile brickit-workspace
+```
+
+Alternatively, set `BLABLA_PROFILE` in that agent's environment. There is no
+automatic default profile. Names contain 1–64 lowercase letters, digits, `_`, or
+`-`, starting with a letter or digit. `blabla profiles` lists names only. Names select saved credentials; they
+do not grant permissions. Use a separate name for each project and role. Verify
+`GET /projects/current` identifies the intended project before starting work.
 
 | Assignment | Scopes |
 | --- | --- |
@@ -20,10 +45,37 @@ value, and configure the assigned agent's [connection](transport.md).
 | Dictionary authoring | `read`, `dictionary-write`; add `search` for examples |
 | Independent review | `read`, `search`, `review`, on a separate credential |
 
-Owners enable **Allow Dictionary editing** explicitly. A connected Dictionary
-also needs a Dictionary-editor grant allowing agent writes from that project. Review requires human
-[enablement](https://github.com/serge-the-hedge/flutte/blob/main/docs/agent-review.md).
-Repository delivery uses the separate [CLI connection](https://github.com/serge-the-hedge/flutte/blob/main/cli/README.md).
+Dictionary editing also requires a Dictionary-editor grant for the connected
+project. Review requires human
+[authorization](https://github.com/serge-the-hedge/flutte/blob/main/docs/agent-review.md)
+and a separate reviewer agent. Give the reviewer credential only to its authorized
+session using the host's sandbox and credential controls. Profile names and file
+permissions do **not** isolate agents running as the same OS user: that user can
+read every profile. Environment scoping alone does not prevent access to shared
+profile files. Keep reviewer profiles outside the translator's accessible filesystem.
+
+Named profiles are supported on macOS and Linux only.
+Profiles are version 1 JSON files (`version`, `server`, `token`) at
+`~/.config/blabla/profiles/<name>.json`. On POSIX, the directory is private (`0700`)
+and files are `0600`. They contain the token in plaintext. To remove a local profile:
+
+```sh
+blabla logout --profile brickit-workspace
+```
+
+Logout does not revoke the token; revoke it in **Settings → API tokens** to end
+server access.
+
+For direct environment setup, the canonical names are `BLABLA_API_URL` and
+`BLABLA_TOKEN`. Both tools also accept the legacy pair
+`BLABLA_AGENT_URL` and `BLABLA_AGENT_TOKEN`. When making requests, selecting a
+profile rejects server or token overrides from flags or environment; clear those
+overrides before using it. `login` accepts the
+server and token inputs needed to create the selected profile.
+An existing named profile is replaced only with `login --replace`.
+Legacy CLI login without `--profile` still uses
+`~/.config/blabla/credentials.json`; the helper does not implicitly load that file.
+Loopback HTTP is allowed for local testing. The helper rejects redirects.
 
 ## Scopes
 

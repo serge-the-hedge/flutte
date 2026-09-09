@@ -35,12 +35,10 @@ stops and preserves it for inspection. Pick a reviewed
 commit/tag of this repository when distributing a pinned version. Reload your
 agent's skill catalog using its normal mechanism after installation.
 
-Configure `BLABLA_AGENT_URL` and `BLABLA_AGENT_TOKEN` in the agent's environment.
-See [transport](_blabla/references/transport.md) for connection details and
-[Human Setup](_blabla/references/api.md#human-setup) for token scopes. Credentials
-are never installed with the bundle. A translating agent and an independent
-reviewer must have separate sessions and credentials; installing the review skill
-does not grant permission to review.
+Follow [Human Setup](_blabla/references/api.md#human-setup) to select credentials
+for each project and role, including reviewer isolation. Credentials are never
+installed with the bundle. Use [transport](_blabla/references/transport.md) for
+helper commands.
 
 Start with assignments such as “Find our established German wording for this
 message,” “Translate task …,” or “Review candidate revision … independently.”
