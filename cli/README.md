@@ -3,8 +3,9 @@
 The shortest local workflow is:
 
 ```sh
-# once per machine
-blabla login --server https://<your-dev-deployment>.convex.site --token ...
+# once per project and role; paste the token at the hidden prompt
+blabla login --profile brickit-workspace --server https://<your-dev-deployment>.convex.site
+export BLABLA_PROFILE=brickit-workspace
 
 # whenever the Brickit checkout changes
 cd /path/to/brickit-flutter
@@ -106,21 +107,10 @@ two published platforms and never installs a Dart package globally.
 
 ## Configure and run
 
-The web project's **API tokens** page creates the workspace connection used by
-both `sync` and translation agents. Copy its one-time setup command and run it
-locally. This writes only
-`~/.config/blabla/credentials.json` at mode `0600`. Secret bytes are written
-inside a private temporary directory before the protected file atomically
-replaces the previous credentials. It never writes to a Brickit checkout.
-
-```sh
-blabla login --server https://your-blabla.example --token ...
-```
-
-`BLABLA_API_URL` and `BLABLA_TOKEN` override the stored credentials, which is
-useful for CI and one-off invocations. The token needs `read`, `search`, and
-`propose` for translation work and `export` for Release Bundle delivery. The
-default workspace connection includes all four plus snapshot submission.
+Follow [Human Setup](../agent-kit/_blabla/references/api.md#human-setup) for
+profiles, direct environment credentials, automation, logout, and reviewer
+isolation. Use `--profile NAME` on each command or set `BLABLA_PROFILE` for the
+session. The token needs `snapshot-submission` for sync and `export` for delivery.
 
 From the same Brickit checkout, switch to the integration branch before
 delivery. The current project target is `develop`; the adapter refuses a
@@ -165,15 +155,14 @@ Then run from `cli/`:
 
 ```sh
 dart pub get --enforce-lockfile
-BLABLA_API_URL=https://your-blabla.example \
-BLABLA_TOKEN=... \
+BLABLA_PROFILE=brickit-workspace \
 dart run bin/blabla.dart deliver \
   --release <release-record-id> \
   --locale-proposal <proposal-id> \
   --checkout /path/to/brickit-flutter
 ```
 
-`--server` and `--token` are available for an explicit invocation. Flutter is
+Direct credentials are also supported; see [Human Setup](../agent-kit/_blabla/references/api.md#human-setup). Flutter is
 resolved in this order: `--flutter-sdk`, `FLUTTER_ROOT`, the checkout's
 `.fvm/flutter_sdk`, its `.fvmrc` through an installed `fvm`, then `flutter` on
 `PATH`. The root `pubspec.yaml` Flutter constraint is printed as informational

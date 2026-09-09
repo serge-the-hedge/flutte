@@ -4,17 +4,10 @@ Requirements: Node.js 22 or newer and a complete installed Blabla skill bundle.
 Resolve the helper path relative to this reference file:
 `../scripts/blabla-agent.mjs`. Its `--help` output is the command-line reference.
 
-The human or host configures these environment variables for this agent:
-
-- `BLABLA_AGENT_URL`: the HTTPS origin of the project's Convex HTTP API, such as
-  `https://example.convex.site` (not the frontend URL or a candidate review URL).
-- `BLABLA_AGENT_TOKEN`: this assignment's project-scoped token.
-
-For token creation and scopes, read [Human Setup](api.md#human-setup).
-Credentials belong in host configuration/environment, not skill files, prompts,
-request JSON, or command arguments. A reviewer runs as a separate agent with its
-own environment; this helper does not select another identity or discover tokens.
-Loopback HTTP is supported for local tests. Redirects are rejected.
+For credentials, profile selection, scopes, or reviewer isolation, read
+[Human Setup](api.md#human-setup). The host supplies the assigned profile through
+`BLABLA_PROFILE` or you pass `--profile NAME` to each invocation. Direct environment
+credentials are also supported as described there.
 
 ## Requests
 

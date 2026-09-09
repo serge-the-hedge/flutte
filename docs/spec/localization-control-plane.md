@@ -896,11 +896,10 @@ string is a tooltip, never how wide the tooltip is.
   revocable per token, gaining a **snapshot-submission scope** alongside `read`,
   `search`, `propose`, and `export`. The same scope covers standalone manifest
   submission.
-- **CLI credential handling**: token from `BLABLA_TOKEN` or
-  `~/.config/blabla/credentials.json` at mode 0600, written by a `login`
-  subcommand. **Nothing is written into the checkout** — no `.blabla` file, no
-  `.gitignore` line. The project is resolved **server-side** from the Git remote
-  URL, with `--project` only to disambiguate.
+- **CLI credential handling**: named profiles or host-provided credentials, as
+  defined in [Human Setup](../../agent-kit/_blabla/references/api.md#human-setup).
+  Nothing is written into the checkout. The project is resolved **server-side**
+  from the Git remote URL, with `--project` only to disambiguate.
 - **In-product authorization** is the existing project membership model —
   `owner` / `editor` / `viewer` on `projectMembers`, enforced by
   `requireProjectRole`. No new role is introduced by any decision in this map.

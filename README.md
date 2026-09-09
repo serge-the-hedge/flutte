@@ -78,7 +78,7 @@ test recipients.
 
 1. Add the source and target catalog bindings on the project's **Sync** page.
 2. Create a workspace connection under **Settings → API tokens** and run its
-   one-time login command.
+   profile setup command (see [credential setup](agent-kit/_blabla/references/api.md#human-setup)).
 3. Update the Brickit integration branch (`develop`) with a fast-forward pull,
    then run `blabla sync` from that checkout.
 4. Edit values in **Strings**, or prepare candidates in **Translation tasks**.
@@ -91,7 +91,8 @@ test recipients.
 For an unpublished CLI, run repository-local commands from this repository root:
 
 ```sh
-bun run blabla -- login --server https://<deployment>.convex.site --token ...
+bun run blabla -- login --profile brickit-workspace --server https://<deployment>.convex.site
+export BLABLA_PROFILE=brickit-workspace
 bun run blabla -- sync --checkout /path/to/brickit-flutter
 bun run blabla -- deliver --release <record-id> --checkout /path/to/brickit-flutter
 ```

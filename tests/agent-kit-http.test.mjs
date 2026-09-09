@@ -43,6 +43,9 @@ async function run(url, args, options = {}) {
 		const child = spawn(process.execPath, [script, ...args], {
 			env: {
 				...process.env,
+				BLABLA_PROFILE: undefined,
+				BLABLA_API_URL: undefined,
+				BLABLA_TOKEN: undefined,
 				BLABLA_AGENT_URL: url,
 				BLABLA_AGENT_TOKEN: token,
 				...options.env,

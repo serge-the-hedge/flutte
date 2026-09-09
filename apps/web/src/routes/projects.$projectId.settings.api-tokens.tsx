@@ -100,6 +100,20 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 	const [rawToken, setRawToken] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
 	const [revokingId, setRevokingId] = useState<string>();
+	const profileProject =
+		(project?.slug ?? "project")
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]/g, "-")
+			.replace(/^[^a-z0-9]+/, "")
+			.slice(0, 32) || "project";
+	const profileName = `${profileProject}-${projectId
+		.toLowerCase()
+		.replace(/[^a-z0-9]/g, "")
+		.slice(-8)}-${issuedReviewerToken ? "reviewer" : "workspace"}`;
+	const serverArgument = `'${env.VITE_CONVEX_SITE_URL.replaceAll("'", "'\\''")}'`;
+	const connectionCommand = blablaCommand(
+		`login --profile ${profileName} --server ${serverArgument}`,
+	);
 
 	function toggleScope(scope: TokenScope, checked: boolean) {
 		if (isCreating) return;
@@ -146,9 +160,7 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 
 	async function copyConnectionCommand() {
 		if (!rawToken) return;
-		const command = blablaCommand(
-			`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
-		);
+		const command = connectionCommand;
 		try {
 			await navigator.clipboard.writeText(command);
 			toast.success("Connection command copied");
@@ -367,38 +379,36 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											<pre className="overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px]">
 												{rawToken}
 											</pre>
-											{!issuedReviewerToken ? (
-												<div className="mt-2 flex flex-col gap-2 border-warning/30 border-t pt-2">
-													<span className="font-medium">
-														Connect this machine once
-													</span>
-													<code className="break-all rounded-md bg-background p-2 font-mono text-[11px]">
-														{blablaCommand(
-															`login --server ${env.VITE_CONVEX_SITE_URL} --token ${rawToken}`,
-														)}
-													</code>
-													<Button
-														type="button"
-														size="xs"
-														variant="outline"
-														onClick={copyConnectionCommand}
-													>
-														<Terminal data-icon="inline-start" />
-														Copy setup command
-													</Button>
-													<span className="text-muted-foreground">
-														This command contains the secret token. Run it
-														locally; do not paste it into chat or commit it.
-													</span>
-												</div>
-											) : (
-												<p className="mt-2 text-muted-foreground">
-													Configure this token as the separate reviewer agent’s
-													Bearer credential. Keep it out of the translator’s
-													session and leave the local workspace CLI connection
-													unchanged.
+											<div className="mt-2 flex flex-col gap-2 border-warning/30 border-t pt-2">
+												<span className="font-medium">
+													Save a local profile
+												</span>
+												<code className="break-all rounded-md bg-background p-2 font-mono text-[11px]">
+													{connectionCommand}
+												</code>
+												<Button
+													type="button"
+													size="xs"
+													variant="outline"
+													onClick={copyConnectionCommand}
+												>
+													<Terminal data-icon="inline-start" />
+													Copy setup command
+												</Button>
+												<p className="text-muted-foreground">
+													Use CLI v0.3.0 or newer. Run locally and paste the
+													token at the hidden prompt. Then use{" "}
+													<code>--profile {profileName}</code> with each
+													command.
 												</p>
-											)}
+												{issuedReviewerToken ? (
+													<p className="text-muted-foreground">
+														Save this only in the separate reviewer’s
+														environment, outside the translator’s access.
+														Profiles do not isolate agents sharing an OS user.
+													</p>
+												) : null}
+											</div>
 										</div>
 									) : null}
 								</FieldGroup>

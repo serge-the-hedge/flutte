@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // @ts-check
 import { createReadStream } from "node:fs";
+import { CredentialError, resolveConnection } from "./credentials.mjs";
 
 /** @typedef {null | boolean | number | string | unknown[] | {[key: string]: unknown}} Json */
 /** @typedef {string | number | null} Cursor */
 /** @typedef {{status: number | null, code: string, retryAfterMs: number | null, message: string}} FailureInfo */
-/** @typedef {{mode: 'request' | 'scan', method: string, path: string, queryFile?: string, bodyFile?: string, maxPages: number, maxBytes: number, timeoutMs: number}} Options */
+/** @typedef {{mode: 'request' | 'scan', method: string, path: string, profile?: string, queryFile?: string, bodyFile?: string, maxPages: number, maxBytes: number, timeoutMs: number}} Options */
 const MAX_BYTES = 8 * 1024 * 1024;
 const PREFIX = "/api/agent/v1";
 
@@ -56,6 +57,7 @@ function options(argv) {
 		);
 	/** @type {Map<string, string>} */ const values = new Map();
 	const allowed = new Set([
+		"--profile",
 		"--query",
 		"--body",
 		"--max-pages",
@@ -101,6 +103,7 @@ function options(argv) {
 		mode,
 		method,
 		path,
+		profile: values.get("--profile"),
 		queryFile: values.get("--query"),
 		bodyFile: values.get("--body"),
 		maxPages: boundedNumber(values.get("--max-pages"), 4, 32),
@@ -144,41 +147,6 @@ async function input(file, timeoutMs) {
 		clearTimeout(timer);
 		stream.destroy();
 	}
-}
-/** @param {NodeJS.ProcessEnv} env */
-function connection(env) {
-	const token = env.BLABLA_AGENT_TOKEN;
-	if (!token || token.length > 8192 || /\s/.test(token))
-		throw new Failure(
-			"CONFIGURATION",
-			"Set BLABLA_AGENT_TOKEN to a valid project token.",
-		);
-	let origin;
-	try {
-		origin = new URL(env.BLABLA_AGENT_URL ?? "");
-	} catch {
-		throw new Failure(
-			"CONFIGURATION",
-			"Set BLABLA_AGENT_URL to an HTTPS origin.",
-		);
-	}
-	if (
-		origin.username ||
-		origin.password ||
-		origin.pathname !== "/" ||
-		origin.search ||
-		origin.hash ||
-		!(
-			origin.protocol === "https:" ||
-			(origin.protocol === "http:" &&
-				["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname))
-		)
-	)
-		throw new Failure(
-			"CONFIGURATION",
-			"BLABLA_AGENT_URL must be an HTTPS origin; HTTP is allowed only on loopback.",
-		);
-	return { origin, token };
 }
 /** @param {URL} origin @param {string} path @param {Json | undefined} query */
 function endpoint(origin, path, query) {
@@ -438,7 +406,10 @@ node blabla-agent.mjs request METHOD /path [--query query.json] [--body body.jso
 node blabla-agent.mjs scan METHOD /path [--query query.json] [--body body.json]
   [--max-pages N] [--max-bytes N] [--timeout-ms N]
 
-Set BLABLA_AGENT_URL to an HTTPS origin and BLABLA_AGENT_TOKEN in the environment.
+Select --profile NAME (or BLABLA_PROFILE), created with blabla login --profile NAME.
+Alternatively set BLABLA_API_URL and BLABLA_TOKEN together. Legacy
+BLABLA_AGENT_URL/BLABLA_AGENT_TOKEN are also supported as a pair.
+Profiles and environment credentials cannot be mixed; missing profiles never fall back.
 Paths are relative to /api/agent/v1. HTTP is allowed only for loopback testing.
 JSON files carry exact data; one file may be '-' for stdin. Redirects are rejected.
 request prints successful API JSON unchanged. No operation is automatically retried.
@@ -457,7 +428,7 @@ if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2])) {
 } else {
 	try {
 		const config = options(process.argv.slice(2));
-		const auth = connection(process.env);
+		const auth = await resolveConnection(process.env, config.profile);
 		const query = await input(config.queryFile, config.timeoutMs);
 		const body = await input(config.bodyFile, config.timeoutMs);
 		if (config.mode === "request") {
@@ -479,8 +450,10 @@ if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2])) {
 		const failure =
 			error instanceof Failure
 				? error.info
-				: new Failure("REQUEST_FAILED", "The request could not be completed.")
-						.info;
+				: error instanceof CredentialError
+					? new Failure("CONFIGURATION", error.message).info
+					: new Failure("REQUEST_FAILED", "The request could not be completed.")
+							.info;
 		process.stderr.write(`${JSON.stringify({ error: failure })}\n`);
 		process.exitCode = 1;
 	}
