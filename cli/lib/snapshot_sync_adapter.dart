@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import 'api_diagnostics.dart';
 import 'cli_version.dart';
 import 'command_runner.dart';
 import 'repository_policy.dart';
@@ -283,6 +284,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       final request = await (method == 'GET'
           ? client.getUrl(_endpoint(suffix))
           : client.postUrl(_endpoint(suffix)));
+      request.followRedirects = false;
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       _compatibility.stamp(request.headers);
@@ -292,7 +294,10 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       }
       final response = await request.close();
       final text = await utf8.decoder.bind(response).join();
-      _compatibility.check(response.headers, onWarning: onWarning);
+      _compatibility.check(
+        response.headers,
+        onWarning: (line) => onWarning?.call(redactApiToken(line, token)),
+      );
       if (response.statusCode != HttpStatus.ok) {
         throw RepositoryAdapterException(
           'Blabla rejected the snapshot sync request (${response.statusCode}). ${_errorMessage(text)}',
@@ -323,16 +328,11 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     return baseUrl.replace(path: '$prefix/api/repository-adapter/v1$suffix');
   }
 
-  String _errorMessage(String body) {
-    try {
-      final object = _object(jsonDecode(body));
-      final error = object['error'];
-      if (error is String && error.isNotEmpty) return error;
-    } on FormatException {
-      // The status line remains useful when a proxy returned non-JSON text.
-    }
-    return 'Check the checkout, token scope, and project setup.';
-  }
+  String _errorMessage(String body) => apiErrorMessage(
+    body,
+    token: token,
+    fallback: 'Check the checkout, token scope, and project setup.',
+  );
 }
 
 /// A read-only local sync adapter. It owns Git/filesystem access and leaves

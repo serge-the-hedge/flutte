@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import 'api_diagnostics.dart';
 import 'cli_version.dart';
 import 'release_delivery_adapter.dart';
 
@@ -149,6 +150,7 @@ class HttpReleaseGateway implements ReleaseGateway {
     final client = HttpClient();
     try {
       final request = await client.openUrl(method, uri);
+      request.followRedirects = false;
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       _compatibility.stamp(request.headers);
@@ -163,7 +165,10 @@ class HttpReleaseGateway implements ReleaseGateway {
           'Blabla rejected the release request (${response.statusCode}). ${_errorMessage(responseBody)}',
         );
       }
-      _compatibility.check(response.headers, onWarning: onWarning);
+      _compatibility.check(
+        response.headers,
+        onWarning: (line) => onWarning?.call(redactApiToken(line, token)),
+      );
       try {
         return _object(jsonDecode(responseBody));
       } on FormatException {
@@ -184,20 +189,11 @@ class HttpReleaseGateway implements ReleaseGateway {
     }
   }
 
-  String _errorMessage(String body) {
-    try {
-      final response = _object(jsonDecode(body));
-      final error = response['error'];
-      if (error is String && error.isNotEmpty) return error;
-      if (error is Map) {
-        final message = error['message'];
-        if (message is String && message.isNotEmpty) return message;
-      }
-    } on FormatException {
-      // A non-JSON error is safe to summarize by status alone.
-    }
-    return 'Check the Release Record id and the token export scope.';
-  }
+  String _errorMessage(String body) => apiErrorMessage(
+    body,
+    token: token,
+    fallback: 'Check the Release Record id and the token export scope.',
+  );
 }
 
 T _decodeResponse<T>(T Function() decode) {
