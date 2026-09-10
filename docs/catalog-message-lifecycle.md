@@ -201,11 +201,11 @@ First Review. New source records retain their origin projection; removal and
 restoration preserve it. Optional snapshot names are editable labels, not part
 of Snapshot Identity, and snapshot choices remain ordered by ingestion date.
 
-Older origin links can be recovered in Sync: preview the keys supported by
-immutable catalog and archive evidence, then apply that bounded batch. Recovery
-only adds filter metadata; it changes no values, confirmations, or First Review
-scope. Missing evidence leaves the origin unknown; **Introduction unavailable**
-shows those keys explicitly.
+Selecting an older snapshot automatically prepares its filter index in bounded
+batches, with progress and retry on failure. Only immutable catalog and archive
+evidence can establish origins. This disposable index changes no values,
+confirmations, or First Review scope. Missing evidence leaves the origin unknown;
+**Introduction unavailable** shows keys whose origin is not yet established.
 
 Per-target history is read-only and loads on demand. Repository history merges
 append-only applied workspace decisions with changed values observed along the
@@ -221,4 +221,5 @@ Introduction provenance is recorded exactly beginning with the first Baseline
 accepted by an implementation that supports it. Older projections must not infer
 that every unconfirmed key is post-bootstrap. A historical migration may
 reconstruct earlier introductions from immutable Snapshot evidence, but it must
-be explicit, bounded, and previewed.
+be explicit, bounded, and previewed. Preparing the disposable introduction filter
+index above does not migrate canonical provenance or First Review evidence.

@@ -986,7 +986,25 @@ export default defineSchema({
 		.index("by_projection", ["projectionId"])
 		.index("by_project_and_snapshot", ["projectId", "snapshotId"]),
 
-	// Explicitly previewed historical origin reconstruction; never review evidence.
+	snapshotOriginIndexes: defineTable({
+		projectId: v.id("projects"),
+		snapshotId: v.id("sourceSnapshots"),
+		originProjectionId: v.id("catalogProjections"),
+		projectionId: v.id("catalogProjections"),
+		status: v.union(
+			v.literal("building"),
+			v.literal("ready"),
+			v.literal("failed"),
+		),
+		cursor: v.union(v.string(), v.null()),
+		processed: v.number(),
+		expected: v.number(),
+		jobId: v.string(),
+		failure: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_project_and_snapshot", ["projectId", "snapshotId"]),
+
+	// Derived immutable introduction evidence; never review evidence.
 	catalogMessageOrigins: defineTable({
 		projectId: v.id("projects"),
 		messageId: v.string(),
@@ -1274,7 +1292,11 @@ export default defineSchema({
 			"projectId",
 			"projectionId",
 			"catalogIndex",
-		]),
+		])
+		.index(
+			"by_project_and_projection_and_firstSeenProjectionId_and_catalogIndex",
+			["projectId", "projectionId", "firstSeenProjectionId", "catalogIndex"],
+		),
 
 	// One server-owned ordinary-import confirmation run. The cursor walks the
 	// Navigation Index in Catalog Order; confirmed/skipped/progress counts are

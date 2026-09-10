@@ -3,6 +3,11 @@ import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
 import {
+	originCountBatch,
+	originPageBatch,
+	preparedOrigins,
+} from "./catalogBrowseOrigins";
+import {
 	activeProjectionFor,
 	MAX_PROJECTED_LOCALES,
 } from "./catalogProjection";
@@ -18,7 +23,6 @@ import { readWorkspaceTarget } from "./catalogWorkspaceRead";
 import { currentSourceProposalRows, encodedSize } from "./catalogWorkspaceView";
 import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmations";
 import { requireViewer } from "./permissions";
-import { snapshotOriginFilter } from "./snapshotCatalog";
 import {
 	publishedResolutionFor,
 	sourceProposalHeadFor,
@@ -130,12 +134,7 @@ export const page = query({
 			projectionId: projection._id,
 			expectedRowCount: projection.expectedKeyCount,
 		});
-		const matchesOrigin = await snapshotOriginFilter(
-			ctx,
-			args.projectId,
-			args.introducedSnapshotIds,
-			args.introducedOriginUnknown,
-		);
+		const origins = await preparedOrigins(ctx, args);
 		const after = args.after ?? -1;
 		const scanTargetIndex = args.scanTargetIndex ?? 0;
 		const needle = (args.q ?? "").trim().toLowerCase();
@@ -208,15 +207,26 @@ export const page = query({
 						)
 						.unique()
 				: null;
-		const batch = await ctx.db
-			.query("catalogWorkspaceNavigationRows")
-			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
-				q
-					.eq("projectId", args.projectId)
-					.eq("projectionId", projection._id)
-					.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
-			)
-			.paginate({ cursor: null, numItems: 64, maximumBytesRead: 512 * 1024 });
+		const batch = origins
+			? await originPageBatch(
+					ctx,
+					args,
+					origins,
+					focus ? focus.catalogIndex - 1 : after,
+				)
+			: await ctx.db
+					.query("catalogWorkspaceNavigationRows")
+					.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+						q
+							.eq("projectId", args.projectId)
+							.eq("projectionId", projection._id)
+							.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
+					)
+					.paginate({
+						cursor: null,
+						numItems: 64,
+						maximumBytesRead: 512 * 1024,
+					});
 		const counts = { waiting: 0, unconfirmedImport: 0, stale: 0, settled: 0 };
 		const keys = [];
 		const membership = args.messageIds ? new Set(args.messageIds) : null;
@@ -227,10 +237,7 @@ export const page = query({
 		let resumeTarget = 0;
 		let partial = false;
 		for (const row of batch.page) {
-			if (
-				(membership && !membership.has(row.messageId)) ||
-				!(await matchesOrigin(row))
-			) {
+			if (membership && !membership.has(row.messageId)) {
 				last = row.catalogIndex;
 				continue;
 			}
@@ -407,12 +414,7 @@ export const scopeCounts = query({
 				code: "VALIDATION",
 				message: "Invalid catalog count request.",
 			});
-		const matchesOrigin = await snapshotOriginFilter(
-			ctx,
-			args.projectId,
-			args.introducedSnapshotIds,
-			args.introducedOriginUnknown,
-		);
+		const origins = await preparedOrigins(ctx, args);
 		const selected = new Set(args.localeIds);
 		for (const localeId of selected) {
 			const locale = await ctx.db.get(localeId);
@@ -428,18 +430,21 @@ export const scopeCounts = query({
 					message: "Choose an active target language.",
 				});
 		}
-		const batch = await ctx.db
-			.query("catalogWorkspaceNavigationRows")
-			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
-				q.eq("projectId", args.projectId).eq("projectionId", args.projectionId),
-			)
-			.paginate({
-				cursor: args.cursor ?? null,
-				numItems: 64,
-				maximumBytesRead: 512 * 1024,
-			});
+		const batch = origins
+			? await originCountBatch(ctx, args, origins)
+			: await ctx.db
+					.query("catalogWorkspaceNavigationRows")
+					.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+						q
+							.eq("projectId", args.projectId)
+							.eq("projectionId", args.projectionId),
+					)
+					.paginate({
+						cursor: args.cursor ?? null,
+						numItems: 64,
+						maximumBytesRead: 512 * 1024,
+					});
 		for (const row of batch.page) {
-			if (!(await matchesOrigin(row))) continue;
 			let introduced = false;
 			for (const target of row.targets) {
 				if (!selected.has(target.localeId)) continue;
