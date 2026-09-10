@@ -11,7 +11,7 @@ type Counts = FunctionReturnType<
 	typeof api.catalogBrowse.scopeCounts
 >["counts"];
 
-/** Count each catalog generation once per language selection, never per focus
+/** Count each catalog generation once per language/snapshot selection, never per focus
  * or browse page. Revision changes cancel the scan so totals cannot mix edits. */
 export function useCatalogScopeCounts(
 	input: CountArgs | "skip",

@@ -835,6 +835,7 @@ async function publishProjection(
 	await ctx.db.patch(args.projectionId, {
 		snapshotId: args.snapshotId,
 		status: "published",
+		publishedAt: args.timestamp,
 	});
 	await ctx.db.patch(publicationState._id, {
 		status: "published",
@@ -1819,6 +1820,7 @@ async function deriveProcessingChunk(
 			),
 	});
 	const withIntroductions = attachIntroductionReviews({
+		projectionId,
 		hadPreviousBaseline: previous.previousProjectionId !== null,
 		previousMessages,
 		retainedMessages: state.values,

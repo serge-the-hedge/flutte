@@ -16,6 +16,7 @@ when a product decision changes.
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
+| Snapshot filtering and translation history | Named, date-ordered introduction picker; inline applied-value history; bounded, explicit recovery of older introduction links |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
 | Project types and shared Dictionaries | Basic/Repository projects with stable navigation, shared terminology, plain-text authoring and downloads; existing collection promotion preserves history. See [Projects and Dictionaries](../projects-and-dictionaries.md) |
 
@@ -496,10 +497,18 @@ Hand-off. Code Area, tag, a **Sibling Set**, expansion, and archived keys remain
 valid domain concepts, but require their own bounded context or metadata reads.
 The selected Locales choose the targets shown alongside Source; a target-state
 scope matches a key when any selected target matches. A Work Hand-off narrows the keys without changing Catalog Order.
-Focus counts cover the whole catalog for the selected Locales, independent of
-search, page, or active focus. New from Git counts keys; target-state scopes
-count values. A bounded digest scan reads one Navigation revision and shows
+Focus counts cover the selected snapshot cohort and Locales, independent of
+search, page, or active focus. With no snapshot selection, they cover the whole
+catalog. New from Git counts keys; target-state scopes count values. A bounded digest scan reads one Navigation revision and shows
 pending counts until all pages are totaled, never partial totals as zero.
+
+**Introduced in** selects one or more original accepted snapshots without
+changing Catalog Order. Choices are paginated, newest sync first. An optional
+name can be set or cleared in Sync; it changes neither identity nor chronology.
+Dates describe ingestion, not Git authorship. Initial-catalog membership is
+labelled separately; unknown older provenance is not inferred from timestamps.
+See the [lifecycle contract](../catalog-message-lifecycle.md#introduction-filter-and-value-history)
+for retained history and explicit introduction recovery.
 
 First-class filters in the initial Navigation contract are **the four phrases a
 value already says** — `needs a value`, `English changed`, `English, not chosen`,

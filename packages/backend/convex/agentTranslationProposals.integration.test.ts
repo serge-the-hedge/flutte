@@ -504,6 +504,18 @@ describe("Agent Translation Proposals", () => {
 			target: { value: "Hallo {name}", catalogPath: "de.arb" },
 		});
 
+		const historyBeforeAcceptance = await user.query(
+			api.translationHistory.list,
+			{
+				projectId,
+				messageId: "greeting",
+				localeId: basis.localeId,
+			},
+		);
+		expect(historyBeforeAcceptance.events.map((event) => event.value)).toEqual([
+			"Hallo {name}",
+		]);
+
 		const review = await user.mutation(
 			api.agentTranslationProposals.reviewCandidate,
 			{
@@ -512,6 +524,15 @@ describe("Agent Translation Proposals", () => {
 			},
 		);
 		expect(review.workspaceRevision).toBe(1);
+		expect(
+			(
+				await user.query(api.translationHistory.list, {
+					projectId,
+					messageId: "greeting",
+					localeId: basis.localeId,
+				})
+			).events[0],
+		).toMatchObject({ kind: "accepted", value: "Willkommen {name}" });
 
 		const workspace = await readWorkspaceKeyCards(user, projectId);
 		const value = workspace.keys

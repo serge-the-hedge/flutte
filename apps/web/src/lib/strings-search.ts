@@ -5,6 +5,7 @@ export type StringsSearch = {
 	collection?: string;
 	cursor?: string;
 	locales?: string[];
+	snapshots?: string[];
 	after?: number;
 	q?: string;
 	key?: string;

@@ -35,6 +35,7 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
+import { SnapshotHistory } from "@/components/localization/snapshot-history";
 import { SyncResult } from "@/components/localization/sync-result";
 import { blablaCommand } from "@/lib/blabla-command";
 import { api, convexId } from "@/lib/convex-api";
@@ -384,6 +385,7 @@ function RepositorySyncRoute() {
 			/>
 			<div className="flex flex-col gap-4">
 				{setup.latestRun ? <SyncResult run={setup.latestRun} /> : null}
+				<SnapshotHistory projectId={projectId} />
 				{needsSetup ? (
 					<Alert>
 						<TriangleAlert className="size-4" />

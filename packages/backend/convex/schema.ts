@@ -574,6 +574,7 @@ export default defineSchema({
 	// Catalog Document is parsed from those bytes rather than stored beside
 	// them, so there is only ever one representation of a file.
 	sourceSnapshots: defineTable({
+		name: v.optional(v.string()),
 		projectId: v.id("projects"),
 		repository: v.string(),
 		commit: v.string(),
@@ -594,6 +595,7 @@ export default defineSchema({
 		createdAt: v.number(),
 	})
 		.index("by_project", ["projectId"])
+		.index("by_project_and_createdAt", ["projectId", "createdAt"])
 		.index("by_project_and_commit", ["projectId", "commit"])
 		.index("by_project_and_repository_and_commit_and_manifestHash", [
 			"projectId",
@@ -859,6 +861,8 @@ export default defineSchema({
 	// Normalized workflow fields derived from Catalog Documents. A projection
 	// becomes visible only when its Source Snapshot becomes the baseline.
 	catalogProjections: defineTable({
+		// Publication may follow staging or preview capture considerably later.
+		publishedAt: v.optional(v.number()),
 		syncSummary: v.optional(syncSummaryValidator),
 		// Completed review-evidence derivation; absent on older published generations.
 		localeReviewEvidenceVersion: v.optional(v.number()),
@@ -980,6 +984,13 @@ export default defineSchema({
 		snapshotId: v.optional(v.id("sourceSnapshots")),
 	}).index("by_projection", ["projectionId"]),
 
+	// Explicitly previewed historical origin reconstruction; never review evidence.
+	catalogMessageOrigins: defineTable({
+		projectId: v.id("projects"),
+		messageId: v.string(),
+		firstSeenProjectionId: v.id("catalogProjections"),
+	}).index("by_project_and_messageId", ["projectId", "messageId"]),
+
 	// Private raw inputs exist only while a projection is being reconciled.
 	catalogProcessingInputs: defineTable({
 		projectionId: v.id("catalogProjections"),
@@ -1030,6 +1041,7 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 		introducedAt: v.optional(v.number()),
 		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
@@ -1112,6 +1124,31 @@ export default defineSchema({
 			"localeId",
 		]),
 
+	// Append-only applied values, separate from mutable workspace heads. Older
+	// overwritten manual values cannot be reconstructed from fingerprints.
+	catalogWorkspaceValueHistory: defineTable({
+		projectId: v.id("projects"),
+		messageId: v.string(),
+		localeId: v.id("locales"),
+		kind: v.union(
+			v.literal("saved"),
+			v.literal("confirmed"),
+			v.literal("accepted"),
+			v.literal("retained"),
+		),
+		value: v.string(),
+		sourceFingerprint: v.string(),
+		intentionalBlankReason: v.optional(v.string()),
+		actor,
+		reviewAuthorization: v.optional(agentReviewAuthorizationValidator),
+		recordedAt: v.number(),
+	}).index("by_project_and_messageId_and_localeId_and_recordedAt", [
+		"projectId",
+		"messageId",
+		"localeId",
+		"recordedAt",
+	]),
+
 	// Intentional Blank and Translator Confirmation retain their exact content
 	// evidence even after a later value replaces it. The explicit aggregate
 	// envelope keeps that bounded history safe to compose with the active Catalog.
@@ -1181,6 +1218,7 @@ export default defineSchema({
 	// projector derives every field from canonical evidence; the index is never
 	// Release Truth and never a second edit path.
 	catalogWorkspaceNavigationRows: defineTable({
+		firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		messageId: v.string(),
@@ -1751,6 +1789,7 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 		introducedAt: v.optional(v.number()),
 		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
@@ -1794,6 +1833,7 @@ export default defineSchema({
 		declaredPlaceholderNames: v.optional(v.array(v.string())),
 		declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 		declaredPlaceholderNameCount: v.optional(v.number()),
+		firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 		introducedAt: v.optional(v.number()),
 		introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 		materialized: v.boolean(),
@@ -1803,6 +1843,11 @@ export default defineSchema({
 	})
 		.index("by_projection", ["projectionId"])
 		.index("by_projection_and_isSource", ["projectionId", "isSource"])
+		.index("by_projection_and_messageId_and_isSource", [
+			"projectionId",
+			"messageId",
+			"isSource",
+		])
 		.index("by_projection_and_messageId", ["projectionId", "messageId"]),
 
 	// Source Proposals retain durable candidate evidence beside Git. Restore

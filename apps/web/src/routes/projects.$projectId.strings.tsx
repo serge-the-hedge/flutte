@@ -21,6 +21,7 @@ import {
 } from "@/components/localization/project-shell";
 import { StringsCatalogView } from "@/components/localization/strings-catalog-view";
 import { StringsLanguageSelector } from "@/components/localization/strings-language-selector";
+import { StringsSnapshotSelector } from "@/components/localization/strings-snapshot-selector";
 import { api, convexId } from "@/lib/convex-api";
 import {
 	type CatalogWorkspaceCommit,
@@ -69,6 +70,12 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 				: undefined,
 		cursor: typeof search.cursor === "string" ? search.cursor : undefined,
 		locales: stringsLanguagesFromSearch(search),
+		snapshots:
+			Array.isArray(search.snapshots) &&
+			search.snapshots.length > 0 &&
+			search.snapshots.every((id) => typeof id === "string")
+				? [...new Set(search.snapshots as string[])].sort()
+				: undefined,
 		after:
 			Number.isSafeInteger(Number(search.after)) && Number(search.after) >= -1
 				? Number(search.after)
@@ -157,6 +164,7 @@ function RepositoryStrings() {
 		search.q,
 		search.scope,
 		search.release,
+		search.snapshots,
 	]);
 	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
 		context: pageContext,
@@ -202,6 +210,9 @@ function RepositoryStrings() {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
 					localeIds: selectedLocaleIds,
+					introducedSnapshotIds: search.snapshots?.map((id) =>
+						convexId<"sourceSnapshots">(id),
+					),
 					after: search.after,
 					q: search.q,
 					scope: search.scope,
@@ -221,6 +232,9 @@ function RepositoryStrings() {
 					projectionId: overview.projectionId,
 					revision: overview.revision,
 					localeIds: selectedLocaleIds,
+					introducedSnapshotIds: search.snapshots?.map((id) =>
+						convexId<"sourceSnapshots">(id),
+					),
 				}
 			: "skip",
 	);
@@ -516,9 +530,20 @@ function RepositoryStrings() {
 						}}
 					/>
 				</div>
-				<span className="text-muted-foreground text-sm">
-					Counts reflect selected languages on this page
-				</span>
+				<StringsSnapshotSelector
+					projectId={projectId}
+					value={search.snapshots}
+					onChange={(snapshots) => {
+						void navigate({
+							search: (previous) => ({
+								...previous,
+								snapshots,
+								after: undefined,
+								key: undefined,
+							}),
+						});
+					}}
+				/>
 			</div>
 			{loadingLanguages && navigation?.kind === "ready" ? (
 				<p role="status" className="mb-2 text-muted-foreground text-sm">
@@ -526,6 +551,7 @@ function RepositoryStrings() {
 				</p>
 			) : null}
 			<StringsCatalogView
+				historyProjectId={convexProjectId}
 				key={`${projectId}:${selectionKey}`}
 				onUnsavedWorkChange={setHasUnsavedWork}
 				navigation={

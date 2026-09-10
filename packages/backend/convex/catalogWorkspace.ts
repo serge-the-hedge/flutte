@@ -31,6 +31,11 @@ import {
 	saveSourceProposal,
 	sourceProposalHeadFor,
 } from "./sourceProposals";
+import {
+	appendTranslationHistory,
+	recordTranslationConfirmation,
+	retainWorkspaceValue,
+} from "./translationHistoryWrite";
 
 /** Storage envelopes are independent of transaction reads: all current-value
  * and decision lookups use bounded indexes, including ordinary import runs. */
@@ -228,6 +233,10 @@ export async function recordDecisions(
 			projectId: input.projectId,
 			...next,
 		});
+		await recordTranslationConfirmation(ctx, {
+			projectId: input.projectId,
+			...next,
+		});
 	}
 	if (input.state) {
 		await ctx.db.patch(input.state._id, {
@@ -261,6 +270,8 @@ async function upsertValueHead(
 		state: Doc<"catalogWorkspaceStates"> | null;
 		previous: Doc<"catalogWorkspaceValueHeads"> | null;
 		next: CatalogWorkspaceValueHeadInput;
+		historyKind?: "saved" | "accepted";
+		intentionalBlankReason?: string;
 	},
 ): Promise<void> {
 	if (!input.state && input.previous) {
@@ -287,6 +298,21 @@ async function upsertValueHead(
 		throw new ConvexError({
 			code: "LIMIT_EXCEEDED",
 			message: "Catalog Workspace exceeds its supported value-head envelope.",
+		});
+	}
+	if (!input.previous || input.previous.revision !== input.next.revision) {
+		await retainWorkspaceValue(ctx, input.previous);
+		await appendTranslationHistory(ctx, {
+			projectId: input.projectId,
+			messageId: input.next.messageId,
+			localeId: input.next.localeId,
+			kind: input.historyKind ?? "saved",
+			value: input.next.value,
+			sourceFingerprint: input.next.sourceFingerprint,
+			actor: input.next.updatedBy,
+			reviewAuthorization: input.next.reviewAuthorization,
+			recordedAt: input.next.updatedAt,
+			intentionalBlankReason: input.intentionalBlankReason,
 		});
 	}
 	if (input.previous) {
@@ -401,6 +427,7 @@ export const reconcileValueHeads = internalMutation({
 				target.gitValueFingerprint !== head.basisGitValueFingerprint ||
 				(target.gitValueRevision ?? 0) !== head.basisGitValueRevision
 			) {
+				await retainWorkspaceValue(ctx, head);
 				await ctx.db.delete(head._id);
 				nextHeadCount--;
 				nextHeadByteLength -= previousByteLength;
@@ -651,6 +678,8 @@ export async function applyAgentTargetValue(
 		state,
 		previous: head,
 		next: nextHead,
+		historyKind: "accepted",
+		intentionalBlankReason,
 	});
 	const valueBasis = {
 		messageId: input.messageId,
@@ -1063,6 +1092,7 @@ async function commitCatalogWorkspaceValue(
 		state,
 		previous: head,
 		next: nextHead,
+		intentionalBlankReason: reason,
 	});
 	await recordDecision(ctx, {
 		projectId: args.projectId,
