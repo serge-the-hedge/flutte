@@ -58,14 +58,12 @@ function originRows(
 ) {
 	return ctx.db
 		.query("catalogWorkspaceNavigationRows")
-		.withIndex(
-			"by_project_and_projection_and_firstSeenProjectionId_and_catalogIndex",
-			(q) =>
-				q
-					.eq("projectId", args.projectId)
-					.eq("projectionId", args.projectionId)
-					.eq("firstSeenProjectionId", origin)
-					.gt("catalogIndex", after),
+		.withIndex("by_project_projection_origin_catalogIndex", (q) =>
+			q
+				.eq("projectId", args.projectId)
+				.eq("projectionId", args.projectionId)
+				.eq("firstSeenProjectionId", origin)
+				.gt("catalogIndex", after),
 		);
 }
 
