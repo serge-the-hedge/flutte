@@ -1,3 +1,4 @@
+import { characterCount } from "@blabla/backend/convex/characterLimits";
 import { Button } from "@blabla/ui/components/button";
 import { Field, FieldGroup, FieldLabel } from "@blabla/ui/components/field";
 import { Input } from "@blabla/ui/components/input";
@@ -10,9 +11,15 @@ import {
 	useState,
 } from "react";
 import { CatalogValueRow, QUIET_CATALOG_FIELD } from "./catalog-value-row";
+import {
+	CharacterCount,
+	CharacterLimitField,
+	parsedCharacterLimit,
+} from "./character-limit";
 
 type ComposerLocale = { id: string; code: string };
 type NewString = {
+	characterLimit?: number;
 	sourceValue: string;
 	name: string | null;
 	context: string;
@@ -43,6 +50,14 @@ export function ManagedStringComposer({
 	>({});
 	const [name, setName] = useState("");
 	const [context, setContext] = useState("");
+	const [limitText, setLimitText] = useState("");
+	const characterLimit = parsedCharacterLimit(limitText);
+	const invalidLimit = limitText !== "" && characterLimit === undefined;
+	const overLimit =
+		characterLimit !== undefined &&
+		[value, ...Object.values(translations).map((entry) => entry.value)].some(
+			(text) => characterCount(text) > characterLimit,
+		);
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [pending, setPending] = useState(false);
 	const [focused, setFocused] = useState(false);
@@ -58,6 +73,13 @@ export function ManagedStringComposer({
 	const removedDrafts = targetDraftIds.filter(
 		(id) => !enabledLocales.some((locale) => locale.id === id),
 	);
+	const hiddenOverLimit =
+		characterLimit !== undefined &&
+		targetDraftIds.some(
+			(id) =>
+				!visibleLocales.some((locale) => locale.id === id) &&
+				characterCount(translations[id]?.value ?? "") > characterLimit,
+		);
 	const hiddenDraftCount = targetDraftIds.filter(
 		(id) =>
 			!visibleLocales.some((locale) => locale.id === id) &&
@@ -71,6 +93,7 @@ export function ManagedStringComposer({
 		value.length > 0 ||
 		name.length > 0 ||
 		context.length > 0 ||
+		limitText.length > 0 ||
 		targetDraftIds.length > 0;
 	useEffect(() => {
 		onUnsavedWorkChange(dirty || pending);
@@ -86,6 +109,8 @@ export function ManagedStringComposer({
 	async function submit() {
 		if (
 			readOnly ||
+			invalidLimit ||
+			overLimit ||
 			sending.current ||
 			!value.trim() ||
 			removedDrafts.length > 0
@@ -96,6 +121,7 @@ export function ManagedStringComposer({
 		setError(null);
 		try {
 			await onCreate({
+				...(characterLimit === undefined ? {} : { characterLimit }),
 				sourceValue: value,
 				name: name.trim() || null,
 				context,
@@ -108,6 +134,7 @@ export function ManagedStringComposer({
 			setTranslations({});
 			setName("");
 			setContext("");
+			setLimitText("");
 			setDetailsOpen(false);
 			setSaveCount((count) => count + 1);
 		} catch (cause) {
@@ -166,6 +193,7 @@ export function ManagedStringComposer({
 							onChange={(event) => setValue(event.target.value)}
 							className={QUIET_CATALOG_FIELD}
 						/>
+						<CharacterCount value={value} limit={characterLimit} />
 					</CatalogValueRow>
 					{(focused || dirty ? rows : []).map((locale) => (
 						<CatalogValueRow
@@ -190,6 +218,10 @@ export function ManagedStringComposer({
 									}))
 								}
 								className={QUIET_CATALOG_FIELD}
+							/>
+							<CharacterCount
+								value={translations[locale.id]?.value ?? ""}
+								limit={characterLimit}
 							/>
 							{removedDrafts.includes(locale.id) && (
 								<p className="px-2 text-destructive text-xs">
@@ -231,6 +263,11 @@ export function ManagedStringComposer({
 										placeholder="Where it appears, meaning, or length guidance"
 									/>
 								</Field>
+								<CharacterLimitField
+									value={limitText}
+									onChange={setLimitText}
+									disabled={readOnly}
+								/>
 							</FieldGroup>
 						</details>
 						<div className="flex flex-wrap items-center justify-between gap-2">
@@ -249,6 +286,8 @@ export function ManagedStringComposer({
 								variant="ghost"
 								disabled={
 									readOnly ||
+									invalidLimit ||
+									overLimit ||
 									pending ||
 									!value.trim() ||
 									removedDrafts.length > 0
@@ -265,6 +304,12 @@ export function ManagedStringComposer({
 					Editing access was removed. Your draft is kept here for copying.
 				</p>
 			)}
+			{hiddenOverLimit ? (
+				<p role="status" className="mt-2 text-destructive text-xs">
+					A hidden translation exceeds the character limit. Show its language to
+					shorten it.
+				</p>
+			) : null}
 			{error && (
 				<p role="alert" className="mt-2 text-destructive text-sm">
 					{error}

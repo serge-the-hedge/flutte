@@ -646,6 +646,22 @@ function routeError(
 	return json(
 		{
 			error: message,
+			...(code === "CHARACTER_LIMIT_EXCEEDED"
+				? {
+						...(typeof details?.messageId === "string"
+							? { messageId: details.messageId }
+							: {}),
+						...(typeof details?.characterLimit === "number"
+							? { characterLimit: details.characterLimit }
+							: {}),
+						...(typeof details?.characterCount === "number"
+							? { characterCount: details.characterCount }
+							: {}),
+						...(typeof details?.overBy === "number"
+							? { overBy: details.overBy }
+							: {}),
+					}
+				: {}),
 			...(code === undefined ? {} : { code }),
 			...(diagnosticCount === undefined ? {} : { diagnosticCount }),
 			...(diagnostics === undefined ? {} : { diagnostics }),

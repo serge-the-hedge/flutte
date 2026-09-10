@@ -59,6 +59,7 @@ const translationWorkPageValidator = v.object({
 			messageId: v.string(),
 			localeCode: v.string(),
 			reasons: v.array(translationWorkReasonValidator),
+			characterLimit: v.optional(v.number()),
 			sourceValue: v.string(),
 			targetValue: v.string(),
 		}),
@@ -178,6 +179,7 @@ function discoveryEntry(
 		});
 	}
 	return {
+		characterLimit: current.characterLimit,
 		messageId: current.target.messageId,
 		localeId: current.target.localeId,
 		localeCode: current.target.localeCode,
@@ -485,7 +487,11 @@ export const workspaceSearch = internalQuery({
 		};
 		type CompactEntry = Pick<
 			Entry,
-			"messageId" | "localeCode" | "evidence" | "matchedFields"
+			| "messageId"
+			| "localeCode"
+			| "evidence"
+			| "matchedFields"
+			| "characterLimit"
 		> & {
 			source: { value: string; pendingProposal: boolean };
 			target: { value: string };
@@ -567,6 +573,7 @@ export const workspaceSearch = internalQuery({
 				const entry =
 					args.view === "compact"
 						? {
+								characterLimit: current.characterLimit,
 								messageId: row.messageId,
 								localeCode: target.localeCode,
 								source: {
@@ -718,6 +725,7 @@ export const workspaceWorkPage = internalQuery({
 			messageId: string;
 			localeCode: string;
 			reasons: TranslationWorkReason[];
+			characterLimit?: number;
 			sourceValue: string;
 			targetValue: string;
 		}> = [];
@@ -792,6 +800,7 @@ export const workspaceWorkPage = internalQuery({
 					messageId: row.messageId,
 					localeCode: target.localeCode,
 					reasons,
+					characterLimit: current.characterLimit,
 					sourceValue: current.source.value,
 					targetValue: current.value,
 				};

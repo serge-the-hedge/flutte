@@ -259,6 +259,17 @@ const contractTransformCode = v.union(
 );
 
 export default defineSchema({
+	messageConstraints: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.optional(v.id("contentCollections")),
+		messageId: v.string(),
+		characterLimit: v.number(),
+	}).index("by_projectId_and_collectionId_and_messageId", [
+		"projectId",
+		"collectionId",
+		"messageId",
+	]),
+
 	collectionProjectMoves: defineTable({
 		sourceProjectId: v.id("projects"),
 		destinationProjectId: v.id("projects"),

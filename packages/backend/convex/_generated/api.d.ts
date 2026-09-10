@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as messageConstraints from "../messageConstraints.js";
 import type * as contentModel from "../contentModel.js";
 import type * as contentCollections from "../contentCollections.js";
 import type * as managedContent from "../managedContent.js";
@@ -82,6 +83,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  messageConstraints: typeof messageConstraints;
   contentModel: typeof contentModel;
   contentCollections: typeof contentCollections;
   managedContent: typeof managedContent;

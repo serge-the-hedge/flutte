@@ -8,6 +8,13 @@
 - Preserve casing, symbol spacing, and punctuation that may reflect UI
   composition unless the assignment requests formatting cleanup.
 - Source-copy changes require an explicit human assignment.
+- Respect optional `characterLimit` from context or task reads. It applies to
+  every language and counts Unicode code points, including whitespace and literal
+  ICU syntax. Over-limit writes return HTTP 400 with
+  `code: "CHARACTER_LIMIT_EXCEEDED"`, `messageId`, `characterLimit`,
+  `characterCount`, `overBy`, and an actionable `error` message. Shorten the text
+  and resubmit; never truncate automatically. Limits are rechecked when applying
+  a reviewed candidate, since they may have changed after submission.
 
 ### `POST /translation-tasks`
 

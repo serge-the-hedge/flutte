@@ -47,6 +47,10 @@ import {
 	managedMessageName,
 	readManagedTarget,
 } from "./managedContent";
+import {
+	assertMessageCharacterLimit,
+	readCharacterLimit,
+} from "./messageConstraints";
 import { requireEditor, requireViewer } from "./permissions";
 import { guidanceContextValidator, readGuidance } from "./translationGuidance";
 
@@ -203,6 +207,7 @@ async function taskCandidateFeedback(
 }
 
 const taskTargetValidator = v.object({
+	characterLimit: v.optional(v.number()),
 	context: v.optional(v.string()),
 	messageId: v.string(),
 	sourceValue: v.string(),
@@ -542,6 +547,20 @@ async function selectedTaskCurrent(
 		localeCode: current.target.localeCode,
 		catalogPath: current.target.catalogPath,
 		catalogIndex: current.target.catalogIndex,
+	};
+}
+
+function messageConstraintAddress(
+	proposal: { projectId: Id<"projects">; target: ProposalTarget },
+	messageId: string,
+) {
+	return {
+		projectId: proposal.projectId,
+		messageId,
+		collectionId:
+			proposal.target.kind === "managedCollection"
+				? proposal.target.collectionId
+				: undefined,
 	};
 }
 
@@ -1141,6 +1160,10 @@ export const taskForAgent = internalQuery({
 					.unique(),
 			]);
 			const liveTarget = {
+				characterLimit: await readCharacterLimit(
+					ctx,
+					messageConstraintAddress(proposal, target.messageId),
+				),
 				messageId: target.messageId,
 				sourceValue: current.source.value,
 				context:
@@ -2031,6 +2054,11 @@ export const submitRevisions = internalMutation({
 				});
 				continue;
 			}
+			await assertMessageCharacterLimit(
+				ctx,
+				messageConstraintAddress(proposal, item.messageId),
+				item.value,
+			);
 			if (proposal.target.kind === "managedCollection") {
 				if (!item.localeId)
 					throw new ConvexError({
@@ -2421,6 +2449,10 @@ export const contextForReview = query({
 		const proposal = await ctx.db.get(revision.proposalId);
 		if (!proposal) return null;
 		await requireViewer(ctx, proposal.projectId);
+		const characterLimit = await readCharacterLimit(
+			ctx,
+			messageConstraintAddress(proposal, revision.messageId),
+		);
 
 		try {
 			if (proposal.target.kind === "managedCollection") {
@@ -2438,6 +2470,7 @@ export const contextForReview = query({
 				const review = await latestCandidateReview(ctx, revision._id);
 				return {
 					kind: "managedCollection" as const,
+					characterLimit,
 					available: true as const,
 					localeCode: current.localeCode,
 					source: {
@@ -2481,6 +2514,7 @@ export const contextForReview = query({
 				const review = await latestCandidateReview(ctx, revision._id);
 				return {
 					kind: "catalogWorkspace" as const,
+					characterLimit,
 					available: true as const,
 					localeCode: current.target.localeCode,
 					source: {
@@ -2536,6 +2570,7 @@ export const contextForReview = query({
 			const review = await latestCandidateReview(ctx, revision._id);
 			return {
 				kind: "localeProposal" as const,
+				characterLimit,
 				available: true as const,
 				localeCode: current.localeProposal.localeCode,
 				source: {
@@ -3065,6 +3100,7 @@ export const revokeCandidateReviewGrant = mutation({
 });
 
 const agentReviewContextValidator = v.object({
+	characterLimit: v.optional(v.number()),
 	kind: v.literal("candidate"),
 	collectionId: v.optional(v.id("contentCollections")),
 	format: v.optional(v.literal("plain")),
@@ -3146,6 +3182,10 @@ async function contextForAgentReviewer(
 	const { revision, proposal, authorization } = authorized;
 	const review = await latestCandidateReview(ctx, revision._id);
 	const common = {
+		characterLimit: await readCharacterLimit(
+			ctx,
+			messageConstraintAddress(proposal, revision.messageId),
+		),
 		kind: "candidate" as const,
 		collectionId:
 			proposal.target.kind === "managedCollection"

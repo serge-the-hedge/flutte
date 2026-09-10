@@ -40,6 +40,7 @@ import {
 	valueStateFor,
 } from "./catalogWorkspaceView";
 import { now, sha256Hex } from "./lib";
+import { readCharacterLimit } from "./messageConstraints";
 import type { OrdinaryImportConfirmationCounts } from "./ordinaryImportConfirmations";
 import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmations";
 import { requireEditor, requireViewer } from "./permissions";
@@ -2774,7 +2775,21 @@ export const window = query({
 		);
 		// Preserve the requested order; every requested key is present.
 		const cardsByMessageId = new Map(
-			cards.map((card) => [card.id, card] as const),
+			await Promise.all(
+				cards.map(
+					async (card) =>
+						[
+							card.id,
+							{
+								...card,
+								characterLimit: await readCharacterLimit(ctx, {
+									projectId: args.projectId,
+									messageId: card.id,
+								}),
+							},
+						] as const,
+				),
+			),
 		);
 		return args.messageIds.map(
 			(messageId) =>

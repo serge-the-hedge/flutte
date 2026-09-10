@@ -452,3 +452,80 @@ test("task review uses live optional names while retaining immutable message ide
 	).toMatchObject({ source: { name: null } });
 	expect(await f.t.run((ctx) => ctx.db.get(revisionId))).toEqual(original);
 });
+
+test("managed tasks expose limits and independent reviewers cannot apply oversized candidates", async () => {
+	const f = await setup();
+	const address = {
+		projectId: f.projectId,
+		collectionId: f.collectionId,
+		messageId: "hero",
+	};
+	await f.owner.mutation(api.messageConstraints.setCharacterLimit, {
+		...address,
+		characterLimit: 2,
+		expectedCharacterLimit: null,
+	});
+	const page = await f.request(
+		f.translator.token,
+		`/translation-tasks/${f.taskId}?limit=1`,
+	);
+	expect(await page.json()).toMatchObject({
+		targets: [{ messageId: "hero", characterLimit: 2 }],
+	});
+	const submit = (value: string) =>
+		f.request(f.translator.token, `/translation-tasks/${f.taskId}/candidates`, {
+			items: [{ messageId: "hero", value }],
+		});
+	const tooLong = await submit("😀ab");
+	expect(tooLong.status).toBe(400);
+	expect(await tooLong.json()).toMatchObject({
+		code: "CHARACTER_LIMIT_EXCEEDED",
+		characterCount: 3,
+		characterLimit: 2,
+		overBy: 1,
+	});
+	const valid = await submit("😀a");
+	expect(valid.status).toBe(200);
+	const { revisions } = (await valid.json()) as {
+		revisions: Array<{ revisionId: Id<"agentTranslationCandidateRevisions"> }>;
+	};
+	const revisionId = revisions[0]?.revisionId;
+	if (!revisionId) throw new Error("Expected valid candidate");
+	await f.owner.mutation(api.messageConstraints.setCharacterLimit, {
+		...address,
+		characterLimit: 1,
+		expectedCharacterLimit: 2,
+	});
+	await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+		projectId: f.projectId,
+		enabled: true,
+	});
+	const context = await f.request(
+		f.reviewer.token,
+		`/candidate-reviews/${revisionId}`,
+	);
+	expect(context.status).toBe(200);
+	const review = (await context.json()) as {
+		reviewToken: string;
+		characterLimit: number;
+	};
+	expect(review.characterLimit).toBe(1);
+	const rejected = await f.request(
+		f.reviewer.token,
+		`/candidate-reviews/${revisionId}`,
+		{ reviewToken: review.reviewToken, decision: { kind: "accept" } },
+	);
+	expect(rejected.status).toBe(400);
+	expect(await rejected.json()).toMatchObject({
+		code: "CHARACTER_LIMIT_EXCEEDED",
+		messageId: "hero",
+		characterCount: 2,
+		characterLimit: 1,
+	});
+	expect(
+		await f.t.run(
+			async (ctx) =>
+				await ctx.db.query("agentTranslationCandidateReviews").collect(),
+		),
+	).toEqual([]);
+});

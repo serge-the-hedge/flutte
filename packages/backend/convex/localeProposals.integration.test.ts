@@ -2468,3 +2468,43 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		).resolves.toMatchObject({ status: "ready" });
 	});
 });
+
+test("new-locale templates expose limits and staging rejects oversized Unicode text clearly", async () => {
+	const t = createBackend();
+	const user = await authenticatedBackend(t, "limit-editor");
+	const projectId = await createProject(user);
+	await ingestSourceBaseline(user, projectId, {
+		content: JSON.stringify({ "@@locale": "en", title: "Title" }),
+	});
+	await user.mutation(api.messageConstraints.setCharacterLimit, {
+		projectId,
+		messageId: "title",
+		characterLimit: 3,
+		expectedCharacterLimit: null,
+	});
+	const { token } = await proposalToken(user, projectId);
+	const { proposalId } = await createPortugueseProposal(t, token);
+	const template = await portugueseTemplate(t, token, proposalId);
+	expect(template.messages[0]).toMatchObject({
+		id: "title",
+		characterLimit: 3,
+	});
+	const sourceFingerprint = template.messages[0]?.sourceFingerprint;
+	if (!sourceFingerprint) throw new Error("Missing source fingerprint");
+	const rejected = await stagePortugueseValues(t, token, proposalId, [
+		{ messageId: "title", value: "😀abc", sourceFingerprint },
+	]);
+	expect(rejected.status).toBe(400);
+	expect(await rejected.json()).toMatchObject({
+		code: "CHARACTER_LIMIT_EXCEEDED",
+		messageId: "title",
+		characterLimit: 3,
+		characterCount: 4,
+		overBy: 1,
+	});
+	await successfulJson(
+		await stagePortugueseValues(t, token, proposalId, [
+			{ messageId: "title", value: "😀ab", sourceFingerprint },
+		]),
+	);
+});

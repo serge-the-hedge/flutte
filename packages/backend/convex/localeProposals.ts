@@ -35,6 +35,7 @@ import {
 	assertIntroductionCatalogPath,
 	introductionTargetFor,
 } from "./localeIntroductionTargets";
+import { assertMessageCharacterLimit } from "./messageConstraints";
 import { declaredPlaceholderNames, messageFacts } from "./messageFacts";
 import { requireEditor, requireViewer } from "./permissions";
 
@@ -119,6 +120,7 @@ type CarryForwardValueInput = ProposalValueInput & {
 };
 
 type TemplateMessage = {
+	characterLimit?: number;
 	id: string;
 	sourceValue: string;
 	sourceFingerprint: string;
@@ -1750,6 +1752,11 @@ export const stageBatch = internalMutation({
 				);
 			}
 			seen.add(item.messageId);
+			await assertMessageCharacterLimit(
+				ctx,
+				{ projectId: args.projectId, messageId: item.messageId },
+				item.value,
+			);
 			const nextValue = { ...item };
 			const byteLength = valueByteLength(nextValue);
 			if (byteLength > MAX_LOCALE_PROPOSAL_STAGE_BYTES) {
@@ -2123,6 +2130,18 @@ export async function templateProposal(
 		actor,
 		args.proposalId,
 	);
+	const limits = await ctx.runQuery(
+		internal.messageConstraints.limitsForMessages,
+		{
+			projectId: actor.projectId,
+			messageIds: document.messages
+				.slice(args.cursor, args.cursor + args.limit)
+				.map((message) => message.id),
+		},
+	);
+	const limitByMessage = new Map(
+		limits.map((item) => [item.messageId, item.characterLimit]),
+	);
 	const messages: TemplateMessage[] = [];
 	let byteLength = 0;
 	for (const message of document.messages.slice(
@@ -2131,6 +2150,7 @@ export async function templateProposal(
 	)) {
 		const item: TemplateMessage = {
 			id: message.id,
+			characterLimit: limitByMessage.get(message.id),
 			sourceValue: message.value,
 			sourceFingerprint: await sourceFingerprint(message),
 			staged: false,
@@ -2188,6 +2208,16 @@ export async function taskProposalPage(
 		args.cursor,
 		args.cursor + args.limit,
 	);
+	const limits = await ctx.runQuery(
+		internal.messageConstraints.limitsForMessages,
+		{
+			projectId: actor.projectId,
+			messageIds: sourcePage.map((message) => message.id),
+		},
+	);
+	const limitByMessage = new Map(
+		limits.map((item) => [item.messageId, item.characterLimit]),
+	);
 	const stagedValues = await ctx.runQuery(
 		internal.localeProposals.stagedValuesForTemplate,
 		{
@@ -2205,6 +2235,7 @@ export async function taskProposalPage(
 		const staged = stagedByMessageId.get(message.id);
 		const item = {
 			messageId: message.id,
+			characterLimit: limitByMessage.get(message.id),
 			sourceValue: message.value,
 			sourceFingerprint: await sourceFingerprint(message),
 			targetValue: staged?.value ?? "",

@@ -139,7 +139,8 @@ Body:
 }
 ```
 
-Returns exact Source/target values, bounded ICU facts, and the same evidence as
+Returns exact Source/target values, optional per-string `characterLimit`,
+bounded ICU facts, and the same evidence as
 search for at most 50 unique keys, 20 unique Locales, and 128 pairs. Unavailable
 pairs are listed in `missing`; they are never silently discarded. `guidance`
 contains shared applicable terms and voice guides once; its text indexes refer

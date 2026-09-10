@@ -1,5 +1,4 @@
 import { ConvexError } from "convex/values";
-
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { activeProjectionFor } from "./catalogProjection";
@@ -22,6 +21,7 @@ import {
 } from "./catalogWorkspaceView";
 import { assertTargetValueContract } from "./contractTransforms";
 import { sha256Hex } from "./lib";
+import { readCharacterLimit } from "./messageConstraints";
 import {
 	isCurrentSourceProposalHeadForSource,
 	publishedResolutionFor,
@@ -132,6 +132,7 @@ export async function readWorkspaceTarget(
 	return {
 		projection,
 		gitSource: source,
+		characterLimit: await readCharacterLimit(ctx, { projectId, messageId }),
 		source: effectiveSource,
 		target,
 		effectiveTarget,

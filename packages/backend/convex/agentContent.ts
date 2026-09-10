@@ -40,6 +40,7 @@ function searchEntry(
 	matchedFields: string[],
 ) {
 	return {
+		characterLimit: current.characterLimit,
 		collectionId: current.collection._id,
 		messageId: current.source.key,
 		name: managedMessageName(current.source),

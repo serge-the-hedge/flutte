@@ -1,3 +1,4 @@
+import { characterCount } from "@blabla/backend/convex/characterLimits";
 import { Button } from "@blabla/ui/components/button";
 import { Input } from "@blabla/ui/components/input";
 import { Textarea } from "@blabla/ui/components/textarea";
@@ -23,6 +24,11 @@ import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useManagedPage } from "@/lib/use-managed-page";
+import {
+	CharacterCount,
+	CharacterLimitField,
+	parsedCharacterLimit,
+} from "./character-limit";
 import { ManagedLanguages } from "./managed-languages";
 import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
@@ -172,8 +178,18 @@ export function ManagedStrings({
 		sourceRevision: number;
 		name: string;
 		value: string;
+		originalValue: string;
 		context: string;
+		limitText: string;
+		expectedCharacterLimit: number | null;
 	} | null>(null);
+	const formLimit = form ? parsedCharacterLimit(form.limitText) : undefined;
+	const invalidForm =
+		!!form &&
+		((form.limitText !== "" && formLimit === undefined) ||
+			(form.value !== form.originalValue &&
+				formLimit !== undefined &&
+				characterCount(form.value) > formLimit));
 	const [formDirty, setFormDirty] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [languagesOpen, setLanguagesOpen] = useState(false);
@@ -224,6 +240,7 @@ export function ManagedStrings({
 			id: item.messageId,
 			name: item.name,
 			context: item.context,
+			characterLimit: item.characterLimit,
 			source: {
 				localeId: sourceLocale._id,
 				localeCode: sourceLocale.code,
@@ -407,7 +424,7 @@ export function ManagedStrings({
 					className="mb-5 flex flex-col gap-3 rounded-md border p-4"
 					onSubmit={async (event) => {
 						event.preventDefault();
-						if (busy) return;
+						if (busy || invalidForm) return;
 						setBusy(true);
 						try {
 							await saveSource({
@@ -415,6 +432,8 @@ export function ManagedStrings({
 								messageId: form.messageId,
 								sourceValue: form.value,
 								name: form.name.trim() || null,
+								characterLimit: parsedCharacterLimit(form.limitText) ?? null,
+								expectedCharacterLimit: form.expectedCharacterLimit,
 								context: form.context,
 								expectedSourceRevision: form.sourceRevision,
 							});
@@ -469,8 +488,19 @@ export function ManagedStrings({
 								}}
 							/>
 						</label>
+						<CharacterLimitField
+							value={form.limitText}
+							onChange={(limitText) => {
+								setForm({ ...form, limitText });
+								setFormDirty(true);
+							}}
+						/>
+						<CharacterCount
+							value={form.value}
+							limit={parsedCharacterLimit(form.limitText)}
+						/>
 						<div className="flex gap-2">
-							<Button type="submit" disabled={busy}>
+							<Button type="submit" disabled={busy || invalidForm}>
 								Save
 							</Button>
 							<Button
@@ -612,7 +642,10 @@ export function ManagedStrings({
 									sourceRevision: basis.sourceRevision,
 									name: key.name === undefined ? key.id : (key.name ?? ""),
 									value: key.source.value,
+									originalValue: key.source.value,
 									context: key.context ?? "",
+									limitText: key.characterLimit?.toString() ?? "",
+									expectedCharacterLimit: key.characterLimit ?? null,
 								});
 								setFormDirty(false);
 							}
