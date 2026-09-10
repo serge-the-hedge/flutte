@@ -157,7 +157,7 @@ test("managed HTTP tasks submit literal text and share independent review withou
 	).toBe(0);
 	const evidence = await f.t.run(
 		async (ctx) =>
-			await ctx.db.query("agentTranslationCandidateReviews").collect(),
+			await ctx.db.query("agentTranslationCandidateReviews").take(3),
 	);
 	expect(evidence).toHaveLength(2);
 	expect(evidence[0]?.reviewer.kind).toBe("agent");
@@ -525,7 +525,7 @@ test("managed tasks expose limits and independent reviewers cannot apply oversiz
 	expect(
 		await f.t.run(
 			async (ctx) =>
-				await ctx.db.query("agentTranslationCandidateReviews").collect(),
+				await ctx.db.query("agentTranslationCandidateReviews").take(1),
 		),
 	).toEqual([]);
 });
