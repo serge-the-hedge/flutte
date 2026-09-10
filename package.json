@@ -27,6 +27,7 @@
 		"test": "bun run test:agent-kit && turbo run test",
 		"check": "bun run lint && bun run check-types && bun run test && bun run build",
 		"check:fix": "biome check --write .",
+		"prototype:strings": "bun run --cwd apps/web dev --host 127.0.0.1 --port 3017 --strictPort --open /prototype-strings.html?variant=A",
 		"dev:web": "turbo run dev -F web",
 		"dev:server": "turbo run dev -F @blabla/backend",
 		"dev:setup": "turbo run dev:setup -F @blabla/backend",

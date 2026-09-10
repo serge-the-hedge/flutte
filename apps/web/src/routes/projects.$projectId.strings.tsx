@@ -1,3 +1,4 @@
+import { StringsHistoryPrototype } from "@/components/prototypes/strings-history-prototype";
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import {
@@ -62,7 +63,16 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 }
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
-	validateSearch: (search: Record<string, unknown>): StringsSearch => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): StringsSearch & { variant?: "A" | "B" | "C" } => ({
+		variant:
+			import.meta.env.DEV &&
+			(search.variant === "A" ||
+				search.variant === "B" ||
+				search.variant === "C")
+				? search.variant
+				: undefined,
 		collection:
 			typeof search.collection === "string" && search.collection !== "app"
 				? search.collection
@@ -122,7 +132,19 @@ function StringsRoute() {
 			) : (
 				<>
 					<DiscoveredCatalogNotice projectId={projectId} />
-					<RepositoryStrings />
+					{import.meta.env.DEV && search.variant ? (
+						<StringsHistoryPrototype
+							variant={search.variant}
+							onVariantChange={(variant) => {
+								void navigate({
+									search: (current) => ({ ...current, variant }),
+									replace: true,
+								});
+							}}
+						/>
+					) : (
+						<RepositoryStrings />
+					)}
 				</>
 			)}
 		</ProjectShell>
