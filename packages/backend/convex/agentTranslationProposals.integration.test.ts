@@ -1044,7 +1044,7 @@ describe("Agent Translation Proposals", () => {
 				.query("agentTranslationCandidateReviews")
 				.withIndex("by_revision", (q) => q.eq("revisionId", revisionId))
 				.order("desc")
-				.collect();
+				.take(3);
 		});
 		expect(evidence).toHaveLength(2);
 		expect(evidence[0]).toMatchObject({
