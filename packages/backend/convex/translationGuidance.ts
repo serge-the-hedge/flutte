@@ -343,9 +343,9 @@ export async function writeEntry(
 	return { revision, revisionId };
 }
 
-/** Carry current authored guidance with a pre-Snapshot Locale code correction.
- * Called inside the setup mutation: conflicting destination content rolls back
- * the whole correction, and each changed entry retains its old citation. */
+/** Carry project-owned guidance with a Locale code correction. Shared Dictionaries
+ * keep their independent language codes. Conflicting destination content rolls
+ * back the correction, and each changed entry retains its old citation. */
 export async function correctGuidanceLocaleCode(
 	ctx: MutationCtx,
 	input: {
@@ -353,7 +353,7 @@ export async function correctGuidanceLocaleCode(
 		fromCode: string;
 		toCode: string;
 		isSource: boolean;
-		userId: string;
+		authoredBy: GuidanceAuthor;
 	},
 ) {
 	if (input.fromCode === input.toCode) return;
@@ -439,7 +439,7 @@ export async function correctGuidanceLocaleCode(
 			...change,
 			projectId: input.projectId,
 			expectedRevision: revision,
-			authoredBy: { kind: "user", id: input.userId },
+			authoredBy: input.authoredBy,
 		});
 		revision = saved.revision;
 	}

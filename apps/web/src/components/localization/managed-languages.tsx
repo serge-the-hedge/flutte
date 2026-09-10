@@ -1,18 +1,16 @@
 import { Button } from "@blabla/ui/components/button";
 import { Input } from "@blabla/ui/components/input";
 import { useMutation } from "convex/react";
-import { X } from "lucide-react";
+import { Pencil, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { IconButton } from "@/components/icon-button";
 import { api, convexId } from "@/lib/convex-api";
 
-type Language = {
-	_id: string;
-	code: string;
-	label: string;
-	isSource: boolean;
-	archivedAt?: number;
-};
+import {
+	type EditableLanguage,
+	LanguageMetadataEditor,
+} from "./language-metadata-editor";
+
 /** Each action updates one language immediately; removed translations remain available on re-add. */
 export function ManagedLanguages({
 	projectId,
@@ -25,7 +23,7 @@ export function ManagedLanguages({
 }: {
 	projectId: string;
 	collectionId: string;
-	locales: readonly Language[];
+	locales: readonly EditableLanguage[];
 	enabledLocaleIds: readonly string[];
 	blockedLocaleIds?: readonly string[];
 	disabled?: boolean;
@@ -35,14 +33,16 @@ export function ManagedLanguages({
 	const removeLocale = useMutation(api.contentCollections.removeLocale);
 	const [code, setCode] = useState("");
 	const [label, setLabel] = useState("");
+	const [editingId, setEditingId] = useState<string | null>(null);
+	const [editDirty, setEditDirty] = useState(false);
 	const [pending, setPending] = useState(false);
 	const sending = useRef(false);
 	const [error, setError] = useState<string | null>(null);
 	const optionsId = useId();
 	const dirty = code.length > 0 || label.length > 0;
 	useEffect(() => {
-		onUnsavedWorkChange?.(dirty || pending);
-	}, [dirty, pending, onUnsavedWorkChange]);
+		onUnsavedWorkChange?.(dirty || pending || editDirty);
+	}, [dirty, pending, editDirty, onUnsavedWorkChange]);
 	useEffect(() => () => onUnsavedWorkChange?.(false), [onUnsavedWorkChange]);
 	const enabled = new Set(enabledLocaleIds);
 	const blocked = new Set(blockedLocaleIds);
@@ -78,41 +78,75 @@ export function ManagedLanguages({
 				{locales
 					.filter(
 						(locale) =>
-							!locale.isSource &&
 							locale.archivedAt === undefined &&
-							enabled.has(locale._id),
+							(locale.isSource || enabled.has(locale._id)),
 					)
 					.map((locale) => (
 						<div
 							key={locale._id}
 							className="flex flex-wrap items-center justify-between gap-2"
 						>
-							<span className="text-sm">
-								{locale.label}{" "}
-								<span className="text-muted-foreground">· {locale.code}</span>
-							</span>
-							<IconButton
-								icon={X}
-								label={`Remove ${locale.label}`}
-								disabled={disabled || pending || blocked.has(locale._id)}
-								title={
-									blocked.has(locale._id)
-										? "Finish or clear this draft before removing its language."
-										: undefined
-								}
-								aria-label={`Remove ${locale.label}`}
-								onClick={() => {
-									if (blocked.has(locale._id)) return;
-									void update(() =>
-										removeLocale({
-											projectId: convexId<"projects">(projectId),
-											collectionId:
-												convexId<"contentCollections">(collectionId),
-											localeId: convexId<"locales">(locale._id),
-										}),
-									);
-								}}
-							/>
+							{editingId === locale._id ? (
+								<LanguageMetadataEditor
+									projectId={projectId}
+									locale={locale}
+									disabled={disabled || pending}
+									codeRestriction={
+										blocked.has(locale._id)
+											? "Finish or clear this language’s drafts before changing its code."
+											: undefined
+									}
+									onClose={() => setEditingId(null)}
+									onUnsavedWorkChange={setEditDirty}
+								/>
+							) : (
+								<>
+									<span className="text-sm">
+										{locale.label}{" "}
+										<span className="text-muted-foreground">
+											· {locale.code}
+											{locale.isSource ? " · Source" : ""}
+										</span>
+									</span>
+									<div className="flex items-center gap-1">
+										<IconButton
+											icon={Pencil}
+											label={`Edit ${locale.label}`}
+											disabled={disabled || pending || editingId !== null}
+											onClick={() => setEditingId(locale._id)}
+										/>
+										{!locale.isSource ? (
+											<IconButton
+												icon={X}
+												label={`Remove ${locale.label}`}
+												disabled={
+													disabled ||
+													pending ||
+													editingId !== null ||
+													blocked.has(locale._id)
+												}
+												title={
+													blocked.has(locale._id)
+														? "Finish or clear this draft before removing its language."
+														: undefined
+												}
+												aria-label={`Remove ${locale.label}`}
+												onClick={() => {
+													if (blocked.has(locale._id)) return;
+													void update(() =>
+														removeLocale({
+															projectId: convexId<"projects">(projectId),
+															collectionId:
+																convexId<"contentCollections">(collectionId),
+															localeId: convexId<"locales">(locale._id),
+														}),
+													);
+												}}
+											/>
+										) : null}
+									</div>
+								</>
+							)}
 						</div>
 					))}
 			</div>
@@ -125,7 +159,7 @@ export function ManagedLanguages({
 				className="mt-4 flex flex-wrap items-end gap-2"
 				onSubmit={(event) => {
 					event.preventDefault();
-					if (!code.trim()) return;
+					if (!code.trim() || editingId !== null) return;
 					void update(
 						() =>
 							addLocale({
@@ -151,7 +185,7 @@ export function ManagedLanguages({
 						list={optionsId}
 						placeholder="e.g. fr or pt-BR"
 						value={code}
-						disabled={disabled || pending}
+						disabled={disabled || pending || editingId !== null}
 						onChange={(event) => setCode(event.target.value)}
 					/>
 				</label>
@@ -173,14 +207,14 @@ export function ManagedLanguages({
 						id={`${optionsId}-name`}
 						placeholder="e.g. French"
 						value={label}
-						disabled={disabled || pending}
+						disabled={disabled || pending || editingId !== null}
 						onChange={(event) => setLabel(event.target.value)}
 					/>
 				</label>
 				<Button
 					type="submit"
 					size="sm"
-					disabled={disabled || pending || !code.trim()}
+					disabled={disabled || pending || editingId !== null || !code.trim()}
 				>
 					{pending ? "Updating…" : "Add language"}
 				</Button>

@@ -29,6 +29,10 @@ finds names and source text. Large text pages automatically use smaller batches.
 
 Add or remove project languages from **Languages**; each change applies immediately.
 Removing a language retains its translations and history; adding it again restores them.
+An explicitly entered name replaces the old name on re-add; omitting it keeps the
+existing name. Edit a language’s code or name using its edit icon, including the
+source language. Its ID, translations and history stay attached to it. Codes must
+remain unique, including removed languages.
 The source/target editor and Translation Tasks use the same review policy as
 repository work. Braces and line breaks are literal plain text. Source edits are
 direct and revision-checked; translations become stale when their source content

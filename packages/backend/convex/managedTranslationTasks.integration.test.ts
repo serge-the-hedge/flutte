@@ -529,3 +529,82 @@ test("managed tasks expose limits and independent reviewers cannot apply oversiz
 		),
 	).toEqual([]);
 });
+
+test("Basic language renaming keeps task scope and refreshes agent and human task reads", async () => {
+	const t = createBackend();
+	const owner = await authenticatedBackend(t, "renaming-owner");
+	const projectId = await owner.mutation(api.projects.create, {
+		name: "Marketing",
+		sourceLocaleCode: "en",
+		type: "basic",
+	});
+	const project = await owner.query(api.projects.get, { projectId });
+	const collectionId = project.managedCollectionId;
+	if (!collectionId) throw new Error("Missing Basic collection");
+	const { localeId } = await owner.mutation(api.contentCollections.addLocale, {
+		projectId,
+		collectionId,
+		code: "de",
+		label: "German",
+	});
+	await owner.mutation(api.managedContent.createMessage, {
+		projectId,
+		collectionId,
+		key: "hero",
+		sourceValue: "Hello",
+	});
+	const { token } = await owner.mutation(api.apiTokens.create, {
+		projectId,
+		name: "Translator",
+		scopes: ["read", "propose"],
+	});
+	const args = {
+		token,
+		clientTaskKey: "German hero",
+		localeCode: "de",
+		messageIds: ["hero"],
+	};
+	const task = await t.mutation(
+		internal.agentTranslationProposals.createTaskForAgent,
+		args,
+	);
+	await owner.mutation(api.locales.updateMetadata, {
+		projectId,
+		localeId,
+		code: "de-DE",
+		label: "German (Germany)",
+		expectedCode: "de",
+		expectedLabel: "German",
+	});
+	const page = await t.query(internal.agentTranslationProposals.taskForAgent, {
+		token,
+		taskId: task.taskId,
+		cursor: 0,
+		limit: 16,
+	});
+	expect(page.task.localeCode).toBe("de-DE");
+	expect(page.targets[0]?.sourceValue).toBe("Hello");
+	const listed = await t.query(
+		internal.agentTranslationProposals.listTasksForAgent,
+		{ token },
+	);
+	expect(listed.find((item) => item.taskId === task.taskId)?.localeCode).toBe(
+		"de-DE",
+	);
+	const human = await owner.query(api.agentTranslationProposals.listForReview, {
+		projectId,
+		localeCode: "de-DE",
+		paginationOpts: { cursor: null, numItems: 10 },
+	});
+	expect(human.page[0]?.taskScope?.localeCode).toBe("de-DE");
+	const resumed = await t.mutation(
+		internal.agentTranslationProposals.createTaskForAgent,
+		{ ...args, localeCode: "de-DE" },
+	);
+	expect(resumed).toMatchObject({ taskId: task.taskId, localeCode: "de-DE" });
+	const submission = await t.query(
+		internal.agentTranslationProposals.taskSubmissionContext,
+		{ token, taskId: task.taskId, messageIds: ["hero"] },
+	);
+	expect(submission[0]?.localeId).toBe(localeId);
+});

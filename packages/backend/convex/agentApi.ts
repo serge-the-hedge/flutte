@@ -138,6 +138,12 @@ export const currentProject = internalQuery({
 			tokenScopes: token.scopes,
 			localeIntroductionTargets: introductionTargets,
 			capabilities: {
+				languages: {
+					writeScope: "languages-write",
+					canWrite: token.scopes.includes("languages-write"),
+					codeEditing: project.type === "basic",
+					addition: project.type === "basic" ? "direct" : "introductionTarget",
+				},
 				collections: project.type === undefined,
 				format: project.type === "basic" ? "plain" : "icu",
 				download: project.type === "basic",

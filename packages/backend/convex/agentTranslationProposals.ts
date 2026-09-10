@@ -1005,6 +1005,25 @@ export const continueNewLocaleTask = action({
 	},
 });
 
+/** Language IDs pin a task's scope; display codes follow Basic language edits. */
+async function withCurrentTaskLocale(
+	ctx: QueryCtx,
+	proposal: Doc<"agentTranslationProposals">,
+): Promise<Doc<"agentTranslationProposals">> {
+	if (!proposal.taskScope || proposal.target.kind !== "managedCollection")
+		return proposal;
+	const locale = await ctx.db.get(proposal.taskScope.localeId);
+	if (!locale || locale.projectId !== proposal.projectId)
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "The task's language is unavailable.",
+		});
+	return {
+		...proposal,
+		taskScope: { ...proposal.taskScope, localeCode: locale.code },
+	};
+}
+
 export const createTaskForAgent = internalMutation({
 	args: {
 		token: v.string(),
@@ -1080,7 +1099,7 @@ export const createTaskForAgent = internalMutation({
 			return {
 				taskId: existing._id,
 				title: existing.clientProposalKey,
-				localeCode: existing.taskScope.localeCode,
+				localeCode: locale.code,
 				targetCount: existing.taskScope.targetCount,
 			};
 		}
@@ -1127,7 +1146,10 @@ export const taskForAgent = internalQuery({
 	}),
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
-		const proposal = await proposalForToken(ctx, args.taskId, token._id);
+		const proposal = await withCurrentTaskLocale(
+			ctx,
+			await proposalForToken(ctx, args.taskId, token._id),
+		);
 		if (!proposal.taskScope || proposal.target.kind === "localeProposal") {
 			throw new ConvexError({
 				code: "NOT_FOUND",
@@ -1252,7 +1274,10 @@ export const taskDescriptorForAgent = internalQuery({
 	),
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "read");
-		const proposal = await proposalForToken(ctx, args.taskId, token._id);
+		const proposal = await withCurrentTaskLocale(
+			ctx,
+			await proposalForToken(ctx, args.taskId, token._id),
+		);
 		if (proposal.taskScope && proposal.target.kind !== "localeProposal") {
 			return {
 				kind:
@@ -1348,7 +1373,13 @@ export const listTasksForAgent = internalQuery({
 			tasksForOwner(ctx, token.projectId, undefined),
 			tasksForOwner(ctx, token.projectId, token._id),
 		]);
-		return [...projectTasks, ...tokenTasks]
+		return (
+			await Promise.all(
+				[...projectTasks, ...tokenTasks].map((task) =>
+					withCurrentTaskLocale(ctx, task),
+				),
+			)
+		)
 			.filter(
 				(task) => args.status === undefined || task.status === args.status,
 			)
@@ -2281,12 +2312,15 @@ export const listForReview = query({
 			)
 			.order("desc")
 			.paginate(args.paginationOpts);
+		const tasks = await Promise.all(
+			page.page.map((task) => withCurrentTaskLocale(ctx, task)),
+		);
 		return {
 			...page,
 			page:
 				args.localeCode === undefined
-					? page.page
-					: page.page.filter(
+					? tasks
+					: tasks.filter(
 							(task) =>
 								(task.taskScope?.localeCode ??
 									task.localeProposalTaskScope?.localeCode) === args.localeCode,
@@ -2302,9 +2336,10 @@ export const getForReview = query({
 		limit: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
-		const proposal = await ctx.db.get(args.proposalId);
-		if (!proposal) return null;
-		await requireViewer(ctx, proposal.projectId);
+		const stored = await ctx.db.get(args.proposalId);
+		if (!stored) return null;
+		await requireViewer(ctx, stored.projectId);
+		const proposal = await withCurrentTaskLocale(ctx, stored);
 		if (proposal.taskScope) {
 			const limit = args.limit ?? MAX_TASK_TARGETS;
 			let cursor = args.cursor ?? 0;

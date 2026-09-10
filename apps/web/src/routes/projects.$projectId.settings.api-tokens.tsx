@@ -254,6 +254,27 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											</FieldContent>
 										</Field>
 									) : null}
+									{!isReviewer ? (
+										<Field orientation="horizontal">
+											<Checkbox
+												id="languages-write-token"
+												checked={selectedScopes.includes("languages-write")}
+												disabled={isCreating}
+												onCheckedChange={(checked) =>
+													toggleScope("languages-write", checked === true)
+												}
+											/>
+											<FieldContent>
+												<FieldLabel htmlFor="languages-write-token">
+													Allow language management
+												</FieldLabel>
+												<FieldDescription>
+													Add languages and edit their names. Basic projects
+													also allow code changes.
+												</FieldDescription>
+											</FieldContent>
+										</Field>
+									) : null}
 									<Field>
 										<FieldLabel htmlFor="token-name">Name</FieldLabel>
 										<Input
