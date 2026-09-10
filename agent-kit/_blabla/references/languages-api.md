@@ -50,7 +50,8 @@ when translation is part of the assignment.
 
 ### `PATCH /languages/:id`
 
-Use an actual language ID from GET and all four fields:
+Use an active language ID from GET and all four fields. Restore removed
+languages with POST before editing them:
 
 ```json
 {
