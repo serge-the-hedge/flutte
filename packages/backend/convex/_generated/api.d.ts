@@ -69,6 +69,7 @@ import type * as releaseBundles from "../releaseBundles.js";
 import type * as releaseRecordModel from "../releaseRecordModel.js";
 import type * as releaseRecords from "../releaseRecords.js";
 import type * as restoreProposals from "../restoreProposals.js";
+import type * as snapshotOriginIndex from "../snapshotOriginIndex.js";
 import type * as snapshotCatalog from "../snapshotCatalog.js";
 import type * as snapshots from "../snapshots.js";
 import type * as sourceProposals from "../sourceProposals.js";
@@ -144,6 +145,7 @@ declare const fullApi: ApiFromModules<{
   releaseRecords: typeof releaseRecords;
   restoreProposals: typeof restoreProposals;
   snapshotCatalog: typeof snapshotCatalog;
+  snapshotOriginIndex: typeof snapshotOriginIndex;
   snapshots: typeof snapshots;
   sourceProposals: typeof sourceProposals;
   translationResidue: typeof translationResidue;

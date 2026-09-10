@@ -16,7 +16,7 @@ when a product decision changes.
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
-| Snapshot filtering and translation history | Named, date-ordered introduction picker; inline applied-value history; bounded, explicit recovery of older introduction links |
+| Snapshot filtering and translation history | Named, date-ordered introduction picker; inline applied-value history; automatic, bounded indexing of older introduction links |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
 | Project types and shared Dictionaries | Basic/Repository projects with stable navigation, shared terminology, plain-text authoring and downloads; existing collection promotion preserves history. See [Projects and Dictionaries](../projects-and-dictionaries.md) |
 
@@ -508,7 +508,7 @@ name can be set or cleared in Sync; it changes neither identity nor chronology.
 Dates describe ingestion, not Git authorship. Initial-catalog membership is
 labelled separately; unknown older provenance is not inferred from timestamps.
 See the [lifecycle contract](../catalog-message-lifecycle.md#introduction-filter-and-value-history)
-for retained history and explicit introduction recovery.
+for retained history and automatic introduction indexing.
 
 First-class filters in the initial Navigation contract are **the four phrases a
 value already says** — `needs a value`, `English changed`, `English, not chosen`,

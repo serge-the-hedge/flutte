@@ -49,6 +49,7 @@ import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useCatalogScopeCounts } from "@/lib/use-catalog-scope-counts";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
+import { useSnapshotOriginIndex } from "@/lib/use-snapshot-origin-index";
 
 const EMPTY_STRINGS_WINDOW_CARDS: StringsWindowCards = new Map();
 const EMPTY_STRINGS_WINDOW_MESSAGE_IDS: string[] = [];
@@ -159,6 +160,17 @@ function RepositoryStrings() {
 	const overview = useQuery(api.catalogBrowse.overview, {
 		projectId: convexProjectId,
 	});
+	const snapshotIndex = useSnapshotOriginIndex(
+		overview?.kind === "ready" &&
+			Array.isArray(search.snapshots) &&
+			search.snapshots.length
+			? {
+					projectId,
+					projectionId: overview.projectionId,
+					snapshotIds: search.snapshots,
+				}
+			: "skip",
+	);
 	const pageContext = JSON.stringify([
 		projectId,
 		overview?.kind === "ready" ? overview.projectionId : null,
@@ -206,6 +218,7 @@ function RepositoryStrings() {
 	);
 	const page = useCatalogBrowsePage(
 		overview?.kind === "ready" &&
+			snapshotIndex.ready &&
 			locales !== undefined &&
 			(!search.release || releaseHandoff !== undefined)
 			? {
@@ -229,7 +242,7 @@ function RepositoryStrings() {
 		overview?.kind === "ready" ? overview.revision : undefined,
 	);
 	const scopeCounts = useCatalogScopeCounts(
-		overview?.kind === "ready" && locales !== undefined
+		overview?.kind === "ready" && locales !== undefined && snapshotIndex.ready
 			? {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
@@ -549,6 +562,26 @@ function RepositoryStrings() {
 					}}
 				/>
 			</div>
+			{!snapshotIndex.ready ? (
+				<div
+					className="mb-3 flex items-center gap-3 text-muted-foreground text-sm"
+					role={snapshotIndex.error ? "alert" : "status"}
+				>
+					<span>
+						{snapshotIndex.error ??
+							`Preparing snapshot filter${snapshotIndex.expected ? ` · ${snapshotIndex.processed} / ${snapshotIndex.expected}` : "…"}`}
+					</span>
+					{snapshotIndex.error ? (
+						<Button
+							size="xs"
+							variant="outline"
+							onClick={() => void snapshotIndex.retry()}
+						>
+							Retry
+						</Button>
+					) : null}
+				</div>
+			) : null}
 			{loadingLanguages && navigation?.kind === "ready" ? (
 				<p role="status" className="mb-2 text-muted-foreground text-sm">
 					Loading languages…

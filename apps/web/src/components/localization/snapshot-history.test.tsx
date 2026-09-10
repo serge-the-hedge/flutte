@@ -4,31 +4,19 @@ import { getFunctionName } from "convex/server";
 import { act } from "react";
 import { convexId } from "@/lib/convex-api";
 import { createDomTest } from "@/test/dom";
-import { SnapshotOriginRecovery, SnapshotRow } from "./snapshot-history";
+import { SnapshotRow } from "./snapshot-history";
 
 describe("snapshot metadata", () => {
 	const dom = createDomTest();
 	const client = new ConvexReactClient("https://example.convex.cloud");
 	const writes: { name: string; args: unknown }[] = [];
-	const watch = spyOn(client, "watchQuery").mockImplementation(
-		(_query, args) => ({
-			onUpdate: () => () => {},
-			localQueryResult: () =>
-				({
-					page: args.paginationOpts.cursor ? [{ messageId: "new_title" }] : [],
-					isDone: !!args.paginationOpts.cursor,
-					continueCursor: "next-preview",
-					projectionId: "projection",
-					initialCatalog: false,
-				}) as never,
-			localQueryLogs: () => [],
-			journal: () => undefined,
-		}),
-	);
+	const watch = spyOn(client, "watchQuery").mockImplementation(() => {
+		throw new Error("Snapshot labels should not query recovery data");
+	});
 	const mutation = spyOn(client, "mutation").mockImplementation(
 		async (query, args) => {
 			writes.push({ name: getFunctionName(query), args });
-			return { applied: 1, alreadyRecorded: 0 } as never;
+			return null as never;
 		},
 	);
 	beforeEach(() => {
@@ -122,43 +110,5 @@ describe("snapshot metadata", () => {
 		);
 		expect(dom.container.querySelector("input")).toBeNull();
 		expect(writes).toHaveLength(1);
-	});
-	test("recovery requires an explicit preview and applies only the displayed page", async () => {
-		await dom.render(
-			<ConvexProvider client={client}>
-				<SnapshotOriginRecovery projectId="project" snapshots={[snapshot]} />
-			</ConvexProvider>,
-		);
-		const details = dom.container.querySelector("details");
-		if (!details) throw Error("Recovery missing");
-		await act(async () => {
-			details.open = true;
-			details.dispatchEvent(new Event("toggle"));
-		});
-		expect(watch).not.toHaveBeenCalled();
-		expect(writes).toHaveLength(0);
-		await click("Preview strings");
-		expect(dom.container.textContent).toContain(
-			"No provable introductions on this page.",
-		);
-		await click("Next page");
-		expect(dom.container.textContent).toContain("new_title");
-		expect(writes).toHaveLength(0);
-		await click("Recover 1 link");
-		expect(writes).toEqual([
-			{
-				name: "snapshotCatalog:applyOrigins",
-				args: {
-					projectId: "project",
-					snapshotId: "snapshot",
-					projectionId: "projection",
-					messageIds: ["new_title"],
-				},
-			},
-		]);
-		expect(dom.container.textContent).toContain(
-			"1 recovered · 0 already recorded",
-		);
-		expect(button("Recover 1 link").disabled).toBe(true);
 	});
 });

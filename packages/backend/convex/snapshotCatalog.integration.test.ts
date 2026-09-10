@@ -67,11 +67,25 @@ async function setup() {
 	async function browse(
 		snapshotIds?: Id<"sourceSnapshots">[],
 		introducedOriginUnknown?: boolean,
+		prepare = true,
 	) {
-		const overview = await owner.query(api.catalogBrowse.overview, {
+		let overview = await owner.query(api.catalogBrowse.overview, {
 			projectId,
 		});
 		if (overview.kind !== "ready") throw new Error("Expected ready catalog");
+		if (prepare && snapshotIds?.length && !introducedOriginUnknown) {
+			for (const snapshotId of snapshotIds) {
+				await owner.mutation(api.snapshotOriginIndex.prepare, {
+					projectId,
+					projectionId: overview.projectionId,
+					snapshotId,
+				});
+			}
+			await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+			overview = await owner.query(api.catalogBrowse.overview, { projectId });
+			if (overview.kind !== "ready")
+				throw new Error("Expected prepared catalog");
+		}
 		const result = await owner.query(api.catalogBrowse.page, {
 			projectId,
 			projectionId: overview.projectionId,
@@ -206,7 +220,7 @@ test("optional names are project-authorized metadata with conflict protection", 
 	).toBe(null);
 });
 
-test("historical origins require explicit bounded recovery and leave review facts unchanged", async () => {
+test("prepared historical origins preserve compatibility recovery and review facts", async () => {
 	const { t, owner, projectId, fr, ingest, browse } = await setup();
 	const first = await ingest("first", ["initial"]);
 	const second = await ingest("second", ["initial", "new"], "first");
@@ -227,7 +241,9 @@ test("historical origins require explicit bounded recovery and leave review fact
 		(await owner.query(api.snapshotCatalog.list, { projectId, paginationOpts }))
 			.page,
 	).toHaveLength(2);
-	expect((await browse([first, second])).keys).toEqual([]);
+	await expect(browse([first, second], undefined, false)).rejects.toThrow(
+		"filter",
+	);
 	expect((await browse(undefined, true)).keys).toEqual(["initial", "new"]);
 	await expect(browse([first], true)).rejects.toThrow(
 		"Choose snapshots or strings",
@@ -246,7 +262,7 @@ test("historical origins require explicit bounded recovery and leave review fact
 		paginationOpts,
 	});
 	expect(introduced.page).toEqual([{ messageId: "new" }]);
-	expect((await browse([second])).keys).toEqual([]);
+	await expect(browse([second], undefined, false)).rejects.toThrow("filter");
 	await expect(
 		owner.mutation(api.snapshotCatalog.applyOrigins, {
 			projectId,
@@ -280,7 +296,7 @@ test("historical origins require explicit bounded recovery and leave review fact
 		introducedOriginUnknown: true,
 	});
 	expect(unknownCounts.counts.unconfirmedImport).toBe(1);
-	expect(after.overview.revision).toBe(before.overview.revision + 1);
+	expect(after.overview.revision).toBeGreaterThan(before.overview.revision);
 	expect(after.overview.ordinaryImports).toEqual(
 		before.overview.ordinaryImports,
 	);
@@ -298,7 +314,7 @@ test("historical origins require explicit bounded recovery and leave review fact
 	).toEqual([]);
 });
 
-test("snapshot filters read compact publication evidence even with large historical identities", async () => {
+test("snapshot filters read compact prepared indexes even with large historical identities", async () => {
 	const { t, owner, projectId, ingest, browse } = await setup();
 	const first = await ingest("first", ["initial"]);
 	const { overview } = await browse();
@@ -319,8 +335,8 @@ test("snapshot filters read compact publication evidence even with large histori
 		return { snapshotFields, projectionFields };
 	});
 	const selected = [first];
-	// Twelve full identity pairs exceed the transaction read budget. Each compact
-	// publication record contains only project/projection/snapshot IDs and status.
+	// Twelve full identity pairs exceed one transaction read budget. Preparation
+	// isolates each snapshot; browsing reads only their compact ready indexes.
 	for (let index = 0; index < 12; index++) {
 		selected.push(
 			await t.run(async (ctx) => {
@@ -332,6 +348,7 @@ test("snapshot filters read compact publication evidence even with large histori
 				});
 				const projectionId = await ctx.db.insert("catalogProjections", {
 					...source.projectionFields,
+					expectedKeyCount: 0,
 					repository,
 					snapshotId,
 					commit: `large-${index}`,
@@ -370,7 +387,21 @@ test("snapshot filters read compact publication evidence even with large histori
 			.collect())
 			await ctx.db.delete(row._id);
 	});
-	await expect(browse(selected)).rejects.toThrow(
-		"Choose fewer older snapshots.",
-	);
+	expect((await browse(selected)).keys).toEqual(["initial"]);
+});
+
+test("existing catalogs filter by their recorded snapshots without a manual recovery step", async () => {
+	const { t, ingest, browse } = await setup();
+	const initial = await ingest("initial", ["existing"]);
+	const later = await ingest("later", ["existing", "added"], "initial");
+	await t.run(async (ctx) => {
+		for (const table of [
+			"catalogProjectionMessages",
+			"catalogWorkspaceNavigationRows",
+		] as const)
+			for (const row of await ctx.db.query(table).collect())
+				await ctx.db.patch(row._id, { firstSeenProjectionId: undefined });
+	});
+	expect((await browse([initial])).keys).toEqual(["existing"]);
+	expect((await browse([later])).keys).toEqual(["added"]);
 });

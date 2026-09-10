@@ -4,7 +4,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type QueryCtx, query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
 import { navigationStateFor } from "./catalogWorkspaceNavigation";
-import { encodedSize } from "./catalogWorkspaceView";
 import { requireEditor, requireViewer } from "./permissions";
 
 const snapshotSummary = v.object({
@@ -47,7 +46,7 @@ function summary(
 	};
 }
 
-async function acceptedSnapshot(
+export async function acceptedSnapshot(
 	ctx: QueryCtx,
 	projectId: Id<"projects">,
 	snapshotId: Id<"sourceSnapshots">,
@@ -177,12 +176,13 @@ export const rename = mutation({
 /** An old source can be assigned an origin only when an immutable accepted
  * transition proves it was absent from both the previous catalog and archive.
  * Missing archive-era evidence stays unknown instead of guessing from dates. */
-async function provedOrigin(
+export async function provedOrigin(
 	ctx: QueryCtx,
 	projection: Doc<"catalogProjections">,
 	snapshot: Doc<"sourceSnapshots">,
 	source: Doc<"catalogProjectionMessages">,
 	previous: Doc<"catalogProjections"> | null,
+	accountRead?: (value: unknown) => void,
 ) {
 	if (!source.isSource) return false;
 	if (source.firstSeenProjectionId)
@@ -205,6 +205,7 @@ async function provedOrigin(
 				.eq("isSource", true),
 		)
 		.unique();
+	accountRead?.(active);
 	if (active) return false;
 	const retained = await ctx.db
 		.query("catalogProjectionArchiveStateValues")
@@ -215,6 +216,7 @@ async function provedOrigin(
 				.eq("isSource", true),
 		)
 		.unique();
+	accountRead?.(retained);
 	return !retained;
 }
 
@@ -349,90 +351,3 @@ export const applyOrigins = mutation({
 		return { applied, alreadyRecorded };
 	},
 });
-
-/** Bounded per-page resolver shared by browsing and focus counts. */
-export async function snapshotOriginFilter(
-	ctx: QueryCtx,
-	projectId: Id<"projects">,
-	snapshotIds?: readonly Id<"sourceSnapshots">[],
-	introducedOriginUnknown = false,
-) {
-	if (introducedOriginUnknown && snapshotIds?.length)
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "Choose snapshots or strings with unknown introductions.",
-		});
-	if (!snapshotIds?.length && !introducedOriginUnknown)
-		return async (_row: Doc<"catalogWorkspaceNavigationRows">) => true;
-	if (
-		(snapshotIds?.length ?? 0) > 32 ||
-		new Set(snapshotIds).size !== (snapshotIds?.length ?? 0)
-	)
-		throw new ConvexError({
-			code: "VALIDATION",
-			message: "Choose up to 32 distinct snapshots.",
-		});
-	const selected = new Set(snapshotIds);
-	const origins = new Map<Id<"catalogProjections">, boolean>();
-	let legacyReadBytes = 0;
-	function legacyProjection(projection: Doc<"catalogProjections"> | null) {
-		legacyReadBytes += encodedSize(projection);
-		if (legacyReadBytes > 4 * 1024 * 1024)
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: "Choose fewer older snapshots.",
-			});
-		return projection;
-	}
-	for (const id of selected) {
-		const publication = await ctx.db
-			.query("catalogProjectionPublicationStates")
-			.withIndex("by_project_and_snapshot", (q) =>
-				q.eq("projectId", projectId).eq("snapshotId", id),
-			)
-			.first();
-		if (publication?.status === "published") {
-			origins.set(publication.projectionId, true);
-			continue;
-		}
-		const legacy = legacyProjection(
-			await acceptedProjectionFor(ctx, projectId, id),
-		);
-		if (!legacy)
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Choose an accepted snapshot from this project.",
-			});
-		origins.set(legacy._id, true);
-	}
-	return async (row: Doc<"catalogWorkspaceNavigationRows">) => {
-		let origin = row.firstSeenProjectionId;
-		if (!origin)
-			origin = (
-				await ctx.db
-					.query("catalogMessageOrigins")
-					.withIndex("by_project_and_messageId", (q) =>
-						q.eq("projectId", projectId).eq("messageId", row.messageId),
-					)
-					.unique()
-			)?.firstSeenProjectionId;
-		if (introducedOriginUnknown) return origin === undefined;
-		if (!origin) return false;
-		const cached = origins.get(origin);
-		if (cached !== undefined) return cached;
-		const publication = await ctx.db
-			.query("catalogProjectionPublicationStates")
-			.withIndex("by_projection", (q) => q.eq("projectionId", origin))
-			.unique();
-		const projection =
-			publication ?? legacyProjection(await ctx.db.get(origin));
-		const matches = Boolean(
-			projection?.projectId === projectId &&
-				projection.status === "published" &&
-				projection.snapshotId &&
-				selected.has(projection.snapshotId),
-		);
-		origins.set(origin, matches);
-		return matches;
-	};
-}

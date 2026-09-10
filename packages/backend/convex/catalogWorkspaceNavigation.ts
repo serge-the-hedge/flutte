@@ -854,6 +854,22 @@ async function upsertNavigationRow(
 		envelopeProjectionId(input.envelope),
 		input.digest.messageId,
 	);
+	if (!input.digest.firstSeenProjectionId) {
+		input.digest.firstSeenProjectionId =
+			existing?.firstSeenProjectionId ??
+			(
+				await ctx.db
+					.query("catalogMessageOrigins")
+					.withIndex("by_project_and_messageId", (q) =>
+						q
+							.eq("projectId", input.digest.projectId)
+							.eq("messageId", input.digest.messageId),
+					)
+					.unique()
+			)?.firstSeenProjectionId;
+		if (!input.digest.firstSeenProjectionId)
+			delete input.digest.firstSeenProjectionId;
+	}
 	const nextByteLength = navigationDigestByteLength(input.digest);
 	if (nextByteLength > 512 * 1024)
 		throw new ConvexError({
@@ -938,6 +954,48 @@ async function upsertNavigationRow(
 		ordinaryImportCounts: nextOrdinaryImportCounts,
 	});
 	return true;
+}
+
+/** Stamp derived provenance without changing values, review state, or envelope accounting. */
+export async function stampNavigationOrigin(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		projectionId: Id<"catalogProjections">;
+		messageId: string;
+		originProjectionId: Id<"catalogProjections">;
+		accountRead?: (value: unknown) => void;
+	},
+) {
+	const state = await navigationStateFor(ctx, input.projectId);
+	if (
+		!state ||
+		state.projectionId !== input.projectionId ||
+		state.status !== "ready"
+	)
+		return;
+	const row = await navigationRowFor(
+		ctx,
+		input.projectId,
+		input.projectionId,
+		input.messageId,
+	);
+	input.accountRead?.(row);
+	if (!row || row.firstSeenProjectionId === input.originProjectionId) return;
+	if (row.firstSeenProjectionId)
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Conflicting snapshot introduction evidence.",
+		});
+	// The upsert point-reads the same row to maintain its envelope.
+	input.accountRead?.(row);
+	await upsertNavigationRow(ctx, {
+		envelope: { kind: "active", state },
+		digest: {
+			...navigationRowToDigest(row),
+			firstSeenProjectionId: input.originProjectionId,
+		},
+	});
 }
 
 async function removeNavigationRow(
