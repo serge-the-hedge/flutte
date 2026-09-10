@@ -1293,10 +1293,12 @@ export default defineSchema({
 			"projectionId",
 			"catalogIndex",
 		])
-		.index(
-			"by_project_and_projection_and_firstSeenProjectionId_and_catalogIndex",
-			["projectId", "projectionId", "firstSeenProjectionId", "catalogIndex"],
-		),
+		.index("by_project_projection_origin_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"firstSeenProjectionId",
+			"catalogIndex",
+		]),
 
 	// One server-owned ordinary-import confirmation run. The cursor walks the
 	// Navigation Index in Catalog Order; confirmed/skipped/progress counts are
