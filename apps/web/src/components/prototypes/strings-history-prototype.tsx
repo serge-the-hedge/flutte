@@ -533,7 +533,9 @@ export function StringsHistoryPrototype({
 							aria-expanded={picker}
 						>
 							Introduced in ·{" "}
-							{selected.length ? `${selected.length} snapshots` : "All"}
+							{selected.length
+								? `${selected.length} snapshot${selected.length === 1 ? "" : "s"}`
+								: "All"}
 							<ChevronDown size={13} />
 						</button>
 						{picker ? (
