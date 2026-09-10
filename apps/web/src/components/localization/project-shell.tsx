@@ -81,7 +81,7 @@ const navGroups: NavGroup[] = [
 	},
 ];
 
-function ProjectNavigation({
+export function ProjectNavigation({
 	type,
 	projectId,
 	pathname,
@@ -136,7 +136,7 @@ function ProjectNavigation({
 	);
 }
 
-function ProjectIdentity({
+export function ProjectIdentity({
 	title,
 	type,
 }: {

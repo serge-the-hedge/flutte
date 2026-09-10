@@ -66,6 +66,13 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 
 export const Route = createFileRoute("/projects/$projectId/strings")({
 	validateSearch: (search: Record<string, unknown>): StringsSearch => ({
+		variant:
+			import.meta.env.DEV &&
+			(search.variant === "A" ||
+				search.variant === "B" ||
+				search.variant === "C")
+				? search.variant
+				: undefined,
 		collection:
 			typeof search.collection === "string" && search.collection !== "app"
 				? search.collection

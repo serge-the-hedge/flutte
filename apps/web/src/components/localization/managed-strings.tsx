@@ -32,6 +32,7 @@ import {
 import { ManagedLanguages } from "./managed-languages";
 import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
+import { StringsPrototype } from "./strings.prototype";
 import { StringsCatalogView } from "./strings-catalog-view";
 import { StringsLanguageSelector } from "./strings-language-selector";
 
@@ -379,6 +380,26 @@ export function ManagedStrings({
 			setBusy(false);
 		}
 	};
+	if (import.meta.env.DEV && search.variant && page && !context.loading) {
+		return (
+			<StringsPrototype
+				variant={search.variant}
+				onVariant={(variant) => onSearch({ ...search, variant })}
+				initialRows={[...cards.values()].map((card) => ({
+					id: card.id,
+					name: card.name ?? null,
+					tags: [],
+					limit: card.characterLimit ?? undefined,
+					values: [card.source, ...card.targets].map((value) => ({
+						code: value.localeCode,
+						text: value.value,
+						reviewed: value.isSource || value.valueState === "settled",
+					})),
+				}))}
+			/>
+		);
+	}
+
 	return (
 		<>
 			<PageHeader

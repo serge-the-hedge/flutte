@@ -54,3 +54,6 @@ temp
 .scratch/
 reports/brickit-translation-overlay/
 .vercel
+
+# Private read-only data for the throwaway Strings prototype.
+strings.prototype.local.json

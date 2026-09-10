@@ -31,7 +31,8 @@
 		"dev:server": "turbo run dev -F @blabla/backend",
 		"dev:setup": "turbo run dev:setup -F @blabla/backend",
 		"blabla": "dart run cli/bin/blabla.dart",
-		"test:agent-kit": "tsc -p tsconfig.agent-kit.json && node --test tests/agent-kit-*.test.mjs"
+		"test:agent-kit": "tsc -p tsconfig.agent-kit.json && node --test tests/agent-kit-*.test.mjs",
+		"prototype:strings": "bun scripts/prototype-strings.ts"
 	},
 	"dependencies": {
 		"@blabla/env": "workspace:*",

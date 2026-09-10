@@ -1,6 +1,8 @@
 import type { CatalogValueScope } from "./strings-catalog-navigation";
 
 export type StringsSearch = {
+	/** Throwaway UI comparison, dev only. */
+	variant?: "A" | "B" | "C";
 	/** Old collection links resolve to their promoted project; new URLs omit this. */
 	collection?: string;
 	cursor?: string;

@@ -50,7 +50,11 @@ if (!rootElement) {
 	throw new Error("Root element not found");
 }
 
-if (!rootElement.innerHTML) {
+if (import.meta.env.DEV && import.meta.env.VITE_STRINGS_PROTOTYPE === "1") {
+	void import("./components/localization/strings.prototype-entry").then(
+		({ startStringsPrototype }) => startStringsPrototype(rootElement),
+	);
+} else if (!rootElement.innerHTML) {
 	const root = ReactDOM.createRoot(rootElement);
 	root.render(<RouterProvider router={router} />);
 }
