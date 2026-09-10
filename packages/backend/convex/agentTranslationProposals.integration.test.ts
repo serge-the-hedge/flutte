@@ -424,6 +424,97 @@ describe("Agent Translation Proposals", () => {
 		});
 	});
 
+	test("rejects over-limit agent submissions with actionable counts and rechecks acceptance", async () => {
+		const user = await authenticatedBackend(t, "agent-character-limits");
+		const { projectId, token } = await setupProject(user);
+		const basis = await targetBasis(user, projectId);
+		await user.mutation(api.messageConstraints.setCharacterLimit, {
+			projectId,
+			messageId: "greeting",
+			characterLimit: 8,
+			expectedCharacterLimit: null,
+		});
+		const created = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/translation-proposals",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					clientProposalKey: "limited",
+					target: { kind: "catalogWorkspace" },
+				}),
+			},
+		);
+		expect(created.status).toBe(200);
+		const { proposalId } = (await created.json()) as {
+			proposalId: Id<"agentTranslationProposals">;
+		};
+		const submit = (value: string, clientRevisionKey: string) =>
+			agentRequest(
+				t,
+				token,
+				`/api/agent/v1/translation-proposals/${proposalId}/candidate-revisions`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						items: [
+							{
+								messageId: "greeting",
+								localeId: basis.localeId,
+								value,
+								clientRevisionKey,
+								expectedCandidateRevision: 0,
+								basis,
+							},
+						],
+					}),
+				},
+			);
+		const rejected = await submit("😀😀 {name}", "too-long");
+		expect(rejected.status).toBe(400);
+		expect(await rejected.json()).toMatchObject({
+			code: "CHARACTER_LIMIT_EXCEEDED",
+			messageId: "greeting",
+			characterLimit: 8,
+			characterCount: 9,
+			overBy: 1,
+			error: expect.stringMatching(/remove|shorten/i),
+		});
+		const accepted = await submit("😀 {name}", "fits");
+		expect(accepted.status).toBe(200);
+		const { revisions } = (await accepted.json()) as {
+			revisions: Array<{
+				revisionId: Id<"agentTranslationCandidateRevisions">;
+			}>;
+		};
+		const revisionId = revisions[0]?.revisionId;
+		if (!revisionId) throw new Error("Expected a valid candidate.");
+		expect(
+			await user.query(api.agentTranslationProposals.contextForReview, {
+				revisionId,
+			}),
+		).toMatchObject({ characterLimit: 8 });
+		await user.mutation(api.messageConstraints.setCharacterLimit, {
+			projectId,
+			messageId: "greeting",
+			characterLimit: 7,
+			expectedCharacterLimit: 8,
+		});
+		await expect(
+			user.mutation(api.agentTranslationProposals.reviewCandidate, {
+				candidateRevisionId: revisionId,
+				decision: { kind: "accept" },
+			}),
+		).rejects.toThrow(/character/i);
+		// A retry returns the already-saved immutable candidate; it does not apply it.
+		expect((await submit("😀 {name}", "fits")).status).toBe(200);
+		await user.mutation(api.agentTranslationProposals.reviewCandidate, {
+			candidateRevisionId: revisionId,
+			decision: { kind: "acceptWithEdits", value: "😀{name}" },
+		});
+	});
+
 	test("creates, resumes, and human-accepts a Catalog Workspace candidate", async () => {
 		const user = await authenticatedBackend(t, "agent-translation-reviewer");
 		const { projectId, token } = await setupProject(user);

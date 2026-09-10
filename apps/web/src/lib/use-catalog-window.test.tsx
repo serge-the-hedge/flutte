@@ -142,6 +142,7 @@ describe("progressive language windows", () => {
 	function cards(args: Args, sourceRevision = 0): Result {
 		return [...args.messageIds].reverse().map((id) => ({
 			id,
+			characterLimit: undefined,
 			icuType: "plain",
 			messageSignature: {
 				declaredPlaceholderNames: [],

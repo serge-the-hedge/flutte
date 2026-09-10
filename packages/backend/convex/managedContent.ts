@@ -10,6 +10,10 @@ import {
 	type AgentReviewAuthorization,
 	isHumanOrAuthorizedReview,
 } from "./agentReviewModel";
+import {
+	assertCharacterLimit,
+	validateCharacterLimit,
+} from "./characterLimits";
 import { requireManagedCollection } from "./contentCollections";
 import {
 	MAX_MANAGED_CONTEXT_LOCALES,
@@ -22,6 +26,11 @@ import {
 	managedIntentValidator,
 } from "./contentModel";
 import { type Actor, sha256Hex } from "./lib";
+import {
+	assertMessageCharacterLimit,
+	readCharacterLimit,
+	writeCharacterLimit,
+} from "./messageConstraints";
 import { requireEditor, requireViewer } from "./permissions";
 
 type ReadCtx = QueryCtx | MutationCtx;
@@ -135,6 +144,7 @@ export async function readManagedTarget(ctx: ReadCtx, input: TargetAddress) {
 	return {
 		collection,
 		source,
+		characterLimit: await readCharacterLimit(ctx, input),
 		target,
 		locale,
 		value,
@@ -204,6 +214,7 @@ async function writeManagedTarget(
 				? current.target?.intentionalBlankReason
 				: undefined;
 	assertText(value);
+	await assertMessageCharacterLimit(ctx, input, value);
 	if (
 		input.intent.kind === "intentionalBlank" &&
 		(!intentionalBlankReason ||
@@ -265,8 +276,16 @@ function normalizedName(name: string | null): string | null {
 		fail("VALIDATION", "String names support at most 256 characters.");
 	return trimmed || null;
 }
-function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
+async function sourceEntry(
+	ctx: ReadCtx,
+	source: Awaited<ReturnType<typeof sourceFor>>,
+) {
 	return {
+		characterLimit: await readCharacterLimit(ctx, {
+			projectId: source.projectId,
+			collectionId: source.collectionId,
+			messageId: source.key,
+		}),
 		messageId: source.key,
 		key: source.key,
 		name: managedMessageName(source),
@@ -278,6 +297,7 @@ function sourceEntry(source: Awaited<ReturnType<typeof sourceFor>>) {
 }
 function contextEntry(current: Awaited<ReturnType<typeof readManagedTarget>>) {
 	return {
+		characterLimit: current.characterLimit,
 		messageId: current.source.key,
 		name: managedMessageName(current.source),
 		localeId: current.locale._id,
@@ -370,7 +390,9 @@ export async function readManagedPage(
 			)
 			.unique();
 		const items =
-			source && source.archivedAt === undefined ? [sourceEntry(source)] : [];
+			source && source.archivedAt === undefined
+				? [await sourceEntry(ctx, source)]
+				: [];
 		const result = { items, nextCursor: null };
 		if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 			fail(
@@ -387,16 +409,18 @@ export async function readManagedPage(
 		)
 		.order("asc")
 		.paginate({ cursor, numItems: limit, maximumRowsRead: 16 });
-	const items = page.page
-		.filter(
-			(row) =>
-				row.archivedAt === undefined &&
-				(q.length === 0 ||
-					row.key.toLowerCase().includes(q) ||
-					(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
-					row.sourceValue.toLowerCase().includes(q)),
-		)
-		.map(sourceEntry);
+	const items = await Promise.all(
+		page.page
+			.filter(
+				(row) =>
+					row.archivedAt === undefined &&
+					(q.length === 0 ||
+						row.key.toLowerCase().includes(q) ||
+						(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
+						row.sourceValue.toLowerCase().includes(q)),
+			)
+			.map((source) => sourceEntry(ctx, source)),
+	);
 	const result = {
 		items,
 		nextCursor: page.isDone
@@ -587,6 +611,7 @@ export const commit = mutation({
 });
 export const createMessage = mutation({
 	args: {
+		characterLimit: v.optional(v.number()),
 		...addressFields,
 		key: v.optional(v.string()),
 		name: v.optional(v.union(v.string(), v.null())),
@@ -603,7 +628,11 @@ export const createMessage = mutation({
 			args.projectId,
 			args.collectionId,
 		);
-		const { translations = [], ...sourceInput } = args;
+		const { translations = [], characterLimit, ...sourceInput } = args;
+		validateCharacterLimit(characterLimit);
+		assertCharacterLimit(args.sourceValue, characterLimit);
+		for (const translation of translations)
+			assertCharacterLimit(translation.value, characterLimit);
 		if (
 			translations.length > 128 ||
 			bytes(translations) > MAX_MANAGED_RESPONSE_BYTES
@@ -676,6 +705,17 @@ export const createMessage = mutation({
 			updatedAt: timestamp,
 		});
 		const key = args.key ?? String(id);
+		if (characterLimit !== undefined)
+			await writeCharacterLimit(
+				ctx,
+				{
+					projectId: args.projectId,
+					collectionId: args.collectionId,
+					messageId: key,
+				},
+				characterLimit,
+				null,
+			);
 		// The generated key becomes visible with its row in the same transaction.
 		if (args.key === undefined) await ctx.db.patch(id, { key });
 		await ctx.db.insert("managedSourceRevisions", {
@@ -722,6 +762,8 @@ export const createMessage = mutation({
 });
 export const saveSource = mutation({
 	args: {
+		characterLimit: v.optional(v.union(v.number(), v.null())),
+		expectedCharacterLimit: v.optional(v.union(v.number(), v.null())),
 		...addressFields,
 		messageId: v.string(),
 		sourceValue: v.string(),
@@ -735,12 +777,35 @@ export const saveSource = mutation({
 		const source = await sourceFor(ctx, args);
 		if (source.sourceRevision !== args.expectedSourceRevision)
 			fail("CONFLICT", "Source changed. Reload before saving.");
+		if (args.characterLimit !== undefined) {
+			if (args.expectedCharacterLimit === undefined)
+				fail("VALIDATION", "Expected character limit is required.");
+			await writeCharacterLimit(
+				ctx,
+				{
+					projectId: args.projectId,
+					collectionId: args.collectionId,
+					messageId: args.messageId,
+				},
+				args.characterLimit,
+				args.expectedCharacterLimit,
+			);
+		}
 		assertText(args.sourceValue, args.context);
 		const context = args.context ?? source.context;
 		const name =
 			args.name === undefined
 				? managedMessageName(source)
 				: normalizedName(args.name);
+		if (
+			args.characterLimit !== undefined &&
+			args.sourceValue === source.sourceValue &&
+			name === managedMessageName(source) &&
+			context === source.context
+		)
+			return null;
+		if (args.sourceValue !== source.sourceValue)
+			await assertMessageCharacterLimit(ctx, args, args.sourceValue);
 		const sourceRevision = source.sourceRevision + 1;
 		const sourceFingerprint = await sha256Hex(args.sourceValue);
 		const timestamp = Date.now();

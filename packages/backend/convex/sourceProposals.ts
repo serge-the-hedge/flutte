@@ -1,5 +1,4 @@
 import { ConvexError, v } from "convex/values";
-
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalQuery,
@@ -13,6 +12,7 @@ import {
 } from "./catalogProjection";
 import type { Actor } from "./lib";
 import { now } from "./lib";
+import { assertMessageCharacterLimit } from "./messageConstraints";
 import {
 	authorizeProjectIngestion,
 	repositoryAdapterActorValidator,
@@ -388,6 +388,11 @@ export async function saveSourceProposal(
 		actor: Actor;
 	},
 ): Promise<{ workspaceRevision: number }> {
+	await assertMessageCharacterLimit(
+		ctx,
+		{ projectId: input.project._id, messageId: input.messageId },
+		input.sourceValue,
+	);
 	const nextTimestamp = now();
 	const [state, previous] = await Promise.all([
 		sourceProposalStateFor(ctx, input.project._id),

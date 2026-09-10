@@ -299,8 +299,22 @@ async function batch(ctx: MutationCtx, move: Move): Promise<void> {
 					q.eq("collectionId", move.collectionId),
 				)
 				.paginate(opts);
-			for (const row of page.page)
+			for (const row of page.page) {
+				const constraint = await ctx.db
+					.query("messageConstraints")
+					.withIndex("by_projectId_and_collectionId_and_messageId", (q) =>
+						q
+							.eq("projectId", move.sourceProjectId)
+							.eq("collectionId", move.collectionId)
+							.eq("messageId", row.key),
+					)
+					.unique();
+				if (constraint)
+					await ctx.db.patch(constraint._id, {
+						projectId: move.destinationProjectId,
+					});
 				await ctx.db.patch(row._id, { projectId: move.destinationProjectId });
+			}
 			await finishPage(page);
 			return;
 		}

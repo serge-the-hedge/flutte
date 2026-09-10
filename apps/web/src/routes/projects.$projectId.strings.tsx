@@ -12,6 +12,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IconButton } from "@/components/icon-button";
+import { RepositoryCharacterLimit } from "@/components/localization/character-limit";
 import { DiscoveredCatalogNotice } from "@/components/localization/discovered-catalogs";
 import { LegacyContentLink } from "@/components/localization/legacy-content-projects";
 import { ManagedStrings } from "@/components/localization/managed-strings";
@@ -141,7 +142,11 @@ function StringsRoute() {
 
 function RepositoryStrings() {
 	const [hasUnsavedWork, setHasUnsavedWork] = useState(false);
-	useCatalogNavigationGuard(hasUnsavedWork);
+	const [details, setDetails] = useState<StringsCatalogKey | null>(null);
+	const [detailsDirty, setDetailsDirty] = useState(false);
+	const [detailsBusy, setDetailsBusy] = useState(false);
+	const [detailsSession, setDetailsSession] = useState(0);
+	useCatalogNavigationGuard(hasUnsavedWork || detailsDirty);
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
 	const search = useSearch({ from: "/projects/$projectId/strings" });
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
@@ -587,8 +592,34 @@ function RepositoryStrings() {
 					Loading languages…
 				</p>
 			) : null}
+			{details ? (
+				<RepositoryCharacterLimit
+					key={`${details.id}:${detailsSession}`}
+					projectId={projectId}
+					messageId={details.id}
+					limit={details.characterLimit}
+					disabled={navigation?.kind !== "ready" || !navigation.canEdit}
+					onClose={() => setDetails(null)}
+					onUnsavedWorkChange={setDetailsDirty}
+					onBusyChange={setDetailsBusy}
+				/>
+			) : null}
 			<StringsCatalogView
 				historyProjectId={convexProjectId}
+				onManageKey={
+					navigation?.kind === "ready" && navigation.canEdit && !detailsBusy
+						? (key) => {
+								if (
+									detailsDirty &&
+									!window.confirm("Discard unsaved string details?")
+								)
+									return;
+								setDetailsSession((session) => session + 1);
+								setDetails(key);
+								setDetailsDirty(false);
+							}
+						: undefined
+				}
 				key={`${projectId}:${selectionKey}`}
 				onUnsavedWorkChange={setHasUnsavedWork}
 				navigation={

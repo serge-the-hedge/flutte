@@ -144,6 +144,31 @@ async function commit(input = field()) {
 }
 
 describe("Catalog editor draft lifecycle", () => {
+	test("keeps over-limit drafts editable, blocks keyboard saves, and allows a fitting Unicode value", async () => {
+		const saves: CatalogWorkspaceCommit[] = [];
+		const next = props({
+			messageIds: ["welcome"],
+			onCommitValue: async (input) => {
+				saves.push(input);
+				return { basis: input.basis };
+			},
+		});
+		const card = next.hydratedCards.get("welcome");
+		if (!card) throw new Error("Missing card");
+		next.hydratedCards = new Map([["welcome", { ...card, characterLimit: 3 }]]);
+		await render(next);
+		expect(testDom.container.textContent).toContain("9 / 3 · 6 over limit");
+		await type("😀abc");
+		await commit();
+		expect(saves).toHaveLength(0);
+		expect(field().value).toBe("😀abc");
+		expect(testDom.container.textContent).toContain("4 / 3 · 1 over limit");
+		await type("😀ab");
+		await commit();
+		expect(saves).toHaveLength(1);
+		expect(saves[0]?.intent).toEqual({ kind: "save", value: "😀ab" });
+	});
+
 	test.each(["App Store subtitle", null])(
 		"uses %s as presentation while keeping a Basic string's identity",
 		async (name) => {

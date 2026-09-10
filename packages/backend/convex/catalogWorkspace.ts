@@ -23,6 +23,7 @@ import {
 	assertTargetValueContract,
 } from "./contractTransforms";
 import { type Actor, now, sha256Hex } from "./lib";
+import { assertMessageCharacterLimit } from "./messageConstraints";
 import { requireEditor } from "./permissions";
 import {
 	isCurrentSourceProposalHeadForSource,
@@ -491,6 +492,7 @@ export async function applyAgentTargetValue(
 		intentionalBlankReason?: string;
 	},
 ): Promise<{ workspaceRevision: number }> {
+	await assertMessageCharacterLimit(ctx, input, input.value);
 	if (!isHumanOrAuthorizedReview(input.actor, input.reviewAuthorization)) {
 		throw new ConvexError({
 			code: "FORBIDDEN",
@@ -963,6 +965,11 @@ async function commitCatalogWorkspaceValue(
 	};
 
 	if (args.intent.kind === "confirm") {
+		await assertMessageCharacterLimit(
+			ctx,
+			{ projectId: args.projectId, messageId: args.messageId },
+			currentValue,
+		);
 		if (currentValue.length === 0) {
 			throw new ConvexError({
 				code: "VALIDATION",
@@ -1005,6 +1012,11 @@ async function commitCatalogWorkspaceValue(
 	}
 
 	if (args.intent.kind === "save") {
+		await assertMessageCharacterLimit(
+			ctx,
+			{ projectId: args.projectId, messageId: target.messageId },
+			args.intent.value,
+		);
 		if (args.intent.value.length === 0) {
 			throw new ConvexError({
 				code: "VALIDATION",

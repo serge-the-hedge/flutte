@@ -53,6 +53,18 @@ must be divided; nothing is silently truncated. Values are limited to 256 KiB,
 context notes to 8 KiB, and retained language memberships to 1,000 per Basic project.
 Creating a string accepts up to 128 initial translations within a 1 MiB payload.
 
+## Character limits
+
+In either project type, **Details** can set or clear an optional character limit
+for a string. One limit applies to every language; counters appear only when a
+limit is set. Over-limit authored values cannot be saved through the UI or agent
+API. Limits survive source edits, snapshot syncs and collection promotion.
+
+Counts use Unicode code points, including spaces, line breaks and any literal
+ICU syntax; they do not estimate rendered placeholder values. Setting a limit
+leaves existing text and review history intact. Incoming repository text is
+preserved even when it exceeds the limit and is flagged in Strings.
+
 ## Shared Dictionaries
 
 Use **Dictionaries** to create a terminology reference such as “Brickit”. Connect

@@ -1,3 +1,4 @@
+import { characterCount } from "@blabla/backend/convex/characterLimits";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -101,6 +102,7 @@ import {
 } from "@/lib/strings-window";
 import { CatalogDraftRecovery } from "./catalog-draft-recovery";
 import { CatalogValueRow, QUIET_CATALOG_FIELD } from "./catalog-value-row";
+import { CharacterCount } from "./character-limit";
 import { TranslationHistoryRow } from "./translation-history";
 
 /**
@@ -230,9 +232,11 @@ function ValuePhraseLine({
 function CatalogValue({
 	value,
 	sourceValue,
+	characterLimit,
 }: {
 	value: CatalogWorkspaceValue;
 	sourceValue?: string;
+	characterLimit?: number;
 }) {
 	const isEmpty = value.value.length === 0;
 	const presentation = presentCatalogWorkspaceValue({
@@ -262,6 +266,7 @@ function CatalogValue({
 			>
 				{visibleValue}
 			</p>
+			<CharacterCount value={value.value} limit={characterLimit} />
 			<ValuePhraseLine phrase={presentation.phrase} tone={presentation.tone} />
 		</CatalogValueRow>
 	);
@@ -272,6 +277,7 @@ function EditableCatalogValue({
 	messageLabel,
 	value,
 	sourceValue,
+	characterLimit,
 	onCommitValue,
 	onMoveFocus,
 }: {
@@ -279,6 +285,7 @@ function EditableCatalogValue({
 	messageLabel?: string;
 	value: EditableCatalogWorkspaceValue;
 	sourceValue?: string;
+	characterLimit?: number;
 	onCommitValue: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
 }) {
@@ -368,6 +375,13 @@ function EditableCatalogValue({
 	const commit = useCallback(
 		async (intent: CatalogWorkspaceCommit["intent"]) => {
 			if (session.getSnapshot().isSaving) return false;
+			if (
+				intent.kind !== "intentionalBlank" &&
+				characterLimit !== undefined &&
+				characterCount(intent.kind === "save" ? intent.value : value.value) >
+					characterLimit
+			)
+				return false;
 			const blankSource = session.getSnapshot().blankSource;
 			const commitDraft =
 				intent.kind === "intentionalBlank" && blankSource
@@ -426,6 +440,8 @@ function EditableCatalogValue({
 			}
 		},
 		[
+			characterLimit,
+			value.value,
 			messageId,
 			onCommitValue,
 			onMoveFocus,
@@ -596,6 +612,7 @@ function EditableCatalogValue({
 				/>
 			)}
 
+			<CharacterCount value={draft.value} limit={characterLimit} />
 			{isRecordingBlank && !isSaving ? (
 				<div className="flex flex-col gap-1.5 px-2 py-1.5">
 					<label className="sr-only" htmlFor={blankReasonId}>
@@ -665,6 +682,10 @@ function EditableCatalogValue({
 							size="xs"
 							variant="ghost"
 							className="ml-auto h-6 px-1.5 text-[11px]"
+							disabled={
+								characterLimit !== undefined &&
+								characterCount(draft.value) > characterLimit
+							}
 							onClick={() => void confirm()}
 						>
 							<Check aria-hidden="true" />
@@ -709,6 +730,7 @@ function CatalogWorkspaceValueField({
 	messageLabel,
 	value,
 	sourceValue,
+	characterLimit,
 	canEdit,
 	onCommitValue,
 	onMoveFocus,
@@ -717,6 +739,7 @@ function CatalogWorkspaceValueField({
 	messageLabel?: string;
 	value: CatalogWorkspaceValue;
 	sourceValue?: string;
+	characterLimit?: number;
 	canEdit: boolean;
 	onCommitValue?: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
@@ -729,11 +752,16 @@ function CatalogWorkspaceValueField({
 			messageLabel={messageLabel}
 			value={editor.value}
 			sourceValue={sourceValue}
+			characterLimit={characterLimit}
 			onCommitValue={editor.onCommitValue}
 			onMoveFocus={onMoveFocus}
 		/>
 	) : (
-		<CatalogValue value={value} sourceValue={sourceValue} />
+		<CatalogValue
+			value={value}
+			sourceValue={sourceValue}
+			characterLimit={characterLimit}
+		/>
 	);
 	return historyProjectId && !value.isSource && value.localeId ? (
 		<TranslationHistoryRow
@@ -904,6 +932,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 					messageLabel={accessibleTitle}
 					value={catalogKey.source}
 					sourceValue={catalogKey.source.value}
+					characterLimit={catalogKey.characterLimit}
 					canEdit={canEdit}
 					onCommitValue={onCommitValue}
 					onMoveFocus={onMoveFocus}
@@ -916,6 +945,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 							messageLabel={accessibleTitle}
 							value={value}
 							sourceValue={catalogKey.source.value}
+							characterLimit={catalogKey.characterLimit}
 							canEdit={canEdit}
 							onCommitValue={onCommitValue}
 							onMoveFocus={onMoveFocus}

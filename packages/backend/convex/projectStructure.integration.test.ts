@@ -131,6 +131,13 @@ test("promotion moves bounded content and exact review history while separating 
 		key: "line0",
 		sourceValue: "Separate",
 	});
+	await owner.mutation(api.messageConstraints.setCharacterLimit, {
+		projectId,
+		collectionId,
+		messageId: "line0",
+		characterLimit: 20,
+		expectedCharacterLimit: null,
+	});
 	const token = await owner.mutation(api.apiTokens.create, {
 		projectId,
 		name: "Translator",
@@ -239,6 +246,9 @@ test("promotion moves bounded content and exact review history while separating 
 		collectionId,
 	});
 	expect(page.items).toHaveLength(9);
+	expect(
+		page.items.find((item) => item.messageId === "line0")?.characterLimit,
+	).toBe(20);
 	const context = await owner.query(api.managedContent.context, {
 		projectId: destination,
 		collectionId,

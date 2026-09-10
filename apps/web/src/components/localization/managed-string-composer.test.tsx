@@ -43,6 +43,72 @@ describe("Continuous Basic string entry", () => {
 		});
 		return event;
 	}
+	test("enforces the optional limit across source and hidden translation drafts", async () => {
+		const calls: unknown[] = [];
+		await dom.render(
+			<ManagedStringComposer
+				{...languageProps}
+				onCreate={async (input) => {
+					calls.push(input);
+					return "new-id";
+				}}
+				onUnsavedWorkChange={noop}
+			/>,
+		);
+		await type(source(), "Hi");
+		const limit = dom.container.querySelector<HTMLInputElement>(
+			'input[type="number"]',
+		);
+		const target = dom.container.querySelector<HTMLTextAreaElement>(
+			'[data-composer-locale-id="fr"]',
+		);
+		if (!limit || !target) throw new Error("Missing detail controls");
+		await type(limit, "3");
+		await type(target, "😀ab!");
+		expect(dom.container.textContent).toContain("4 / 3 · 1 over limit");
+		await key({ ctrlKey: true });
+		expect(calls).toHaveLength(0);
+		await dom.render(
+			<ManagedStringComposer
+				{...languageProps}
+				visibleLocales={[]}
+				onCreate={async (input) => {
+					calls.push(input);
+					return "new-id";
+				}}
+				onUnsavedWorkChange={noop}
+			/>,
+		);
+		await key({ ctrlKey: true });
+		expect(calls).toHaveLength(0);
+		await dom.render(
+			<ManagedStringComposer
+				{...languageProps}
+				onCreate={async (input) => {
+					calls.push(input);
+					return "new-id";
+				}}
+				onUnsavedWorkChange={noop}
+			/>,
+		);
+		const restored = dom.container.querySelector<HTMLTextAreaElement>(
+			'[data-composer-locale-id="fr"]',
+		);
+		if (!restored) throw new Error("Missing translation draft");
+		expect(restored.value).toBe("😀ab!");
+		await type(restored, "😀ab");
+		await key({ ctrlKey: true });
+		expect(calls).toEqual([
+			{
+				sourceValue: "Hi",
+				name: null,
+				context: "",
+				characterLimit: 3,
+				translations: [{ localeId: "fr", value: "😀ab" }],
+			},
+		]);
+	});
+
 	test("adds consecutive unnamed multiline strings without reopening or navigating", async () => {
 		const calls: unknown[] = [];
 		const dirty: boolean[] = [];

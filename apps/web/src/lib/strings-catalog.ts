@@ -52,11 +52,13 @@ export type CatalogWorkspaceValue = {
 };
 
 export type CatalogWorkspaceKey = {
+	characterLimit?: number;
 	id: string;
 	values: readonly CatalogWorkspaceValue[];
 };
 
 export type StringsCatalogKey = {
+	characterLimit?: number;
 	id: string;
 	/** Undefined keeps repository key labels; null is an unnamed Basic string. */
 	name?: string | null;
@@ -187,6 +189,7 @@ export function readStringsCatalogKey(
 	}
 	return {
 		id: key.id,
+		characterLimit: key.characterLimit,
 		source,
 		targets: key.values.filter((value) => !value.isSource),
 	};
