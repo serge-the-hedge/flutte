@@ -157,6 +157,9 @@ describe("Basic project workflow", () => {
 		expect(dom.container.textContent).toContain("Build {anything}");
 		expect(dom.container.textContent).toContain("Store subtitle");
 		expect(dom.container.textContent).not.toContain("Raw ICU");
+		expect(
+			dom.container.querySelector('nav[aria-label="Catalog scopes"]'),
+		).toBeNull();
 		const source =
 			dom.container.querySelector<HTMLTextAreaElement>("#new-string-text");
 		if (!source) throw new Error("Missing composer");
