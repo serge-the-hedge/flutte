@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type QueryCtx, query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
 import { navigationStateFor } from "./catalogWorkspaceNavigation";
+import { encodedSize } from "./catalogWorkspaceView";
 import { requireEditor, requireViewer } from "./permissions";
 
 const snapshotSummary = v.object({
@@ -85,7 +86,7 @@ export const list = query({
 			.order("desc")
 			.paginate({
 				...args.paginationOpts,
-				numItems: Math.min(32, Math.max(1, args.paginationOpts.numItems)),
+				numItems: Math.min(4, Math.max(1, args.paginationOpts.numItems)),
 				maximumBytesRead: 256 * 1024,
 			});
 		const page = [];
@@ -114,10 +115,10 @@ export const getSelected = query({
 	returns: v.array(snapshotSummary),
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
-		if (args.snapshotIds.length > 32)
+		if (args.snapshotIds.length > 4)
 			throw new ConvexError({
 				code: "VALIDATION",
-				message: "Choose up to 32 snapshots.",
+				message: "Read up to 4 snapshot labels at a time.",
 			});
 		return await Promise.all(
 			[...new Set(args.snapshotIds)].map(async (id) => {
@@ -181,6 +182,7 @@ async function provedOrigin(
 	projection: Doc<"catalogProjections">,
 	snapshot: Doc<"sourceSnapshots">,
 	source: Doc<"catalogProjectionMessages">,
+	previous: Doc<"catalogProjections"> | null,
 ) {
 	if (!source.isSource) return false;
 	if (source.firstSeenProjectionId)
@@ -188,34 +190,32 @@ async function provedOrigin(
 	if (!projection.previousCatalogProjectionId) {
 		return !projection.previousBaselineSnapshotId && !snapshot.lineage;
 	}
-	const previous = await ctx.db.get(projection.previousCatalogProjectionId);
 	if (
 		previous?.status !== "published" ||
 		previous.projectId !== projection.projectId ||
 		previous.archiveStateStatus !== "staged"
 	)
 		return false;
-	const [active, retained] = await Promise.all([
-		ctx.db
-			.query("catalogProjectionMessages")
-			.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-				q
-					.eq("projectionId", previous._id)
-					.eq("messageId", source.messageId)
-					.eq("isSource", true),
-			)
-			.unique(),
-		ctx.db
-			.query("catalogProjectionArchiveStateValues")
-			.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-				q
-					.eq("projectionId", previous._id)
-					.eq("messageId", source.messageId)
-					.eq("isSource", true),
-			)
-			.unique(),
-	]);
-	return !active && !retained;
+	const active = await ctx.db
+		.query("catalogProjectionMessages")
+		.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+			q
+				.eq("projectionId", previous._id)
+				.eq("messageId", source.messageId)
+				.eq("isSource", true),
+		)
+		.unique();
+	if (active) return false;
+	const retained = await ctx.db
+		.query("catalogProjectionArchiveStateValues")
+		.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+			q
+				.eq("projectionId", previous._id)
+				.eq("messageId", source.messageId)
+				.eq("isSource", true),
+		)
+		.unique();
+	return !retained;
 }
 
 export const previewOrigins = query({
@@ -248,9 +248,12 @@ export const previewOrigins = query({
 				numItems: Math.min(16, Math.max(1, args.paginationOpts.numItems)),
 				maximumBytesRead: 256 * 1024,
 			});
+		const previous = projection.previousCatalogProjectionId
+			? await ctx.db.get(projection.previousCatalogProjectionId)
+			: null;
 		const page = [];
 		for (const source of batch.page)
-			if (await provedOrigin(ctx, projection, snapshot, source))
+			if (await provedOrigin(ctx, projection, snapshot, source, previous))
 				page.push({ messageId: source.messageId });
 		return {
 			page,
@@ -290,6 +293,9 @@ export const applyOrigins = mutation({
 				code: "CONFLICT",
 				message: "Preview this snapshot again before recovering its history.",
 			});
+		const previous = projection.previousCatalogProjectionId
+			? await ctx.db.get(projection.previousCatalogProjectionId)
+			: null;
 		let applied = 0;
 		let alreadyRecorded = 0;
 		for (const messageId of args.messageIds) {
@@ -302,7 +308,10 @@ export const applyOrigins = mutation({
 						.eq("isSource", true),
 				)
 				.unique();
-			if (!source || !(await provedOrigin(ctx, projection, snapshot, source)))
+			if (
+				!source ||
+				!(await provedOrigin(ctx, projection, snapshot, source, previous))
+			)
 				throw new ConvexError({
 					code: "VALIDATION",
 					message: "This snapshot does not prove the string's introduction.",
@@ -346,20 +355,56 @@ export async function snapshotOriginFilter(
 	ctx: QueryCtx,
 	projectId: Id<"projects">,
 	snapshotIds?: readonly Id<"sourceSnapshots">[],
+	introducedOriginUnknown = false,
 ) {
-	if (!snapshotIds?.length)
+	if (introducedOriginUnknown && snapshotIds?.length)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Choose snapshots or strings with unknown introductions.",
+		});
+	if (!snapshotIds?.length && !introducedOriginUnknown)
 		return async (_row: Doc<"catalogWorkspaceNavigationRows">) => true;
 	if (
-		snapshotIds.length > 32 ||
-		new Set(snapshotIds).size !== snapshotIds.length
+		(snapshotIds?.length ?? 0) > 32 ||
+		new Set(snapshotIds).size !== (snapshotIds?.length ?? 0)
 	)
 		throw new ConvexError({
 			code: "VALIDATION",
 			message: "Choose up to 32 distinct snapshots.",
 		});
 	const selected = new Set(snapshotIds);
-	for (const id of selected) await acceptedSnapshot(ctx, projectId, id);
 	const origins = new Map<Id<"catalogProjections">, boolean>();
+	let legacyReadBytes = 0;
+	function legacyProjection(projection: Doc<"catalogProjections"> | null) {
+		legacyReadBytes += encodedSize(projection);
+		if (legacyReadBytes > 4 * 1024 * 1024)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "Choose fewer older snapshots.",
+			});
+		return projection;
+	}
+	for (const id of selected) {
+		const publication = await ctx.db
+			.query("catalogProjectionPublicationStates")
+			.withIndex("by_project_and_snapshot", (q) =>
+				q.eq("projectId", projectId).eq("snapshotId", id),
+			)
+			.first();
+		if (publication?.status === "published") {
+			origins.set(publication.projectionId, true);
+			continue;
+		}
+		const legacy = legacyProjection(
+			await acceptedProjectionFor(ctx, projectId, id),
+		);
+		if (!legacy)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Choose an accepted snapshot from this project.",
+			});
+		origins.set(legacy._id, true);
+	}
 	return async (row: Doc<"catalogWorkspaceNavigationRows">) => {
 		let origin = row.firstSeenProjectionId;
 		if (!origin)
@@ -371,10 +416,16 @@ export async function snapshotOriginFilter(
 					)
 					.unique()
 			)?.firstSeenProjectionId;
+		if (introducedOriginUnknown) return origin === undefined;
 		if (!origin) return false;
 		const cached = origins.get(origin);
 		if (cached !== undefined) return cached;
-		const projection = await ctx.db.get(origin);
+		const publication = await ctx.db
+			.query("catalogProjectionPublicationStates")
+			.withIndex("by_projection", (q) => q.eq("projectionId", origin))
+			.unique();
+		const projection =
+			publication ?? legacyProjection(await ctx.db.get(origin));
 		const matches = Boolean(
 			projection?.projectId === projectId &&
 				projection.status === "published" &&

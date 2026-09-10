@@ -224,6 +224,49 @@ describe("translation history", () => {
 		expect(next.nextCursor).toBeNull();
 	});
 
+	test("bounds Git identity bytes while continuing across large quiet snapshots", async () => {
+		const s = await setup();
+		await s.commit({ kind: "save", value: "Local text" });
+		for (let index = 0; index < 11; index++)
+			await s.ingest(`quiet-large-${index}`);
+		const ids = await s.t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("catalogProjections")
+					.withIndex("by_project", (q) => q.eq("projectId", s.scope.projectId))
+					.collect()
+			).map((projection) => ({
+				projectionId: projection._id,
+				snapshotId: projection.snapshotId,
+			})),
+		);
+		// Identity strings have no schema byte cap below the document limit.
+		// Populate each separately so the fixture itself obeys transaction limits.
+		const repository = "r".repeat(900 * 1024);
+		for (const idsForStep of ids)
+			await s.t.run(async (ctx) => {
+				await ctx.db.patch(idsForStep.projectionId, { repository });
+				if (idsForStep.snapshotId)
+					await ctx.db.patch(idsForStep.snapshotId, { repository });
+			});
+		let cursor: string | undefined;
+		let pages = 0;
+		const values: string[] = [];
+		do {
+			const page = await s.history(cursor);
+			if (pages === 0) {
+				expect(page.events).toEqual([]);
+				expect(page.nextCursor).not.toBeNull();
+			}
+			values.push(...page.events.map((event) => event.value));
+			cursor = page.nextCursor ?? undefined;
+			pages++;
+			expect(pages).toBeLessThanOrEqual(12);
+		} while (cursor);
+		expect(pages).toBeGreaterThan(1);
+		expect(values).toEqual(["Local text", "Bonjour"]);
+	});
+
 	test("reads Basic revisions through the same interface", async () => {
 		const t = createBackend({ transactionLimits: true });
 		const user = await authenticatedBackend(t, "basic-history-owner");

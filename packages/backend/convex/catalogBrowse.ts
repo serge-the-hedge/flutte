@@ -95,6 +95,7 @@ export const page = query({
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
+		introducedOriginUnknown: v.optional(v.boolean()),
 		localeId: v.optional(v.id("locales")),
 		localeIds: v.optional(v.array(v.id("locales"))),
 		scanTargetIndex: v.optional(v.number()),
@@ -133,6 +134,7 @@ export const page = query({
 			ctx,
 			args.projectId,
 			args.introducedSnapshotIds,
+			args.introducedOriginUnknown,
 		);
 		const after = args.after ?? -1;
 		const scanTargetIndex = args.scanTargetIndex ?? 0;
@@ -371,6 +373,7 @@ export const scopeCounts = query({
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
+		introducedOriginUnknown: v.optional(v.boolean()),
 		revision: v.number(),
 		localeIds: v.array(v.id("locales")),
 		cursor: v.optional(v.string()),
@@ -408,6 +411,7 @@ export const scopeCounts = query({
 			ctx,
 			args.projectId,
 			args.introducedSnapshotIds,
+			args.introducedOriginUnknown,
 		);
 		const selected = new Set(args.localeIds);
 		for (const localeId of selected) {

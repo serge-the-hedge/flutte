@@ -23,7 +23,7 @@ export function SnapshotHistory({ projectId }: { projectId: string }) {
 	const { results, status, loadMore } = usePaginatedQuery(
 		api.snapshotCatalog.list,
 		{ projectId: id },
-		{ initialNumItems: 10 },
+		{ initialNumItems: 4 },
 	);
 	const canEdit = project?.role === "owner" || project?.role === "editor";
 	return (
@@ -57,7 +57,7 @@ export function SnapshotHistory({ projectId }: { projectId: string }) {
 						size="xs"
 						variant="ghost"
 						disabled={status === "LoadingMore"}
-						onClick={() => loadMore(10)}
+						onClick={() => loadMore(4)}
 					>
 						{status === "LoadingMore" ? "Loading…" : "Older snapshots"}
 					</Button>

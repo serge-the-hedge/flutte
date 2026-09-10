@@ -982,7 +982,9 @@ export default defineSchema({
 		projectionId: v.id("catalogProjections"),
 		status: v.union(v.literal("staging"), v.literal("published")),
 		snapshotId: v.optional(v.id("sourceSnapshots")),
-	}).index("by_projection", ["projectionId"]),
+	})
+		.index("by_projection", ["projectionId"])
+		.index("by_project_and_snapshot", ["projectId", "snapshotId"]),
 
 	// Explicitly previewed historical origin reconstruction; never review evidence.
 	catalogMessageOrigins: defineTable({

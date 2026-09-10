@@ -64,7 +64,10 @@ async function setup() {
 		if (!result.snapshotId) throw new Error("Missing snapshot");
 		return result.snapshotId;
 	}
-	async function browse(snapshotIds?: Id<"sourceSnapshots">[]) {
+	async function browse(
+		snapshotIds?: Id<"sourceSnapshots">[],
+		introducedOriginUnknown?: boolean,
+	) {
 		const overview = await owner.query(api.catalogBrowse.overview, {
 			projectId,
 		});
@@ -73,6 +76,7 @@ async function setup() {
 			projectId,
 			projectionId: overview.projectionId,
 			introducedSnapshotIds: snapshotIds,
+			introducedOriginUnknown,
 		});
 		return { overview, keys: result.keys.map((key) => key.messageId) };
 	}
@@ -113,17 +117,22 @@ test("snapshot selection preserves initial and original introduction through rem
 		projectId,
 		paginationOpts,
 	});
-	expect(snapshots.page.map((row) => row.snapshotId)).toEqual([
+	const older = await owner.query(api.snapshotCatalog.list, {
+		projectId,
+		paginationOpts: { cursor: snapshots.continueCursor, numItems: 32 },
+	});
+	const snapshotRows = [...snapshots.page, ...older.page];
+	expect(snapshotRows.map((row) => row.snapshotId)).toEqual([
 		fourth,
 		expect.any(String),
 		second,
 		first,
 	]);
 	expect(
-		snapshots.page.find((row) => row.snapshotId === first)?.initialCatalog,
+		snapshotRows.find((row) => row.snapshotId === first)?.initialCatalog,
 	).toBe(true);
 	expect(
-		snapshots.page.find((row) => row.snapshotId === second)?.initialCatalog,
+		snapshotRows.find((row) => row.snapshotId === second)?.initialCatalog,
 	).toBe(false);
 });
 
@@ -198,10 +207,14 @@ test("optional names are project-authorized metadata with conflict protection", 
 });
 
 test("historical origins require explicit bounded recovery and leave review facts unchanged", async () => {
-	const { t, owner, projectId, ingest, browse } = await setup();
+	const { t, owner, projectId, fr, ingest, browse } = await setup();
 	const first = await ingest("first", ["initial"]);
 	const second = await ingest("second", ["initial", "new"], "first");
 	await t.run(async (ctx) => {
+		for (const row of await ctx.db
+			.query("catalogProjectionPublicationStates")
+			.collect())
+			await ctx.db.delete(row._id);
 		for (const table of [
 			"catalogProjectionMessages",
 			"catalogWorkspaceNavigationRows",
@@ -210,7 +223,15 @@ test("historical origins require explicit bounded recovery and leave review fact
 				await ctx.db.patch(row._id, { firstSeenProjectionId: undefined });
 		}
 	});
+	expect(
+		(await owner.query(api.snapshotCatalog.list, { projectId, paginationOpts }))
+			.page,
+	).toHaveLength(2);
 	expect((await browse([first, second])).keys).toEqual([]);
+	expect((await browse(undefined, true)).keys).toEqual(["initial", "new"]);
+	await expect(browse([first], true)).rejects.toThrow(
+		"Choose snapshots or strings",
+	);
 	const before = await browse();
 	const initial = await owner.query(api.snapshotCatalog.previewOrigins, {
 		projectId,
@@ -249,7 +270,16 @@ test("historical origins require explicit bounded recovery and leave review fact
 		alreadyRecorded: 1,
 	});
 	expect((await browse([second])).keys).toEqual(["new"]);
+	expect((await browse(undefined, true)).keys).toEqual(["initial"]);
 	const after = await browse();
+	const unknownCounts = await owner.query(api.catalogBrowse.scopeCounts, {
+		projectId,
+		projectionId: after.overview.projectionId,
+		revision: after.overview.revision,
+		localeIds: [fr],
+		introducedOriginUnknown: true,
+	});
+	expect(unknownCounts.counts.unconfirmedImport).toBe(1);
 	expect(after.overview.revision).toBe(before.overview.revision + 1);
 	expect(after.overview.ordinaryImports).toEqual(
 		before.overview.ordinaryImports,
@@ -260,4 +290,87 @@ test("historical origins require explicit bounded recovery and leave review fact
 		paginationOpts,
 	});
 	expect(previewAgain.page).toEqual([{ messageId: "new" }]);
+	expect(
+		await t.run(
+			async (ctx) =>
+				await ctx.db.query("catalogProjectionPublicationStates").collect(),
+		),
+	).toEqual([]);
+});
+
+test("snapshot filters read compact publication evidence even with large historical identities", async () => {
+	const { t, owner, projectId, ingest, browse } = await setup();
+	const first = await ingest("first", ["initial"]);
+	const { overview } = await browse();
+	const source = await t.run(async (ctx) => {
+		const snapshot = await ctx.db.get(first);
+		const projection = await ctx.db.get(overview.projectionId);
+		if (!snapshot || !projection) throw new Error("Missing fixture evidence");
+		const {
+			_id: _snapshotId,
+			_creationTime: _snapshotTime,
+			...snapshotFields
+		} = snapshot;
+		const {
+			_id: _projectionId,
+			_creationTime: _projectionTime,
+			...projectionFields
+		} = projection;
+		return { snapshotFields, projectionFields };
+	});
+	const selected = [first];
+	// Twelve full identity pairs exceed the transaction read budget. Each compact
+	// publication record contains only project/projection/snapshot IDs and status.
+	for (let index = 0; index < 12; index++) {
+		selected.push(
+			await t.run(async (ctx) => {
+				const repository = "x".repeat(900 * 1024);
+				const snapshotId = await ctx.db.insert("sourceSnapshots", {
+					...source.snapshotFields,
+					repository,
+					commit: `large-${index}`,
+				});
+				const projectionId = await ctx.db.insert("catalogProjections", {
+					...source.projectionFields,
+					repository,
+					snapshotId,
+					commit: `large-${index}`,
+				});
+				await ctx.db.insert("catalogProjectionPublicationStates", {
+					projectId,
+					projectionId,
+					snapshotId,
+					status: "published",
+				});
+				return snapshotId;
+			}),
+		);
+	}
+	expect((await browse(selected)).keys).toEqual(["initial"]);
+	expect(
+		await owner.query(api.snapshotCatalog.getSelected, {
+			projectId,
+			snapshotIds: selected.slice(1, 5),
+		}),
+	).toHaveLength(4);
+	await expect(
+		owner.query(api.snapshotCatalog.getSelected, {
+			projectId,
+			snapshotIds: selected.slice(1, 6),
+		}),
+	).rejects.toThrow("4 snapshot labels");
+	const names = await owner.query(api.snapshotCatalog.list, {
+		projectId,
+		paginationOpts,
+	});
+	expect(names.page.length).toBeLessThanOrEqual(4);
+	await t.run(async (ctx) => {
+		for (const row of await ctx.db
+			.query("catalogProjectionPublicationStates")
+			.collect())
+			await ctx.db.delete(row._id);
+	});
+	await expect(browse(selected)).rejects.toThrow(
+		"Choose fewer older snapshots.",
+	);
 });

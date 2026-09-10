@@ -4,6 +4,7 @@ import { type QueryCtx, query } from "./_generated/server";
 import { getAnyUserById } from "./auth";
 import { activeProjectionFor } from "./catalogProjection";
 import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
+import { encodedSize } from "./catalogWorkspaceView";
 import { type Actor, sha256Hex } from "./lib";
 import { requireViewer } from "./permissions";
 import { translationHistoryEvent } from "./translationHistoryModel";
@@ -12,6 +13,10 @@ import { translationHistoryEvent } from "./translationHistoryModel";
 // including quiet Git transitions that yield no visible event.
 const PAGE_SIZE = 8;
 const MAX_GIT_STEPS = 12;
+// A step can additionally read two near-1 MiB identity documents. Stop before
+// another step once this budget is reached, leaving room for its overshoot and
+// the manual page, authorization, current head, and actor lookups.
+const MAX_GIT_READ_BYTES = 4 * 1024 * 1024;
 type Event = Infer<typeof translationHistoryEvent>;
 type Scope = {
 	projectId: Id<"projects">;
@@ -226,6 +231,11 @@ async function gitStep(ctx: QueryCtx, scope: Scope, projectionId: string) {
 		: null;
 	return {
 		event,
+		readBytes:
+			encodedSize(projection) +
+			encodedSize(snapshot) +
+			encodedSize(row) +
+			encodedSize(previous),
 		previousId,
 		recordedAt: projection.publishedAt ?? projection.createdAt,
 	};
@@ -337,12 +347,19 @@ export const list = query({
 		let retainedPending = retained;
 		let git: Awaited<ReturnType<typeof gitStep>> | null = null;
 		let steps = 0;
+		let gitReadBytes = 0;
 		let boundary = Number.POSITIVE_INFINITY;
 		const events: Event[] = [];
 		while (events.length < PAGE_SIZE) {
-			while (!git && state.projectionId && steps < MAX_GIT_STEPS) {
+			while (
+				!git &&
+				state.projectionId &&
+				steps < MAX_GIT_STEPS &&
+				gitReadBytes < MAX_GIT_READ_BYTES
+			) {
 				const next = await gitStep(ctx, args, state.projectionId);
 				steps++;
+				gitReadBytes += next.readBytes;
 				boundary = next.recordedAt;
 				if (next.event) git = next;
 				else state.projectionId = next.previousId;

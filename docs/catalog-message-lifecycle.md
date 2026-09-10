@@ -204,7 +204,8 @@ of Snapshot Identity, and snapshot choices remain ordered by ingestion date.
 Older origin links can be recovered in Sync: preview the keys supported by
 immutable catalog and archive evidence, then apply that bounded batch. Recovery
 only adds filter metadata; it changes no values, confirmations, or First Review
-scope. Missing evidence leaves the origin unknown.
+scope. Missing evidence leaves the origin unknown; **Introduction unavailable**
+shows those keys explicitly.
 
 Per-target history is read-only and loads on demand. Repository history merges
 append-only applied workspace decisions with changed values observed along the
