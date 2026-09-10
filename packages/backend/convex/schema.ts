@@ -1293,7 +1293,7 @@ export default defineSchema({
 			"projectionId",
 			"catalogIndex",
 		])
-		.index("by_project_projection_origin_catalogIndex", [
+		.index("by_projectId_projectionId_firstSeenProjectionId_catalogIndex", [
 			"projectId",
 			"projectionId",
 			"firstSeenProjectionId",
