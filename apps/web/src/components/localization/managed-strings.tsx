@@ -570,6 +570,7 @@ export function ManagedStrings({
 				</p>
 			)}
 			<StringsCatalogView
+				historyProjectId={address.projectId}
 				key={`${collectionId}:${JSON.stringify(search.locales ?? "all")}`}
 				searchPlaceholder="Search names and source text"
 				emptyContent={

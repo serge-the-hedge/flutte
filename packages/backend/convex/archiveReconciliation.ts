@@ -1215,6 +1215,9 @@ export function archivedValueFromRow(
 			: {
 					declaredPlaceholderNameCount: row.declaredPlaceholderNameCount,
 				}),
+		...(row.firstSeenProjectionId
+			? { firstSeenProjectionId: row.firstSeenProjectionId }
+			: {}),
 		...(row.introducedAt === undefined
 			? {}
 			: {

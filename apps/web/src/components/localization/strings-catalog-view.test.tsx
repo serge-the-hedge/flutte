@@ -292,6 +292,50 @@ describe("StringsCatalogView", () => {
 		);
 	});
 
+	test("offers history for missing and blank targets without a source history action", () => {
+		const markup = renderToStaticMarkup(
+			<StringsCatalogView
+				{...navigationProps}
+				historyProjectId="project"
+				{...windowedProps({
+					keys: [
+						{
+							id: "greeting",
+							source: {
+								localeId: "en",
+								localeCode: "en",
+								isSource: true,
+								value: "Hello",
+								materialized: false,
+							},
+							targets: [
+								{
+									localeId: "fr",
+									localeCode: "fr",
+									isSource: false,
+									value: "",
+									materialized: true,
+								},
+								{
+									localeId: "de",
+									localeCode: "de",
+									isSource: false,
+									value: "",
+									materialized: false,
+									intentionalBlankReason: "Hidden label",
+								},
+							],
+						},
+					],
+				})}
+			/>,
+		);
+		expect(markup).toContain('aria-label="History of greeting in fr"');
+		expect(markup).toContain('aria-label="History of greeting in de"');
+		expect(markup).not.toContain('aria-label="History of greeting in en"');
+		expect(markup).not.toContain("Loading history");
+	});
+
 	test("gives editors a subtle key-level Translation Task selector", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView

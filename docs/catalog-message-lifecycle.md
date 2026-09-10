@@ -193,6 +193,27 @@ Re-syncing a Baseline imported before per-value review preservation rebuilds its
 derived evidence once, keeping Snapshot Identity and existing binding realizations.
 It restores applicable prior reviews without a new approval gesture.
 
+## Introduction filter and value history
+
+Strings can filter current keys by the accepted snapshot that first contained
+each key (including the initial catalog). This is independent of unfinished
+First Review. New source records retain their origin projection; removal and
+restoration preserve it. Optional snapshot names are editable labels, not part
+of Snapshot Identity, and snapshot choices remain ordered by ingestion date.
+
+Older origin links can be recovered in Sync: preview the keys supported by
+immutable catalog and archive evidence, then apply that bounded batch. Recovery
+only adds filter metadata; it changes no values, confirmations, or First Review
+scope. Missing evidence leaves the origin unknown.
+
+Per-target history is read-only and loads on demand. Repository history merges
+append-only applied workspace decisions with changed values observed along the
+accepted projection chain. Basic projects reuse their immutable target
+revisions. Private candidates stay in their translation task until accepted.
+Git observations do not prove application release. Surviving older workspace
+heads are retained before replacement; overwritten edits that predate history
+recording remain unavailable and are labelled as such.
+
 ## Compatibility note
 
 Introduction provenance is recorded exactly beginning with the first Baseline

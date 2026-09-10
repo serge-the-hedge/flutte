@@ -194,6 +194,9 @@ async function navigationEvidence(
 
 function stripSystemFields(row: Doc<"catalogWorkspaceNavigationRows">) {
 	return {
+		...(row.firstSeenProjectionId
+			? { firstSeenProjectionId: row.firstSeenProjectionId }
+			: {}),
 		projectId: row.projectId,
 		projectionId: row.projectionId,
 		messageId: row.messageId,

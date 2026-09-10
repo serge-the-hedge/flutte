@@ -112,6 +112,7 @@ export type CatalogWorkspaceNavigationTargetDigest = {
 };
 
 export type CatalogWorkspaceNavigationDigest = {
+	firstSeenProjectionId?: Id<"catalogProjections">;
 	projectId: Id<"projects">;
 	projectionId: Id<"catalogProjections">;
 	messageId: string;
@@ -325,6 +326,9 @@ export async function deriveNavigationDigest(input: {
 	return {
 		projectId: input.projectId,
 		projectionId: input.projectionId,
+		...(sourceRow.firstSeenProjectionId
+			? { firstSeenProjectionId: sourceRow.firstSeenProjectionId }
+			: {}),
 		messageId: sourceRow.messageId,
 		catalogIndex: sourceRow.catalogIndex,
 		searchCorpus: [...searchCorpus],
@@ -728,6 +732,9 @@ function navigationRowToDigest(
 	return {
 		projectId: row.projectId,
 		projectionId: row.projectionId,
+		...(row.firstSeenProjectionId
+			? { firstSeenProjectionId: row.firstSeenProjectionId }
+			: {}),
 		messageId: row.messageId,
 		catalogIndex: row.catalogIndex,
 		searchCorpus: [...row.searchCorpus],
@@ -752,6 +759,7 @@ function navigationRowMatchesDigest(
 		current.projectId === digest.projectId &&
 		current.projectionId === digest.projectionId &&
 		current.messageId === digest.messageId &&
+		current.firstSeenProjectionId === digest.firstSeenProjectionId &&
 		current.catalogIndex === digest.catalogIndex &&
 		current.pendingSourceProposal === digest.pendingSourceProposal &&
 		current.introductionReviewPending === digest.introductionReviewPending &&
@@ -2173,6 +2181,7 @@ const navigationTargetDigestValidator = v.object({
 });
 
 const navigationDigestValidator = v.object({
+	firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 	messageId: v.string(),
 	catalogIndex: v.number(),
 	searchCorpus: v.array(v.string()),

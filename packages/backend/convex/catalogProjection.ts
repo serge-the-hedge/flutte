@@ -138,6 +138,9 @@ export type ProjectedMessage = {
 	declaredPlaceholderNames?: string[];
 	declaredPlaceholderNamesComplete?: boolean;
 	declaredPlaceholderNameCount?: number;
+	/** Exact first appearance, including bootstrap; the staged projection resolves
+	 * to its immutable Snapshot only after publication. Older origins stay unknown. */
+	firstSeenProjectionId?: Id<"catalogProjections">;
 	/** Post-bootstrap Git introductions carry the time and frozen target-Locale
 	 * scope of their First Review on the source row only. The provenance follows
 	 * the key through later projections and Archive Reconciliation. */
@@ -234,6 +237,7 @@ export const projectedMessageFields = {
 	declaredPlaceholderNames: v.optional(v.array(v.string())),
 	declaredPlaceholderNamesComplete: v.optional(v.boolean()),
 	declaredPlaceholderNameCount: v.optional(v.number()),
+	firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 	introducedAt: v.optional(v.number()),
 	introductionLocaleIds: v.optional(v.array(v.id("locales"))),
 	materialized: v.boolean(),
@@ -456,6 +460,7 @@ export function assertProjectedMessage(message: ProjectedMessage): void {
  * Baseline remains the separately approved bootstrap. */
 export function attachIntroductionReviews(input: {
 	hadPreviousBaseline: boolean;
+	projectionId?: Id<"catalogProjections">;
 	previousMessages: readonly ProjectedMessage[];
 	retainedMessages: readonly ProjectedMessage[];
 	currentMessages: readonly ProjectedMessage[];
@@ -488,6 +493,7 @@ export function attachIntroductionReviews(input: {
 	return input.currentMessages.map((message) => {
 		if (!message.isSource) {
 			const {
+				firstSeenProjectionId: _firstSeenProjectionId,
 				introducedAt: _introducedAt,
 				introductionLocaleIds: _introductionLocaleIds,
 				...target
@@ -497,18 +503,24 @@ export function attachIntroductionReviews(input: {
 		const prior =
 			previousSources.get(message.messageId) ??
 			retainedSources.get(message.messageId);
+		const firstSeenProjectionId = prior
+			? prior.firstSeenProjectionId
+			: input.projectionId;
+		const origin = firstSeenProjectionId ? { firstSeenProjectionId } : {};
 		const introducedAt = prior?.introducedAt;
 		const introductionLocaleIds = prior?.introductionLocaleIds;
 		if (introducedAt !== undefined && introductionLocaleIds !== undefined) {
 			return {
 				...message,
+				...origin,
 				introducedAt,
 				introductionLocaleIds: [...introductionLocaleIds],
 			};
 		}
-		if (prior || !input.hadPreviousBaseline) return message;
+		if (prior || !input.hadPreviousBaseline) return { ...message, ...origin };
 		return {
 			...message,
+			...origin,
 			introducedAt: input.introducedAt,
 			introductionLocaleIds: [
 				...(currentTargetsByMessage.get(message.messageId) ?? []),
@@ -1437,6 +1449,9 @@ export function projectedMessageFromRow(
 			: {
 					declaredPlaceholderNameCount: row.declaredPlaceholderNameCount,
 				}),
+		...(row.firstSeenProjectionId
+			? { firstSeenProjectionId: row.firstSeenProjectionId }
+			: {}),
 		...(row.introducedAt === undefined
 			? {}
 			: {

@@ -18,6 +18,7 @@ import { readWorkspaceTarget } from "./catalogWorkspaceRead";
 import { currentSourceProposalRows, encodedSize } from "./catalogWorkspaceView";
 import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmations";
 import { requireViewer } from "./permissions";
+import { snapshotOriginFilter } from "./snapshotCatalog";
 import {
 	publishedResolutionFor,
 	sourceProposalHeadFor,
@@ -93,6 +94,7 @@ export const page = query({
 	args: {
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
+		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
 		localeId: v.optional(v.id("locales")),
 		localeIds: v.optional(v.array(v.id("locales"))),
 		scanTargetIndex: v.optional(v.number()),
@@ -127,6 +129,11 @@ export const page = query({
 			projectionId: projection._id,
 			expectedRowCount: projection.expectedKeyCount,
 		});
+		const matchesOrigin = await snapshotOriginFilter(
+			ctx,
+			args.projectId,
+			args.introducedSnapshotIds,
+		);
 		const after = args.after ?? -1;
 		const scanTargetIndex = args.scanTargetIndex ?? 0;
 		const needle = (args.q ?? "").trim().toLowerCase();
@@ -218,7 +225,10 @@ export const page = query({
 		let resumeTarget = 0;
 		let partial = false;
 		for (const row of batch.page) {
-			if (membership && !membership.has(row.messageId)) {
+			if (
+				(membership && !membership.has(row.messageId)) ||
+				!(await matchesOrigin(row))
+			) {
 				last = row.catalogIndex;
 				continue;
 			}
@@ -360,6 +370,7 @@ export const scopeCounts = query({
 	args: {
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
+		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
 		revision: v.number(),
 		localeIds: v.array(v.id("locales")),
 		cursor: v.optional(v.string()),
@@ -393,6 +404,11 @@ export const scopeCounts = query({
 				code: "VALIDATION",
 				message: "Invalid catalog count request.",
 			});
+		const matchesOrigin = await snapshotOriginFilter(
+			ctx,
+			args.projectId,
+			args.introducedSnapshotIds,
+		);
 		const selected = new Set(args.localeIds);
 		for (const localeId of selected) {
 			const locale = await ctx.db.get(localeId);
@@ -419,6 +435,7 @@ export const scopeCounts = query({
 				maximumBytesRead: 512 * 1024,
 			});
 		for (const row of batch.page) {
+			if (!(await matchesOrigin(row))) continue;
 			let introduced = false;
 			for (const target of row.targets) {
 				if (!selected.has(target.localeId)) continue;

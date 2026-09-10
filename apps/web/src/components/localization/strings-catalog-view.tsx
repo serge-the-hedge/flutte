@@ -101,6 +101,7 @@ import {
 } from "@/lib/strings-window";
 import { CatalogDraftRecovery } from "./catalog-draft-recovery";
 import { CatalogValueRow, QUIET_CATALOG_FIELD } from "./catalog-value-row";
+import { TranslationHistoryRow } from "./translation-history";
 
 /**
  * The reading measure. Wide enough that a 300-character paragraph is
@@ -178,6 +179,7 @@ type CatalogWorkspaceEditorInput = {
 };
 
 type CatalogControls = {
+	historyProjectId?: string;
 	searchPlaceholder?: string;
 	onManageKey?: (key: StringsCatalogKey) => void;
 	onSelectionChange?: (ids: readonly string[]) => void;
@@ -719,8 +721,9 @@ function CatalogWorkspaceValueField({
 	onCommitValue?: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
 }) {
+	const { historyProjectId } = useContext(CatalogControlsContext);
 	const editor = { value, canEdit, onCommitValue };
-	return isEditableCatalogWorkspaceValue(editor) ? (
+	const field = isEditableCatalogWorkspaceValue(editor) ? (
 		<EditableCatalogValue
 			messageId={messageId}
 			messageLabel={messageLabel}
@@ -731,6 +734,19 @@ function CatalogWorkspaceValueField({
 		/>
 	) : (
 		<CatalogValue value={value} sourceValue={sourceValue} />
+	);
+	return historyProjectId && !value.isSource && value.localeId ? (
+		<TranslationHistoryRow
+			projectId={historyProjectId}
+			messageId={messageId}
+			messageLabel={messageLabel ?? messageId}
+			localeId={value.localeId}
+			localeCode={value.localeCode}
+		>
+			{field}
+		</TranslationHistoryRow>
+	) : (
+		field
 	);
 }
 
