@@ -71,11 +71,13 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 		cursor: typeof search.cursor === "string" ? search.cursor : undefined,
 		locales: stringsLanguagesFromSearch(search),
 		snapshots:
-			Array.isArray(search.snapshots) &&
-			search.snapshots.length > 0 &&
-			search.snapshots.every((id) => typeof id === "string")
-				? [...new Set(search.snapshots as string[])].sort()
-				: undefined,
+			search.snapshots === "unknown"
+				? "unknown"
+				: Array.isArray(search.snapshots) &&
+						search.snapshots.length > 0 &&
+						search.snapshots.every((id) => typeof id === "string")
+					? [...new Set(search.snapshots as string[])].sort()
+					: undefined,
 		after:
 			Number.isSafeInteger(Number(search.after)) && Number(search.after) >= -1
 				? Number(search.after)
@@ -210,9 +212,10 @@ function RepositoryStrings() {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
 					localeIds: selectedLocaleIds,
-					introducedSnapshotIds: search.snapshots?.map((id) =>
-						convexId<"sourceSnapshots">(id),
-					),
+					introducedSnapshotIds: Array.isArray(search.snapshots)
+						? search.snapshots.map((id) => convexId<"sourceSnapshots">(id))
+						: undefined,
+					introducedOriginUnknown: search.snapshots === "unknown" || undefined,
 					after: search.after,
 					q: search.q,
 					scope: search.scope,
@@ -232,9 +235,10 @@ function RepositoryStrings() {
 					projectionId: overview.projectionId,
 					revision: overview.revision,
 					localeIds: selectedLocaleIds,
-					introducedSnapshotIds: search.snapshots?.map((id) =>
-						convexId<"sourceSnapshots">(id),
-					),
+					introducedSnapshotIds: Array.isArray(search.snapshots)
+						? search.snapshots.map((id) => convexId<"sourceSnapshots">(id))
+						: undefined,
+					introducedOriginUnknown: search.snapshots === "unknown" || undefined,
 				}
 			: "skip",
 	);

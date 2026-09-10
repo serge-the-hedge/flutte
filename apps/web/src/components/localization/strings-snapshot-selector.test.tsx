@@ -45,8 +45,10 @@ describe("snapshot selection", () => {
 		watch.mockRestore();
 		await client.close();
 	});
-	function Harness({ initial }: { initial?: string[] }) {
-		const [value, setValue] = useState(initial);
+	function Harness({ initial }: { initial?: string[] | "unknown" }) {
+		const [value, setValue] = useState<string[] | "unknown" | undefined>(
+			initial,
+		);
 		return (
 			<>
 				<StringsSnapshotSelector
@@ -58,7 +60,7 @@ describe("snapshot selection", () => {
 			</>
 		);
 	}
-	async function render(initial?: string[]) {
+	async function render(initial?: string[] | "unknown") {
 		await dom.render(
 			<ConvexProvider client={client}>
 				<Harness initial={initial} />
@@ -89,6 +91,7 @@ describe("snapshot selection", () => {
 		const rows = [...document.querySelectorAll('[role="menuitemcheckbox"]')];
 		expect(rows.map((row) => row.textContent)).toEqual([
 			expect.stringContaining("All snapshots"),
+			expect.stringContaining("Introduction unavailable"),
 			expect.stringContaining("New onboarding"),
 			expect.stringContaining("olderab"),
 		]);
@@ -107,5 +110,30 @@ describe("snapshot selection", () => {
 		await open();
 		await clickText("Old selected snapshot");
 		expect(dom.container.querySelector("output")?.textContent).toBe('"all"');
+	});
+	test("unknown origins are an explicit, exclusive selection", async () => {
+		await render("unknown");
+		expect(dom.container.querySelector("button")?.textContent).toContain(
+			"Introduction unavailable",
+		);
+		await open();
+		await clickText("New onboarding");
+		expect(dom.container.querySelector("output")?.textContent).toBe(
+			'["newer"]',
+		);
+		await clickText("Introduction unavailable");
+		expect(dom.container.querySelector("output")?.textContent).toBe(
+			'"unknown"',
+		);
+		await clickText("All snapshots");
+		expect(dom.container.querySelector("output")?.textContent).toBe('"all"');
+	});
+	test("bounds metadata requests for selections spanning several pages", async () => {
+		await render(["newer", "older", "linked", "fourth", "fifth"]);
+		const calls = watch.mock.calls.filter(
+			([query]) => getFunctionName(query) === "snapshotCatalog:getSelected",
+		);
+		expect(calls.length).toBeGreaterThanOrEqual(2);
+		expect(calls.every(([, args]) => args.snapshotIds.length <= 4)).toBe(true);
 	});
 });

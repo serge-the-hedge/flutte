@@ -9,10 +9,13 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@blabla/ui/components/dropdown-menu";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { usePaginatedQuery, useQueries } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api, convexId } from "@/lib/convex-api";
+
+const NO_SNAPSHOTS: string[] = [];
 
 export function StringsSnapshotSelector({
 	projectId,
@@ -20,24 +23,46 @@ export function StringsSnapshotSelector({
 	onChange,
 }: {
 	projectId: string;
-	value: string[] | undefined;
-	onChange: (ids: string[] | undefined) => void;
+	value: string[] | "unknown" | undefined;
+	onChange: (ids: string[] | "unknown" | undefined) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const project = convexId<"projects">(projectId);
-	const selected = useQuery(
-		api.snapshotCatalog.getSelected,
-		value?.length
-			? {
-					projectId: project,
-					snapshotIds: value.map((id) => convexId<"sourceSnapshots">(id)),
-				}
-			: "skip",
+	const ids = Array.isArray(value) ? value : NO_SNAPSHOTS;
+	const unknown = value === "unknown";
+	// Each metadata read stays bounded even when older identity documents are large.
+	const queries = useMemo(
+		() =>
+			Object.fromEntries(
+				Array.from({ length: Math.ceil(ids.length / 4) }, (_, index) => [
+					String(index),
+					{
+						query: api.snapshotCatalog.getSelected,
+						args: {
+							projectId: project,
+							snapshotIds: ids
+								.slice(index * 4, index * 4 + 4)
+								.map((id) => convexId<"sourceSnapshots">(id)),
+						},
+					},
+				]),
+			),
+		[ids, project],
 	);
+	const pages = useQueries(queries) as Record<
+		string,
+		| FunctionReturnType<typeof api.snapshotCatalog.getSelected>
+		| undefined
+		| Error
+	>;
+	const selected = Object.values(pages).flatMap((page) => {
+		if (page instanceof Error) throw page;
+		return page ?? [];
+	});
 	const { results, status, loadMore } = usePaginatedQuery(
 		api.snapshotCatalog.list,
 		open ? { projectId: project } : "skip",
-		{ initialNumItems: 20 },
+		{ initialNumItems: 4 },
 	);
 	// A linked selection can be older than the loaded pages. Keep it visible and removable.
 	const snapshots = [
@@ -48,10 +73,11 @@ export function StringsSnapshotSelector({
 		(a, b) =>
 			b.createdAt - a.createdAt || b.snapshotId.localeCompare(a.snapshotId),
 	);
-	const count = value?.length ?? 0;
+	const count = ids.length;
 	const single = selected?.[0];
-	const label =
-		count === 0
+	const label = unknown
+		? "Introduction unavailable"
+		: count === 0
 			? "Introduced in"
 			: count === 1 && single
 				? (single.name ?? new Date(single.createdAt).toLocaleDateString())
@@ -60,7 +86,7 @@ export function StringsSnapshotSelector({
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger
 				render={<Button variant="outline" />}
-				aria-label={`Introduced in: ${count ? label : "all snapshots"}`}
+				aria-label={`Introduced in: ${count || unknown ? label : "all snapshots"}`}
 			>
 				<span className="max-w-48 truncate">{label}</span>
 				<ChevronDown />
@@ -69,23 +95,37 @@ export function StringsSnapshotSelector({
 				<DropdownMenuGroup>
 					<DropdownMenuLabel>Introduced in · newest first</DropdownMenuLabel>
 					<DropdownMenuCheckboxItem
-						checked={!count}
+						checked={!count && !unknown}
 						closeOnClick={false}
 						onCheckedChange={() => onChange(undefined)}
 					>
 						All snapshots
 					</DropdownMenuCheckboxItem>
+					<DropdownMenuCheckboxItem
+						checked={unknown}
+						closeOnClick={false}
+						onCheckedChange={(checked) =>
+							onChange(checked ? "unknown" : undefined)
+						}
+					>
+						<span className="flex flex-col gap-1">
+							Introduction unavailable
+							<span className="text-muted-foreground">
+								Older strings without a proven snapshot
+							</span>
+						</span>
+					</DropdownMenuCheckboxItem>
 					<DropdownMenuSeparator />
 					{snapshots.map((snapshot) => (
 						<DropdownMenuCheckboxItem
 							key={snapshot.snapshotId}
-							checked={value?.includes(snapshot.snapshotId) ?? false}
+							checked={ids.includes(snapshot.snapshotId) ?? false}
 							closeOnClick={false}
-							disabled={count >= 32 && !value?.includes(snapshot.snapshotId)}
+							disabled={count >= 32 && !ids.includes(snapshot.snapshotId)}
 							onCheckedChange={(checked) => {
 								const next = checked
-									? [...(value ?? []), snapshot.snapshotId]
-									: (value?.filter((id) => id !== snapshot.snapshotId) ?? []);
+									? [...ids, snapshot.snapshotId]
+									: ids.filter((id) => id !== snapshot.snapshotId);
 								onChange(next.length ? next.sort() : undefined);
 							}}
 						>
@@ -123,7 +163,7 @@ export function StringsSnapshotSelector({
 						<DropdownMenuItem
 							closeOnClick={false}
 							disabled={status === "LoadingMore"}
-							onClick={() => loadMore(20)}
+							onClick={() => loadMore(4)}
 						>
 							{status === "LoadingMore" ? "Loading…" : "Older snapshots"}
 						</DropdownMenuItem>
