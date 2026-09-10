@@ -3,7 +3,7 @@ import { Button } from "@blabla/ui/components/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 export const prototypeVariants = {
-	A: "Inline expansion",
+	A: "Long values only",
 	B: "Reading pane",
 	C: "Compact table",
 } as const;
@@ -23,7 +23,7 @@ export function PrototypeSwitcher({
 			if (
 				!(event.target instanceof Element) ||
 				event.target.closest(
-					'input,textarea,select,[contenteditable], [role="dialog"]',
+					'input,textarea,select,[contenteditable], [role="dialog"], dialog',
 				) ||
 				event.altKey ||
 				event.metaKey ||

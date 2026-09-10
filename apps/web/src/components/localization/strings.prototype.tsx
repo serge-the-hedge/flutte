@@ -12,8 +12,8 @@ import {
 } from "@blabla/ui/components/sheet";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
-import { Check, ChevronDown, Download, Tag, X } from "lucide-react";
-import { useState } from "react";
+import { Check, ChevronDown, Download, Maximize2, Tag, X } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
 	PrototypeSwitcher,
 	type PrototypeVariant,
@@ -28,8 +28,6 @@ type ViewProps = {
 	onSelect: (id: string) => void;
 	onOpen: (id: string | null) => void;
 	onChange: (row: PrototypeString) => void;
-	expanded: string[];
-	onExpanded: (ids: string[]) => void;
 };
 function CheckRow({
 	id,
@@ -198,8 +196,215 @@ function TextEditor({
 		</div>
 	);
 }
+function ValueDraft({
+	text,
+	limit,
+	label,
+	focused = false,
+	onSave,
+	onClose,
+}: {
+	text: string;
+	limit?: number;
+	label: string;
+	focused?: boolean;
+	onSave: (text: string) => void;
+	onClose: () => void;
+}) {
+	const [draft, setDraft] = useState(text);
+	const input = useRef<HTMLTextAreaElement>(null);
+	const count = Array.from(draft).length;
+	const tooLong = limit !== undefined && count > limit;
+	useEffect(() => {
+		input.current?.focus({ preventScroll: true });
+	}, []);
+	return (
+		<div className="flex min-h-0 flex-col gap-3">
+			<Textarea
+				ref={input}
+				aria-label={label}
+				value={draft}
+				className={cn(
+					"resize-none text-sm leading-relaxed",
+					focused ? "h-[55svh] min-h-40" : "min-h-20",
+				)}
+				onChange={(event) => setDraft(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Escape") {
+						event.preventDefault();
+						onClose();
+					}
+					if (
+						event.key === "Enter" &&
+						(event.metaKey || event.ctrlKey) &&
+						!tooLong
+					) {
+						event.preventDefault();
+						onSave(draft);
+					}
+				}}
+			/>
+			<div className="flex items-center gap-2">
+				<span
+					className={cn(
+						"mr-auto text-xs",
+						tooLong ? "text-destructive" : "text-muted-foreground",
+					)}
+				>
+					{count.toLocaleString()}
+					{limit === undefined ? " characters" : ` / ${limit.toLocaleString()}`}
+				</span>
+				<Button size="sm" variant="ghost" onClick={onClose}>
+					Cancel
+				</Button>
+				<Button size="sm" disabled={tooLong} onClick={() => onSave(draft)}>
+					Save
+				</Button>
+			</div>
+		</div>
+	);
+}
+function FocusedValue({
+	row,
+	value,
+	onSave,
+	onClose,
+}: {
+	row: PrototypeString;
+	value: PrototypeString["values"][number];
+	onSave: (text: string) => void;
+	onClose: () => void;
+}) {
+	const dialog = useRef<HTMLDialogElement>(null);
+	const titleId = useId();
+	useEffect(() => {
+		dialog.current?.showModal();
+		dialog.current?.querySelector("textarea")?.focus({ preventScroll: true });
+	}, []);
+	return (
+		<dialog
+			ref={dialog}
+			aria-labelledby={titleId}
+			onCancel={onClose}
+			className="fixed inset-0 m-auto max-h-[90svh] w-[min(48rem,calc(100vw-2rem))] overflow-auto rounded-lg border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/40"
+		>
+			<div className="mb-4 flex items-center gap-3">
+				<h2
+					id={titleId}
+					className="min-w-0 flex-1 truncate font-medium text-sm"
+				>
+					{row.name ? `${row.name} · ` : ""}
+					{value.code}
+				</h2>
+				<Button
+					size="icon-sm"
+					variant="ghost"
+					aria-label="Close editor"
+					onClick={onClose}
+				>
+					<X />
+				</Button>
+			</div>
+			<ValueDraft
+				text={value.text}
+				limit={row.limit}
+				label={`Edit ${value.code}`}
+				focused
+				onSave={onSave}
+				onClose={onClose}
+			/>
+		</dialog>
+	);
+}
+function CompactValue({
+	row,
+	value,
+	onChange,
+}: {
+	row: PrototypeString;
+	value: PrototypeString["values"][number];
+	onChange: (row: PrototypeString) => void;
+}) {
+	const preview = useRef<HTMLButtonElement>(null);
+	const [overflow, setOverflow] = useState(false);
+	const [editing, setEditing] = useState<"inline" | "focused" | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Changed text can overflow without changing the clamped element height.
+	useEffect(() => {
+		const element = preview.current;
+		if (!element || editing === "inline") return;
+		const measure = () =>
+			setOverflow(element.scrollHeight > element.clientHeight + 1);
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [value.text, editing]);
+	const close = () => {
+		setEditing(null);
+		// Wait for the inline preview to mount before restoring keyboard focus.
+		requestAnimationFrame(() =>
+			preview.current?.focus({ preventScroll: true }),
+		);
+	};
+	const save = (text: string) => {
+		onChange({
+			...row,
+			values: row.values.map((v) =>
+				v.code === value.code ? { ...v, text, reviewed: false } : v,
+			),
+		});
+		close();
+	};
+	return (
+		<div
+			className="grid grid-cols-[56px_minmax(0,1fr)] gap-3 py-2"
+			data-compact-value={value.code}
+		>
+			<span className="pt-0.5 text-[11px] text-muted-foreground">
+				{value.code}
+			</span>
+			{editing === "inline" ? (
+				<ValueDraft
+					text={value.text}
+					limit={row.limit}
+					label={`Edit ${value.code}`}
+					onSave={save}
+					onClose={close}
+				/>
+			) : (
+				<div className="relative min-w-0 pr-8">
+					<button
+						ref={preview}
+						type="button"
+						aria-label={`Edit ${value.code}`}
+						className="line-clamp-3 w-full whitespace-pre-wrap text-left text-sm leading-relaxed [overflow-wrap:anywhere] hover:bg-muted/40"
+						onClick={() => setEditing(overflow ? "focused" : "inline")}
+					>
+						{value.text || (
+							<span className="text-muted-foreground">Add translation…</span>
+						)}
+					</button>
+					{overflow ? (
+						<Button
+							size="icon-xs"
+							variant="ghost"
+							className="absolute top-0 right-0 text-muted-foreground"
+							aria-label={`Expand ${value.code}`}
+							title="Expand text"
+							onClick={() => setEditing("focused")}
+						>
+							<Maximize2 className="size-3.5" />
+						</Button>
+					) : null}
+				</div>
+			)}
+			{editing === "focused" ? (
+				<FocusedValue row={row} value={value} onSave={save} onClose={close} />
+			) : null}
+		</div>
+	);
+}
 export function VariantA(p: ViewProps) {
-	const { expanded, onExpanded: setExpanded } = p;
 	return (
 		<div className="divide-y">
 			{p.rows.map((row) => (
@@ -213,74 +418,16 @@ export function VariantA(p: ViewProps) {
 							<Tags row={row} onChange={p.onChange} />
 						</div>
 					</div>
-					<div className="flex flex-col gap-1">
-						{row.values
-							.filter((v) => p.codes.includes(v.code))
-							.map((v) => {
-								const id = `${row.id}:${v.code}`;
-								const open = expanded.includes(id);
-								return (
-									<div
-										key={v.code}
-										className="grid grid-cols-[56px_1fr] gap-3 py-1.5"
-									>
-										<span className="pt-0.5 text-[11px] text-muted-foreground">
-											{v.code}
-										</span>
-										<div>
-											<button
-												type="button"
-												aria-expanded={open}
-												className={cn(
-													"w-full whitespace-pre-wrap text-left text-sm leading-relaxed hover:bg-muted/40",
-													"line-clamp-2",
-												)}
-												onClick={() =>
-													setExpanded(
-														open
-															? expanded.filter((x) => x !== id)
-															: [...expanded, id],
-													)
-												}
-											>
-												{v.text || (
-													<span className="text-muted-foreground">
-														Add translation…
-													</span>
-												)}
-											</button>
-											{v.text.length > 180 || open ? (
-												<Button
-													variant="ghost"
-													size="xs"
-													onClick={() =>
-														setExpanded(
-															open
-																? expanded.filter((x) => x !== id)
-																: [...expanded, id],
-														)
-													}
-												>
-													{open
-														? "Collapse"
-														: `Read ${Array.from(v.text).length.toLocaleString()} characters`}
-												</Button>
-											) : null}
-											{open ? (
-												<div className="max-h-96 overflow-auto border-l pl-4">
-													<TextEditor
-														key={id}
-														row={row}
-														codes={[v.code]}
-														onChange={p.onChange}
-													/>
-												</div>
-											) : null}
-										</div>
-									</div>
-								);
-							})}
-					</div>
+					{row.values
+						.filter((v) => p.codes.includes(v.code))
+						.map((v) => (
+							<CompactValue
+								key={v.code}
+								row={row}
+								value={v}
+								onChange={p.onChange}
+							/>
+						))}
 				</article>
 			))}
 		</div>
@@ -486,7 +633,6 @@ export function StringsPrototype({
 	const [selected, setSelected] = useState<string[]>([]);
 	const [active, setActive] = useState<string | null>(null);
 	const [examples, setExamples] = useState(false);
-	const [expanded, setExpanded] = useState<string[]>([]);
 	const rawRows = examples
 		? [
 				...rows,
@@ -541,7 +687,6 @@ export function StringsPrototype({
 	);
 	const state = {
 		variant,
-		expandedValues: expanded,
 		tagsByKey: Object.fromEntries(rows.map((r) => [r.id, r.tags])),
 		data: localSnapshot ? "Local Marketing snapshot" : "Examples",
 		tags,
@@ -556,8 +701,6 @@ export function StringsPrototype({
 		exampleGroups: examples,
 	};
 	const props: ViewProps = {
-		expanded,
-		onExpanded: setExpanded,
 		rows: filtered,
 		codes,
 		selected,
