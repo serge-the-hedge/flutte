@@ -7,9 +7,12 @@ import {
 	query,
 } from "./_generated/server";
 import { MAX_CONTENT_COLLECTIONS, MAX_MANAGED_LOCALES } from "./contentModel";
-import { normalizeLocaleCode } from "./lib";
-import { createLocaleIdentity } from "./locales";
-import { requireEditor, requireViewer } from "./permissions";
+import { createLocaleIdentity, normalizeLocaleMetadata } from "./locales";
+import {
+	assertProjectExists,
+	requireEditor,
+	requireViewer,
+} from "./permissions";
 
 type ReadCtx = QueryCtx | MutationCtx;
 export async function requireManagedCollection(
@@ -219,6 +222,89 @@ export const setLocales = mutation({
 });
 
 /** One language transition per transaction; concurrent edits never replace a whole selection. */
+export async function addManagedLocale(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		collectionId: Id<"contentCollections">;
+		code: string;
+		label?: string;
+	},
+) {
+	const collection = await requireManagedCollection(
+		ctx,
+		args.projectId,
+		args.collectionId,
+	);
+	const { code } = normalizeLocaleMetadata(args.code, args.label);
+	const project = await assertProjectExists(ctx, args.projectId);
+	if (project.migrationPending)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Project content is still moving. Editing is available after completion.",
+		});
+	if (!project?.sourceLocaleId)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "Configure the project's source language first.",
+		});
+	const existing = await ctx.db
+		.query("locales")
+		.withIndex("by_project_code", (q) =>
+			q.eq("projectId", args.projectId).eq("code", code),
+		)
+		.unique();
+	if (existing?.isSource || existing?._id === project.sourceLocaleId)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "The source language is already included.",
+		});
+	const localeId =
+		existing && existing.archivedAt === undefined
+			? existing._id
+			: await createLocaleIdentity(ctx, {
+					projectId: args.projectId,
+					code,
+					label: args.label?.trim() || existing?.label,
+				});
+	const membership = await ctx.db
+		.query("contentCollectionLocales")
+		.withIndex("by_collection_locale", (q) =>
+			q.eq("collectionId", args.collectionId).eq("localeId", localeId),
+		)
+		.unique();
+	if (membership?.active) {
+		if (args.label?.trim() && existing && args.label.trim() !== existing.label)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"This language is already active with a different name. Edit its name instead of adding it again.",
+			});
+		return { localeId, membershipRevision: collection.membershipRevision };
+	}
+	if (existing && args.label?.trim() && args.label.trim() !== existing.label)
+		await ctx.db.patch(localeId, { label: args.label.trim() });
+	if (membership) await ctx.db.patch(membership._id, { active: true });
+	else {
+		const members = await collectionMemberships(ctx, args.collectionId);
+		if (members.length >= MAX_MANAGED_LOCALES)
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message:
+					"Collection language history exceeds its configuration bounds.",
+			});
+		await ctx.db.insert("contentCollectionLocales", {
+			projectId: args.projectId,
+			collectionId: args.collectionId,
+			localeId,
+			active: true,
+		});
+	}
+	const membershipRevision = collection.membershipRevision + 1;
+	await ctx.db.patch(collection._id, { membershipRevision });
+	return { localeId, membershipRevision };
+}
 export const addLocale = mutation({
 	args: {
 		projectId: v.id("projects"),
@@ -228,82 +314,7 @@ export const addLocale = mutation({
 	},
 	handler: async (ctx, args) => {
 		await requireEditor(ctx, args.projectId);
-		const collection = await requireManagedCollection(
-			ctx,
-			args.projectId,
-			args.collectionId,
-		);
-		const code = normalizeLocaleCode(args.code);
-		if (code.length > 64 || !/^[a-z]{2,8}(?:-[A-Z0-9]{1,8})*$/.test(code))
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "Enter a language code such as fr or pt-BR.",
-			});
-		if (
-			args.label !== undefined &&
-			(Array.from(args.label.trim()).length > 256 ||
-				Array.from(args.label).some((character) => {
-					const code = character.codePointAt(0) ?? 0;
-					return code < 32 || (code >= 127 && code <= 159);
-				}))
-		)
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					"Language names support at most 256 characters without controls.",
-			});
-		const project = await ctx.db.get(args.projectId);
-		if (!project?.sourceLocaleId)
-			throw new ConvexError({
-				code: "BAD_STATE",
-				message: "Configure the project's source language first.",
-			});
-		const existing = await ctx.db
-			.query("locales")
-			.withIndex("by_project_code", (q) =>
-				q.eq("projectId", args.projectId).eq("code", code),
-			)
-			.unique();
-		if (existing?.isSource || existing?._id === project.sourceLocaleId)
-			throw new ConvexError({
-				code: "VALIDATION",
-				message: "The source language is already included.",
-			});
-		const localeId =
-			existing && existing.archivedAt === undefined
-				? existing._id
-				: await createLocaleIdentity(ctx, {
-						projectId: args.projectId,
-						code,
-						label: args.label ?? existing?.label,
-					});
-		const membership = await ctx.db
-			.query("contentCollectionLocales")
-			.withIndex("by_collection_locale", (q) =>
-				q.eq("collectionId", args.collectionId).eq("localeId", localeId),
-			)
-			.unique();
-		if (membership?.active)
-			return { localeId, membershipRevision: collection.membershipRevision };
-		if (membership) await ctx.db.patch(membership._id, { active: true });
-		else {
-			const members = await collectionMemberships(ctx, args.collectionId);
-			if (members.length >= MAX_MANAGED_LOCALES)
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message:
-						"Collection language history exceeds its configuration bounds.",
-				});
-			await ctx.db.insert("contentCollectionLocales", {
-				projectId: args.projectId,
-				collectionId: args.collectionId,
-				localeId,
-				active: true,
-			});
-		}
-		const membershipRevision = collection.membershipRevision + 1;
-		await ctx.db.patch(collection._id, { membershipRevision });
-		return { localeId, membershipRevision };
+		return await addManagedLocale(ctx, args);
 	},
 });
 /** Deactivation retains the language identity and all its translations for a later re-add. */

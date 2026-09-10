@@ -34,6 +34,13 @@ Use the language filter and **Load more tasks** to find older work.
 Add terminology and an optional Locale add-on in Translation guidance. The
 general Voice Guide applies to every language. Agents discover configured
 targets and use the same task workflow through the [Agent API](agent-api.md).
+Agents with an explicitly granted `languages-write` scope can also configure
+languages through the [language API](../agent-kit/_blabla/references/languages-api.md).
+Existing translator tokens need replacement to add this immutable scope.
+
+Existing repository language names can be edited in Settings → Languages.
+Their codes remain bound to repository identity; ordinary renaming does not
+rewrite catalog paths, snapshots or prepared artifacts.
 
 ## Translate and review
 

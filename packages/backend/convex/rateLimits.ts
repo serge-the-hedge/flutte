@@ -5,6 +5,12 @@ import { components } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 
 export const agentRateLimiter = new RateLimiter(components.rateLimiter, {
+	agentLanguagesWrite: {
+		kind: "token bucket",
+		rate: 60,
+		period: MINUTE,
+		capacity: 12,
+	},
 	agentDictionaryWrite: {
 		kind: "token bucket",
 		rate: 60,
@@ -66,6 +72,7 @@ export const consume = internalMutation({
 	args: {
 		name: v.union(
 			v.literal("agentDictionaryWrite"),
+			v.literal("agentLanguagesWrite"),
 			v.literal("agentRead"),
 			v.literal("agentReview"),
 			v.literal("agentSearch"),

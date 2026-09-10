@@ -7,7 +7,7 @@ no MCP server or hosted agent runtime is required.
 | Skill | Assignment |
 | --- | --- |
 | [blabla-context](blabla-context/SKILL.md) | Find established wording, terms, voice guidance, and reviewed examples |
-| [blabla-translate](blabla-translate/SKILL.md) | Translate/correct task messages or prepare a configured language |
+| [blabla-translate](blabla-translate/SKILL.md) | Translate/correct task messages or manage assigned languages |
 | [blabla-review](blabla-review/SKILL.md) | Independently review exact authorized revisions |
 | [blabla-dictionary](blabla-dictionary/SKILL.md) | Deliberately maintain active shared terminology |
 

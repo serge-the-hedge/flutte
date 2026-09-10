@@ -23,6 +23,122 @@ import { correctGuidanceLocaleCode } from "./translationGuidance";
 
 export { normalizeCatalogPath } from "./catalogPaths";
 
+/** The same accepted spelling and name bounds apply when adding or editing. */
+export function normalizeLocaleMetadata(
+	codeInput: string,
+	labelInput?: string,
+) {
+	const code = normalizeLocaleCode(codeInput);
+	if (code.length > 64 || !/^[a-z]{2,8}(?:-[A-Z0-9]{1,8})*$/.test(code))
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Enter a language code such as fr or pt-BR.",
+		});
+	if (
+		labelInput !== undefined &&
+		(Array.from(labelInput.trim()).length > 256 ||
+			Array.from(labelInput).some((character) => {
+				const point = character.codePointAt(0) ?? 0;
+				return point < 32 || (point >= 127 && point <= 159);
+			}))
+	)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"Language names support at most 256 characters without controls.",
+		});
+	return { code, label: labelInput?.trim() || code };
+}
+
+const metadataArgs = {
+	projectId: v.id("projects"),
+	localeId: v.id("locales"),
+	code: v.string(),
+	label: v.string(),
+	expectedCode: v.string(),
+	expectedLabel: v.string(),
+};
+
+/** Change presentation metadata without replacing the identity used by values and history.
+ * The caller authorizes editing; repository codes belong to immutable catalog evidence. */
+export async function updateLocaleMetadata(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		localeId: Id<"locales">;
+		code: string;
+		label: string;
+		expectedCode: string;
+		expectedLabel: string;
+	},
+	authoredBy: { kind: "user" | "agent"; id: string },
+) {
+	const project = await assertProjectExists(ctx, args.projectId);
+	if (project.migrationPending)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Project content is still moving. Editing is available after completion.",
+		});
+	const locale = await ctx.db.get(args.localeId);
+	if (
+		!locale ||
+		locale.projectId !== args.projectId ||
+		locale.archivedAt !== undefined ||
+		locale.pendingBinding
+	)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Active language not found.",
+		});
+	if (locale.code !== args.expectedCode || locale.label !== args.expectedLabel)
+		throw new ConvexError({
+			code: "CONFLICT",
+			message: "This language changed. Reload its code and name before saving.",
+		});
+	const { code, label } = normalizeLocaleMetadata(args.code, args.label);
+	if (code !== locale.code) {
+		if (project.type !== "basic")
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Repository language codes cannot be edited here. Correct the binding in Sync before the first snapshot; existing snapshots retain their language codes.",
+			});
+		const existing = await ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", args.projectId).eq("code", code),
+			)
+			.unique();
+		if (existing && existing._id !== locale._id)
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: `The language code "${code}" is already in use, including retained language history.`,
+			});
+		await correctGuidanceLocaleCode(ctx, {
+			projectId: args.projectId,
+			fromCode: locale.code,
+			toCode: code,
+			isSource: locale.isSource,
+			authoredBy,
+		});
+	}
+	if (code !== locale.code || label !== locale.label) {
+		await ctx.db.patch(locale._id, { code, label });
+		await ctx.db.patch(project._id, { updatedAt: now() });
+	}
+	return locale._id;
+}
+
+export const updateMetadata = mutation({
+	args: metadataArgs,
+	returns: v.id("locales"),
+	handler: async (ctx, args) => {
+		const { userId } = await requireEditor(ctx, args.projectId);
+		return await updateLocaleMetadata(ctx, args, { kind: "user", id: userId });
+	},
+});
+
 /** Locale identities with managed history cannot be folded into another code. */
 async function assertNoManagedLocaleHistory(
 	ctx: MutationCtx,
@@ -715,7 +831,7 @@ export const correctSetupBinding = mutation({
 				fromCode: locale.code,
 				toCode: code,
 				isSource: locale.isSource,
-				userId,
+				authoredBy: { kind: "user", id: userId },
 			});
 		}
 		await ctx.db.patch(locale._id, { code, label, catalogPath });

@@ -412,8 +412,16 @@ export function ManagedStrings({
 					enabledLocaleIds={collection.localeIds}
 					blockedLocaleIds={
 						hasUnsaved
-							? enabled.map((locale) => locale._id)
-							: composerTargetDrafts
+							? [
+									...enabled.map((locale) => locale._id),
+									sourceLocale?._id ?? "",
+								]
+							: [
+									...composerTargetDrafts,
+									...(composerDirty || formDirty
+										? [sourceLocale?._id ?? ""]
+										: []),
+								]
 					}
 					disabled={busy || !canEdit}
 					onUnsavedWorkChange={setLanguageDirty}

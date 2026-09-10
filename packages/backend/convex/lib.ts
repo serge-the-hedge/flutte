@@ -9,6 +9,7 @@ export const tokenScopeValidator = v.union(
 	v.literal("search"),
 	v.literal("propose"),
 	v.literal("dictionary-write"),
+	v.literal("languages-write"),
 	v.literal("export"),
 	v.literal("snapshot-submission"),
 );

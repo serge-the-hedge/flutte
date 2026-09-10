@@ -51,6 +51,7 @@ const internalApi = internal;
 type AgentScope = TokenScope;
 type AgentRateLimitName =
 	| "agentDictionaryWrite"
+	| "agentLanguagesWrite"
 	| "agentRead"
 	| "agentReview"
 	| "agentSearch"
@@ -71,7 +72,7 @@ const MAX_TRANSLATION_TASK_PAGE_BYTES = 1024 * 1024;
 
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",
-	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+	"Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers":
 		"Content-Type, Authorization, X-Blabla-CLI-Version, X-Blabla-CLI-Protocol",
 	"Access-Control-Expose-Headers":
@@ -1405,6 +1406,103 @@ http.route({
 				NOT_FOUND: 404,
 				FORBIDDEN: 403,
 				STALE_BASIS: 409,
+			});
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/languages",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", (token) =>
+					ctx.runQuery(internalApi.agentLanguages.list, { token }),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/languages",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			const optionalString = (field: string) =>
+				body[field] === undefined ? undefined : jsonString(body, field);
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"languages-write",
+					"agentLanguagesWrite",
+					(token) =>
+						ctx.runMutation(internalApi.agentLanguages.add, {
+							token,
+							code: requiredJsonString(body, "code"),
+							label: optionalString("label"),
+							catalogPath: optionalString("catalogPath"),
+							runtimeLocale: optionalString("runtimeLocale"),
+							expectedUpdatedAt:
+								body.expectedUpdatedAt === undefined
+									? undefined
+									: requiredJsonNumber(body, "expectedUpdatedAt"),
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, {
+				NOT_FOUND: 404,
+				CONFLICT: 409,
+				STALE_BASIS: 409,
+				FORBIDDEN: 403,
+			});
+		}
+	}),
+});
+
+http.route({
+	pathPrefix: "/api/agent/v1/languages/",
+	method: "PATCH",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const match = new URL(request.url).pathname.match(
+				/^\/api\/agent\/v1\/languages\/([^/]+)$/,
+			);
+			if (!match?.[1])
+				return json(
+					{ code: "NOT_FOUND", error: "Language endpoint not found." },
+					404,
+				);
+			const body = await jsonObject(request);
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"languages-write",
+					"agentLanguagesWrite",
+					(token) =>
+						ctx.runMutation(internalApi.agentLanguages.update, {
+							token,
+							localeId: match[1] as Id<"locales">,
+							code: requiredJsonString(body, "code"),
+							label: jsonString(body, "label"),
+							expectedCode: requiredJsonString(body, "expectedCode"),
+							expectedLabel: jsonString(body, "expectedLabel"),
+						}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, {
+				NOT_FOUND: 404,
+				CONFLICT: 409,
+				STALE_BASIS: 409,
+				FORBIDDEN: 403,
 			});
 		}
 	}),

@@ -8,7 +8,11 @@ import {
 } from "./_generated/server";
 import { normalizeCatalogPath } from "./catalogPaths";
 import { isRepositoryLocale, normalizeLocaleCode, now } from "./lib";
-import { requireEditor, requireViewer } from "./permissions";
+import {
+	assertProjectExists,
+	requireEditor,
+	requireViewer,
+} from "./permissions";
 
 export const MAX_LOCALE_INTRODUCTION_TARGETS = 128;
 type ReadCtx = QueryCtx | MutationCtx;
@@ -72,102 +76,127 @@ const targetFields = {
 };
 
 /** Configuration controls future proposals. Existing proposals retain their pinned identity. */
+export async function saveIntroductionTarget(
+	ctx: MutationCtx,
+	args: {
+		projectId: Id<"projects">;
+		localeCode: string;
+		label: string;
+		catalogPath: string;
+		runtimeLocale: string;
+	},
+	actorId: string,
+) {
+	const project = await assertProjectExists(ctx, args.projectId);
+	if (project.type === "basic")
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Basic project languages do not need repository delivery configuration.",
+		});
+	if (project.migrationPending)
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message:
+				"Project content is still moving. Editing is available after completion.",
+		});
+	const localeCode = normalizeLocaleCode(args.localeCode);
+	const label = args.label.trim();
+	const catalogPath = normalizeCatalogPath(args.catalogPath);
+	const runtimeLocale = args.runtimeLocale.trim();
+	if (runtimeLocale.split("-")[0] !== localeCode)
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"The runtime locale must use the same language as the catalog code.",
+		});
+	if (
+		!/^[a-z]{2,3}$/.test(localeCode) ||
+		!label ||
+		label.length > 128 ||
+		catalogPath.length > 512 ||
+		!catalogPath.endsWith(".arb") ||
+		!/^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/.test(
+			runtimeLocale,
+		)
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message:
+				"This Flutter adapter needs a language-only catalog code (2–3 letters), a label, an ARB path, and an explicit runtime locale (language, optional Script and REGION).",
+		});
+	}
+	const [source, existingLocale, pathClaim] = await Promise.all([
+		ctx.db
+			.query("locales")
+			.withIndex("by_project_source", (q) =>
+				q.eq("projectId", args.projectId).eq("isSource", true),
+			)
+			.unique(),
+		ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", args.projectId).eq("code", localeCode),
+			)
+			.unique(),
+		ctx.db
+			.query("locales")
+			.withIndex("by_project_catalogPath", (q) =>
+				q.eq("projectId", args.projectId).eq("catalogPath", catalogPath),
+			)
+			.unique(),
+	]);
+	assertIntroductionCatalogPath(catalogPath, source?.catalogPath);
+	if (
+		(existingLocale && isRepositoryLocale(existingLocale)) ||
+		(pathClaim && pathClaim.code !== localeCode)
+	) {
+		throw new ConvexError({
+			code: "CONFLICT",
+			message:
+				"The Locale is already active or its catalog path is claimed by another Locale.",
+		});
+	}
+	const targets = await configuredIntroductionTargets(ctx, args.projectId);
+	if (
+		targets.some(
+			(target) =>
+				target.catalogPath === catalogPath && target.localeCode !== localeCode,
+		)
+	)
+		throw new ConvexError({
+			code: "CONFLICT",
+			message: "Another introduction target already uses this catalog path.",
+		});
+	const existing = targets.find((target) => target.localeCode === localeCode);
+	const fields = {
+		localeCode,
+		label,
+		catalogPath,
+		runtimeLocale,
+		updatedBy: actorId,
+		updatedAt: Math.max(now(), (existing?.updatedAt ?? 0) + 1),
+	};
+	if (existing) {
+		await ctx.db.patch(existing._id, fields);
+		return existing._id;
+	}
+	if (targets.length >= MAX_LOCALE_INTRODUCTION_TARGETS)
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "At most 128 Locale introduction targets can be configured.",
+		});
+	return await ctx.db.insert("localeIntroductionTargets", {
+		projectId: args.projectId,
+		...fields,
+		createdAt: now(),
+	});
+}
 export const save = mutation({
 	args: { projectId: v.id("projects"), ...targetFields },
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
-		const localeCode = normalizeLocaleCode(args.localeCode);
-		const label = args.label.trim();
-		const catalogPath = normalizeCatalogPath(args.catalogPath);
-		const runtimeLocale = args.runtimeLocale.trim();
-		if (runtimeLocale.split("-")[0] !== localeCode)
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					"The runtime locale must use the same language as the catalog code.",
-			});
-		if (
-			!/^[a-z]{2,3}$/.test(localeCode) ||
-			!label ||
-			label.length > 128 ||
-			catalogPath.length > 512 ||
-			!catalogPath.endsWith(".arb") ||
-			!/^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/.test(
-				runtimeLocale,
-			)
-		) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					"This Flutter adapter needs a language-only catalog code (2–3 letters), a label, an ARB path, and an explicit runtime locale (language, optional Script and REGION).",
-			});
-		}
-		const [source, existingLocale, pathClaim] = await Promise.all([
-			ctx.db
-				.query("locales")
-				.withIndex("by_project_source", (q) =>
-					q.eq("projectId", args.projectId).eq("isSource", true),
-				)
-				.unique(),
-			ctx.db
-				.query("locales")
-				.withIndex("by_project_code", (q) =>
-					q.eq("projectId", args.projectId).eq("code", localeCode),
-				)
-				.unique(),
-			ctx.db
-				.query("locales")
-				.withIndex("by_project_catalogPath", (q) =>
-					q.eq("projectId", args.projectId).eq("catalogPath", catalogPath),
-				)
-				.unique(),
-		]);
-		assertIntroductionCatalogPath(catalogPath, source?.catalogPath);
-		if (
-			(existingLocale && isRepositoryLocale(existingLocale)) ||
-			(pathClaim && pathClaim.code !== localeCode)
-		) {
-			throw new ConvexError({
-				code: "CONFLICT",
-				message:
-					"The Locale is already active or its catalog path is claimed by another Locale.",
-			});
-		}
-		const targets = await configuredIntroductionTargets(ctx, args.projectId);
-		if (
-			targets.some(
-				(target) =>
-					target.catalogPath === catalogPath &&
-					target.localeCode !== localeCode,
-			)
-		)
-			throw new ConvexError({
-				code: "CONFLICT",
-				message: "Another introduction target already uses this catalog path.",
-			});
-		const existing = targets.find((target) => target.localeCode === localeCode);
-		const fields = {
-			localeCode,
-			label,
-			catalogPath,
-			runtimeLocale,
-			updatedBy: userId,
-			updatedAt: now(),
-		};
-		if (existing) {
-			await ctx.db.patch(existing._id, fields);
-			return existing._id;
-		}
-		if (targets.length >= MAX_LOCALE_INTRODUCTION_TARGETS)
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: "At most 128 Locale introduction targets can be configured.",
-			});
-		return await ctx.db.insert("localeIntroductionTargets", {
-			projectId: args.projectId,
-			...fields,
-			createdAt: now(),
-		});
+		return await saveIntroductionTarget(ctx, args, userId);
 	},
 });
 

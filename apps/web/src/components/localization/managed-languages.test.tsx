@@ -125,4 +125,82 @@ describe("immediate Basic language management", () => {
 		expect(dom.container.querySelector("input")?.value).toBe("");
 		expect(calls).toHaveLength(2);
 	});
+	test("edits a source language without changing its identity or offering removal", async () => {
+		const dirty: boolean[] = [];
+		await render({ onUnsavedWorkChange: (value) => dirty.push(value) });
+		expect(
+			dom.container.querySelector('button[aria-label="Remove English"]'),
+		).toBeNull();
+		await act(async () =>
+			dom.container
+				.querySelector<HTMLButtonElement>('button[aria-label="Edit English"]')
+				?.click(),
+		);
+		await type(0, "en-GB");
+		await type(1, "British English");
+		expect(dirty.at(-1)).toBe(true);
+		await submit();
+		expect(calls).toEqual([
+			{
+				name: "locales:updateMetadata",
+				args: {
+					projectId: "project-id",
+					localeId: "en-id",
+					code: "en-GB",
+					label: "British English",
+					expectedCode: "en",
+					expectedLabel: "English",
+				},
+			},
+		]);
+		expect(
+			dom.container.querySelector('form[aria-label="Edit English"]'),
+		).toBeNull();
+		expect(dirty.at(-1)).toBe(false);
+	});
+	test("locks a draft language's code but allows its display name to change", async () => {
+		await render({ blockedLocaleIds: ["fr-id"] });
+		await act(async () =>
+			dom.container
+				.querySelector<HTMLButtonElement>('button[aria-label="Edit French"]')
+				?.click(),
+		);
+		expect(
+			dom.container.querySelector<HTMLInputElement>("input")?.disabled,
+		).toBe(true);
+		await type(1, "Français");
+		await submit();
+		expect(calls[0]).toEqual({
+			name: "locales:updateMetadata",
+			args: {
+				projectId: "project-id",
+				localeId: "fr-id",
+				code: "fr",
+				label: "Français",
+				expectedCode: "fr",
+				expectedLabel: "French",
+			},
+		});
+	});
+	test("retains rejected metadata and retries against the same original values", async () => {
+		await render();
+		await act(async () =>
+			dom.container
+				.querySelector<HTMLButtonElement>('button[aria-label="Edit French"]')
+				?.click(),
+		);
+		await type(0, "fr-CA");
+		fail = true;
+		await submit();
+		expect(dom.container.querySelector<HTMLInputElement>("input")?.value).toBe(
+			"fr-CA",
+		);
+		expect(
+			dom.container.querySelector('[role="alert"]')?.textContent,
+		).toContain("Try again later");
+		fail = false;
+		await submit();
+		expect(calls).toHaveLength(2);
+		expect(calls[1]).toEqual(calls[0]);
+	});
 });

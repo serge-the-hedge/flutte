@@ -1,12 +1,16 @@
 ---
 name: blabla-translate
-description: Translate or correct Blabla task messages and prepare editor-configured new languages. Submit immutable candidates for human or independently authorized agent review.
+description: Translate or correct Blabla task messages and prepare new languages. Add or edit languages under an explicit setup assignment, and submit immutable candidates for human or independently authorized agent review.
 ---
 
 # Propose translations
 
 Work through Translation Tasks and report candidates as **proposed** until
 recorded review establishes otherwise.
+
+For an assignment to add or edit languages, follow [language management](../_blabla/references/languages-api.md)
+with `languages-write`. Verify the resulting language metadata before creating
+translation tasks; a language-only assignment ends after that verification.
 
 1. Read [transport](../_blabla/references/transport.md). Use the assigned
    translation credential and discover the project. It needs `read`, `search`,
