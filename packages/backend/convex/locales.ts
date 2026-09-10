@@ -91,6 +91,23 @@ export async function updateLocaleMetadata(
 			code: "NOT_FOUND",
 			message: "Active language not found.",
 		});
+	if (project.type === "basic" && locale._id !== project.sourceLocaleId) {
+		const collectionId = project.managedCollectionId;
+		const membership = collectionId
+			? await ctx.db
+					.query("contentCollectionLocales")
+					.withIndex("by_collection_locale", (q) =>
+						q.eq("collectionId", collectionId).eq("localeId", locale._id),
+					)
+					.unique()
+			: null;
+		if (!membership?.active)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message:
+					"Active language not found. Add the language again before editing it.",
+			});
+	}
 	if (locale.code !== args.expectedCode || locale.label !== args.expectedLabel)
 		throw new ConvexError({
 			code: "CONFLICT",

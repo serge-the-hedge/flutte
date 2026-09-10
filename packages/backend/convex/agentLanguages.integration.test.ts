@@ -202,6 +202,26 @@ describe("agent language management", () => {
 			collectionId: project.managedCollectionId,
 			localeId: created.localeId,
 		});
+		const removedEdit = {
+			expectedCode: "pt",
+			expectedLabel: "Português",
+			code: "pt-PT",
+			label: "Hidden edit",
+		};
+		const removed = await s.request(s.writer.token, "PATCH", removedEdit, path);
+		expect(removed.status).toBe(404);
+		expect(await removed.json()).toMatchObject({ code: "NOT_FOUND" });
+		await expect(
+			s.owner.mutation(api.locales.updateMetadata, {
+				projectId: s.projectId,
+				localeId: created.localeId,
+				...removedEdit,
+			}),
+		).rejects.toThrow("Add the language again");
+		expect(await s.t.run((ctx) => ctx.db.get(created.localeId))).toMatchObject({
+			code: "pt",
+			label: "Português",
+		});
 		const restored = await s.request(s.writer.token, "POST", {
 			code: "pt",
 			label: "Portuguese (Portugal)",
