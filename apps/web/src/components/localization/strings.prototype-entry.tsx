@@ -23,7 +23,7 @@ const rootRoute = createRootRoute({
 	component: () => (
 		<ThemeProvider attribute="class" defaultTheme="dark">
 			<div className="grid h-svh grid-rows-[auto_1fr] bg-background text-foreground">
-				<header className="flex h-14 items-center gap-6 border-b px-4">
+				<header className="flex min-h-14 flex-wrap items-center gap-3 border-b px-4 py-2 sm:gap-6">
 					<BrandWordmark />
 					<span className="rounded bg-accent px-2.5 py-1 text-xs">
 						Projects
