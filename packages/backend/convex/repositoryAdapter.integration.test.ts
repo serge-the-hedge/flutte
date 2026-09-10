@@ -45,7 +45,7 @@ async function setup(user: AuthenticatedBackend) {
 		name: "local sync",
 		scopes: ["snapshot-submission"],
 	});
-	return { projectId, token: token.token };
+	return { projectId, token: token.token, tokenId: token.tokenId };
 }
 
 const files = [
@@ -121,13 +121,29 @@ describe("Repository Adapter snapshot transport", () => {
 				diagnostics: unknown[];
 			};
 		};
-		expect(firstBody.run.status).toBe("succeeded");
+		expect(firstBody.run).toMatchObject({
+			status: "succeeded",
+			reused: false,
+			commit: "a".repeat(40),
+			snapshotKind: "baseline",
+			summary: {
+				outcome: "initial",
+				sourceKeyCount: 1,
+				addedKeyCount: 1,
+				changedSourceKeyCount: 0,
+				removedKeyCount: 0,
+				targetValueChangeCount: 0,
+			},
+		});
 		expect(firstBody.run.snapshotId).toBeTruthy();
 		const acceptedSetup = await user.query(api.snapshots.syncSetup, {
 			projectId,
 		});
 		expect(acceptedSetup.baseline?.kind).toBe("baseline");
-		expect(acceptedSetup.latestRun?.status).toBe("succeeded");
+		expect(acceptedSetup.latestRun).toMatchObject({
+			status: "succeeded",
+			summary: { outcome: "initial", sourceKeyCount: 1, addedKeyCount: 1 },
+		});
 
 		const second = await request(
 			t,
@@ -139,11 +155,153 @@ describe("Repository Adapter snapshot transport", () => {
 		const secondBody = (await second.json()) as {
 			run: { id: string; snapshotId: string | null };
 		};
+		expect(secondBody.run).toMatchObject({
+			reused: true,
+			summary: { outcome: "initial", addedKeyCount: 1 },
+		});
 		expect(secondBody.run.id).toBe(firstBody.run.id);
 		expect(secondBody.run.snapshotId).toBe(firstBody.run.snapshotId);
 
+		// Rebuilding derived evidence is still the same accepted sync, not another
+		// introduction of every original key.
+		const originalProjectionId = await t.run(async (ctx) => {
+			const project = await ctx.db.get(projectId);
+			if (!project?.activeCatalogProjectionId)
+				throw new Error("Missing projection");
+			await ctx.db.patch(project.activeCatalogProjectionId, {
+				localeReviewEvidenceVersion: 0,
+			});
+			return project.activeCatalogProjectionId;
+		});
+		const repaired = await request(
+			t,
+			token,
+			"/api/repository-adapter/v1/snapshots",
+			{ method: "POST", body },
+		);
+		expect(repaired.status).toBe(200);
+		expect(await repaired.json()).toMatchObject({
+			run: { reused: true, summary: { outcome: "initial", addedKeyCount: 1 } },
+		});
+		expect(
+			await t.run(
+				async (ctx) => (await ctx.db.get(projectId))?.activeCatalogProjectionId,
+			),
+		).not.toBe(originalProjectionId);
+
 		const snapshots = await user.query(api.snapshots.list, { projectId });
 		expect(snapshots).toHaveLength(1);
+	}, 30_000);
+
+	test("shares recorded transition counts between receipts and Sync without inventing preview counts", async () => {
+		const user = await authenticatedBackend(t, "sync-summary");
+		const { projectId, tokenId } = await setup(user);
+		const repository = "https://github.com/brickit-app/brickit-flutter.git";
+		async function submit(
+			commit: string,
+			catalogs: typeof files,
+			baselineCommit?: string,
+		) {
+			const actor = { kind: "repositoryAdapter" as const, id: tokenId };
+			const result = await t.action(
+				internal.snapshots.ingestFromRepositoryAdapter,
+				{
+					projectId,
+					repository,
+					commit,
+					files: catalogs,
+					actor,
+					...(baselineCommit
+						? {
+								lineage: {
+									baselineCommit,
+									relationship: "descendant" as const,
+									mergeBase: baselineCommit,
+								},
+							}
+						: {}),
+				},
+			);
+			return await t.query(internal.snapshots.repositoryAdapterReceipt, {
+				runId: result.runId,
+				reused: result.reused,
+				actor,
+			});
+		}
+		await submit("a".repeat(40), [
+			{
+				catalogPath: "intl_en.arb",
+				content:
+					'{"@@locale":"en","greeting":"Hello","removed":"Bye","metadata":"Context"}',
+			},
+			{
+				catalogPath: "intl_de.arb",
+				content:
+					'{"@@locale":"de","greeting":"Hallo","removed":"Tschüss","metadata":"Kontext"}',
+			},
+		]);
+		const updatedFiles = [
+			{
+				catalogPath: "intl_en.arb",
+				content:
+					'{"@@locale":"en","greeting":"Hello again","added":"New","metadata":"Context","@metadata":{"description":"More context"}}',
+			},
+			{
+				catalogPath: "intl_de.arb",
+				content:
+					'{"@@locale":"de","greeting":"Hallo wieder","added":"Neu","metadata":"Kontext"}',
+			},
+		];
+		const updated = await submit("b".repeat(40), updatedFiles, "a".repeat(40));
+		const summary = {
+			outcome: "updated",
+			sourceKeyCount: 3,
+			addedKeyCount: 1,
+			changedSourceKeyCount: 2,
+			removedKeyCount: 1,
+			targetValueChangeCount: 1,
+		};
+		expect(updated).toMatchObject({
+			run: { reused: false, snapshotKind: "baseline", summary },
+		});
+		expect(
+			(await user.query(api.snapshots.syncSetup, { projectId })).latestRun,
+		).toMatchObject({ summary });
+		const quiet = await submit("c".repeat(40), updatedFiles, "b".repeat(40));
+		expect(quiet).toMatchObject({
+			run: {
+				reused: false,
+				summary: {
+					outcome: "updated",
+					sourceKeyCount: 3,
+					addedKeyCount: 0,
+					changedSourceKeyCount: 0,
+					removedKeyCount: 0,
+					targetValueChangeCount: 0,
+				},
+			},
+		});
+		const preview = await submit("d".repeat(40), files);
+		expect(preview).toMatchObject({
+			run: { reused: false, snapshotKind: "preview", summary: null },
+		});
+		const promoted = await submit("d".repeat(40), files, "c".repeat(40));
+		expect(promoted).toMatchObject({
+			run: {
+				reused: false,
+				snapshotKind: "baseline",
+				summary: { outcome: "updated" },
+			},
+		});
+		const failed = await submit("e".repeat(40), [
+			{ catalogPath: "intl_en.arb", content: "broken JSON" },
+		]);
+		expect(failed).toMatchObject({
+			run: { status: "failed", summary: null, snapshotKind: null },
+		});
+		// Historic accepted transitions keep their statistics after baseline advances.
+		const replay = await submit("b".repeat(40), updatedFiles);
+		expect(replay).toMatchObject({ run: { reused: true, summary } });
 	}, 30_000);
 
 	test("discovers accepted files, rejects stale binding, and clears discovery after realization", async () => {

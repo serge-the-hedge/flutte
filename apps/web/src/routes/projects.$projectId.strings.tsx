@@ -46,6 +46,7 @@ import {
 } from "@/lib/strings-window";
 import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
+import { useCatalogScopeCounts } from "@/lib/use-catalog-scope-counts";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
 
 const EMPTY_STRINGS_WINDOW_CARDS: StringsWindowCards = new Map();
@@ -213,13 +214,24 @@ function RepositoryStrings() {
 			: "skip",
 		overview?.kind === "ready" ? overview.revision : undefined,
 	);
+	const scopeCounts = useCatalogScopeCounts(
+		overview?.kind === "ready" && locales !== undefined
+			? {
+					projectId: convexProjectId,
+					projectionId: overview.projectionId,
+					revision: overview.revision,
+					localeIds: selectedLocaleIds,
+				}
+			: "skip",
+	);
 	const navigation =
 		overview?.kind === "ready"
 			? page && !page.stale
 				? {
 						...overview,
 						keys: page.keys,
-						valueStateCounts: page.counts,
+						valueStateCounts: scopeCounts,
+						introducedMessageCount: scopeCounts?.introduced,
 					}
 				: undefined
 			: overview;

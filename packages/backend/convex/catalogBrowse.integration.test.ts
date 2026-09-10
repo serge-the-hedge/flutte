@@ -65,6 +65,45 @@ test("browses selected language pages and searches beyond an empty scanned page"
 			projectionId: overview.projectionId,
 			localeId: ja,
 		};
+
+		const countArgs = {
+			projectId,
+			projectionId: overview.projectionId,
+			revision: overview.revision,
+			localeIds: [ja],
+		};
+		const firstCounts = await owner.query(
+			api.catalogBrowse.scopeCounts,
+			countArgs,
+		);
+		expect(firstCounts.stale).toBe(false);
+		expect(firstCounts.cursor).not.toBeNull();
+		const lastCounts = await owner.query(api.catalogBrowse.scopeCounts, {
+			...countArgs,
+			cursor: firstCounts.cursor ?? undefined,
+		});
+		expect(lastCounts.cursor).toBeNull();
+		expect(
+			firstCounts.counts.unconfirmedImport +
+				lastCounts.counts.unconfirmedImport,
+		).toBe(80);
+		expect(firstCounts.counts.introduced + lastCounts.counts.introduced).toBe(
+			0,
+		);
+		expect(
+			(
+				await owner.query(api.catalogBrowse.scopeCounts, {
+					...countArgs,
+					localeIds: [],
+				})
+			).counts,
+		).toEqual({
+			waiting: 0,
+			unconfirmedImport: 0,
+			stale: 0,
+			settled: 0,
+			introduced: 0,
+		});
 		const first = await owner.query(api.catalogBrowse.page, args);
 		expect(first.keys).toHaveLength(32);
 		expect(
@@ -148,13 +187,42 @@ test("browses selected language pages and searches beyond an empty scanned page"
 			projectId,
 			repository: "repo",
 			commit: "second",
-			files,
+			files: files.map((file) => ({
+				...file,
+				content: JSON.stringify({
+					...JSON.parse(file.content),
+					new_copy: file.catalogPath === "ja.arb" ? "" : "New copy",
+				}),
+			})),
 			lineage: {
 				baselineCommit: "first",
 				relationship: "descendant",
 				mergeBase: "first",
 			},
 		});
+
+		expect(
+			await owner.query(api.catalogBrowse.scopeCounts, countArgs),
+		).toMatchObject({ stale: true });
+		const updated = await owner.query(api.catalogBrowse.overview, {
+			projectId,
+		});
+		if (updated.kind !== "ready") throw new Error("Expected ready catalog");
+		const updatedCounts = await owner.query(api.catalogBrowse.scopeCounts, {
+			...countArgs,
+			projectionId: updated.projectionId,
+			revision: updated.revision,
+		});
+		const tailCounts = await owner.query(api.catalogBrowse.scopeCounts, {
+			...countArgs,
+			projectionId: updated.projectionId,
+			revision: updated.revision,
+			cursor: updatedCounts.cursor ?? undefined,
+		});
+		expect(updatedCounts.counts.introduced + tailCounts.counts.introduced).toBe(
+			1,
+		);
+		expect(updatedCounts.counts.waiting + tailCounts.counts.waiting).toBe(1);
 		expect(await owner.query(api.catalogBrowse.page, args)).toMatchObject({
 			stale: true,
 			keys: [],

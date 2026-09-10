@@ -496,6 +496,10 @@ Hand-off. Code Area, tag, a **Sibling Set**, expansion, and archived keys remain
 valid domain concepts, but require their own bounded context or metadata reads.
 The selected Locales choose the targets shown alongside Source; a target-state
 scope matches a key when any selected target matches. A Work Hand-off narrows the keys without changing Catalog Order.
+Focus counts cover the whole catalog for the selected Locales, independent of
+search, page, or active focus. New from Git counts keys; target-state scopes
+count values. A bounded digest scan reads one Navigation revision and shows
+pending counts until all pages are totaled, never partial totals as zero.
 
 First-class filters in the initial Navigation contract are **the four phrases a
 value already says** — `needs a value`, `English changed`, `English, not chosen`,

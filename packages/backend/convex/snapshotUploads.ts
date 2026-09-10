@@ -348,6 +348,7 @@ export async function finalizeUpload(
 	if (session.runId)
 		return await ctx.runQuery(internal.snapshots.repositoryAdapterReceipt, {
 			runId: session.runId,
+			reused: true,
 			actor,
 		});
 	try {
@@ -365,6 +366,7 @@ export async function finalizeUpload(
 		});
 		return await ctx.runQuery(internal.snapshots.repositoryAdapterReceipt, {
 			runId: result.runId,
+			reused: result.reused,
 			actor,
 		});
 	} catch (error) {

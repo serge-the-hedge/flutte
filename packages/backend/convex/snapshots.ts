@@ -1,5 +1,4 @@
 import { ConvexError, v } from "convex/values";
-
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -98,6 +97,7 @@ import {
 	MAX_RESTORE_PROPOSAL_MESSAGE_IDS_PER_LOOKUP,
 	supportsRestoreProposalMessageId,
 } from "./restoreProposals";
+import { readSyncSummary, sourceSyncSummary } from "./syncSummary";
 import {
 	translationResidueBatches,
 	translationResidueEnvelope,
@@ -146,6 +146,7 @@ type IngestionResult = {
 	reused: boolean;
 	publishedProjection: boolean;
 	needsProjection: boolean;
+	advancedBaseline: boolean;
 };
 
 const diagnosticValidator = v.object({
@@ -600,6 +601,16 @@ type PublicIngestionResult = {
 	snapshotId: Id<"sourceSnapshots"> | null;
 };
 
+type AdapterIngestionResult = PublicIngestionResult & { reused: boolean };
+
+function ingestionReceipt(result: IngestionResult): AdapterIngestionResult {
+	return {
+		runId: result.runId,
+		snapshotId: result.snapshotId,
+		reused: result.reused && !result.advancedBaseline,
+	};
+}
+
 function advancesBaseline(
 	baseline: Doc<"sourceSnapshots"> | null,
 	lineage: Lineage | undefined,
@@ -885,6 +896,7 @@ async function reuseExistingSnapshot(
 			reused: true,
 			publishedProjection: false,
 			needsProjection: false,
+			advancedBaseline: false,
 		};
 	}
 	if (!identity.projectionId) {
@@ -894,6 +906,7 @@ async function reuseExistingSnapshot(
 			reused: true,
 			publishedProjection: false,
 			needsProjection: true,
+			advancedBaseline: false,
 		};
 	}
 
@@ -911,6 +924,7 @@ async function reuseExistingSnapshot(
 		reused: true,
 		publishedProjection: true,
 		needsProjection: false,
+		advancedBaseline: shouldAdvance,
 	};
 }
 
@@ -1283,6 +1297,7 @@ export const finalizeIngestion = internalMutation({
 			reused: false,
 			publishedProjection: publishesBaseline,
 			needsProjection: false,
+			advancedBaseline: publishesBaseline,
 		};
 	},
 });
@@ -2115,6 +2130,10 @@ async function stageProjection(
 			unboundLocaleFiles,
 			previousUnboundLocaleFiles,
 		});
+		const syncSummary = sourceSyncSummary(
+			previousSourceDocument,
+			sourceDocument,
+		);
 		const reconciledEnvelope = projectionEnvelope([]);
 		const gitChangeTotals = gitChangeEnvelope([]);
 		const residueTotals = translationResidueEnvelope([]);
@@ -2163,6 +2182,9 @@ async function stageProjection(
 				});
 			}
 
+			syncSummary.targetValueChangeCount += chunk.gitChanges.filter(
+				(change) => !change.isSource,
+			).length;
 			addProcessingTotals(gitChangeTotals, gitChangeEnvelope(chunk.gitChanges));
 			addProcessingTotals(
 				residueTotals,
@@ -2199,6 +2221,7 @@ async function stageProjection(
 			internal.catalogProjection.setWorkingCatalogEnvelope,
 			{
 				...scope,
+				syncSummary,
 				expectedKeyCount: reconciledEnvelope.keyCount,
 				expectedMessageCount: reconciledEnvelope.messageCount,
 				expectedByteLength: reconciledEnvelope.byteLength,
@@ -2619,7 +2642,7 @@ async function ingestSnapshot(
 	ctx: ActionCtx,
 	args: IngestArgs,
 	remainingConflictRetries: number,
-): Promise<PublicIngestionResult> {
+): Promise<AdapterIngestionResult> {
 	assertSnapshotEnvelope(args.files);
 	const identity: Identity = {
 		projectId: args.projectId,
@@ -2635,7 +2658,7 @@ async function ingestSnapshot(
 	);
 	if (reused) {
 		const result = await resolveProjectionNeed(ctx, identity, reused);
-		return { runId: result.runId, snapshotId: result.snapshotId };
+		return ingestionReceipt(result);
 	}
 
 	const bindingBasis: BindingBasis & { bindings: Binding[] } =
@@ -2657,7 +2680,7 @@ async function ingestSnapshot(
 			},
 		);
 		const resolved = await resolveProjectionNeed(ctx, identity, result);
-		return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+		return ingestionReceipt(resolved);
 	}
 	if (!matched.some((file) => file.isSource)) {
 		const result: IngestionResult = await ctx.runMutation(
@@ -2671,7 +2694,7 @@ async function ingestSnapshot(
 			},
 		);
 		const resolved = await resolveProjectionNeed(ctx, identity, result);
-		return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+		return ingestionReceipt(resolved);
 	}
 
 	const storedFiles: StoredSnapshotFile[] = [];
@@ -2760,7 +2783,7 @@ async function ingestSnapshot(
 			);
 			if (resumed) {
 				const resolved = await resolveProjectionNeed(ctx, identity, resumed);
-				return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+				return ingestionReceipt(resolved);
 			}
 			if (remainingConflictRetries === 0) {
 				return await recordFailureResult(ctx, identity, error);
@@ -2790,7 +2813,7 @@ async function ingestSnapshot(
 		);
 	}
 	const resolved = await resolveProjectionNeed(ctx, identity, result);
-	return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+	return ingestionReceipt(resolved);
 }
 
 /** Adapter-only action: the HTTP transport authenticates the token, then this
@@ -2804,7 +2827,7 @@ export const ingestFromRepositoryAdapter = internalAction({
 		lineage: v.optional(lineageValidator),
 		actor: repositoryAdapterActorValidator,
 	},
-	handler: async (ctx, args): Promise<PublicIngestionResult> =>
+	handler: async (ctx, args): Promise<AdapterIngestionResult> =>
 		await ingestSnapshot(ctx, args, MAX_INGEST_CONFLICT_RESTAGES),
 });
 
@@ -2812,6 +2835,7 @@ export const ingestFromRepositoryAdapter = internalAction({
 export const repositoryAdapterReceipt = internalQuery({
 	args: {
 		runId: v.id("snapshotIngestionRuns"),
+		reused: v.optional(v.boolean()),
 		actor: repositoryAdapterActorValidator,
 	},
 	handler: async (ctx, args) => {
@@ -2884,6 +2908,8 @@ export const repositoryAdapterReceipt = internalQuery({
 			syncUrl,
 			run: {
 				id: run._id,
+				...(await readSyncSummary(ctx, run)),
+				reused: args.reused ?? false,
 				status: run.status,
 				snapshotId: run.snapshotId ?? null,
 				diagnosticCount: diagnostics.length,
@@ -2903,10 +2929,10 @@ async function recordFailureResult(
 	ctx: ActionCtx,
 	identity: Identity,
 	error: unknown,
-): Promise<PublicIngestionResult> {
+): Promise<AdapterIngestionResult> {
 	const result = await recordFailure(ctx, identity, error);
 	const resolved = await resolveProjectionNeed(ctx, identity, result);
-	return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+	return ingestionReceipt(resolved);
 }
 
 /**
@@ -2926,8 +2952,14 @@ export const ingest = action({
 		files: v.array(v.object({ catalogPath: v.string(), content: v.string() })),
 		lineage: v.optional(lineageValidator),
 	},
-	handler: async (ctx, args): Promise<PublicIngestionResult> =>
-		await ingestSnapshot(ctx, args, MAX_INGEST_CONFLICT_RESTAGES),
+	handler: async (ctx, args): Promise<PublicIngestionResult> => {
+		const { runId, snapshotId } = await ingestSnapshot(
+			ctx,
+			args,
+			MAX_INGEST_CONFLICT_RESTAGES,
+		);
+		return { runId, snapshotId };
+	},
 });
 
 export const list = query({
@@ -3067,6 +3099,7 @@ export const syncSetup = query({
 			latestRun: latestRun
 				? {
 						id: latestRun._id,
+						...(await readSyncSummary(ctx, latestRun)),
 						status: latestRun.status,
 						snapshotId: latestRun.snapshotId ?? null,
 						createdAt: latestRun.createdAt,
@@ -3442,7 +3475,7 @@ export async function ingestUploadedSnapshot(
 		}[];
 	},
 	remainingConflictRetries = MAX_INGEST_CONFLICT_RESTAGES,
-): Promise<PublicIngestionResult> {
+): Promise<AdapterIngestionResult> {
 	const { sha256 } = await import("@noble/hashes/sha2.js");
 	const { bytesToHex } = await import("@noble/hashes/utils.js");
 	const encoder = new TextEncoder();
@@ -3539,7 +3572,7 @@ export async function ingestUploadedSnapshot(
 	);
 	if (reused) {
 		const result = await resolveProjectionNeed(ctx, identity, reused);
-		return { runId: result.runId, snapshotId: result.snapshotId };
+		return ingestionReceipt(result);
 	}
 	const absentTargetLocales: AbsentTargetLocale[] = [];
 	for (const binding of bindingBasis.bindings) {
@@ -3571,7 +3604,7 @@ export async function ingestUploadedSnapshot(
 				unboundLocaleFiles: [],
 			},
 		);
-		return { runId: result.runId, snapshotId: result.snapshotId };
+		return ingestionReceipt(result);
 	}
 	const sourceFirst = [...sorted].sort(
 		(a, b) =>
@@ -3649,5 +3682,5 @@ export async function ingestUploadedSnapshot(
 			args.actor,
 		);
 	const resolved = await resolveProjectionNeed(ctx, identity, result);
-	return { runId: resolved.runId, snapshotId: resolved.snapshotId };
+	return ingestionReceipt(resolved);
 }

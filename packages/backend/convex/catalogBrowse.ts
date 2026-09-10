@@ -352,3 +352,85 @@ export const page = query({
 		};
 	},
 });
+
+/** Catalog-wide focus facts, independent of the visible page, search, and focus.
+ * Only compact digests are read. Clients combine bounded pages from one revision
+ * and display a total only once the complete scan has finished. */
+export const scopeCounts = query({
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		revision: v.number(),
+		localeIds: v.array(v.id("locales")),
+		cursor: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		await requireViewer(ctx, args.projectId);
+		const projection = await activeProjectionFor(ctx, args.projectId);
+		const state = await navigationStateFor(ctx, args.projectId);
+		const counts = {
+			waiting: 0,
+			unconfirmedImport: 0,
+			stale: 0,
+			settled: 0,
+			introduced: 0,
+		};
+		if (
+			!projection ||
+			projection._id !== args.projectionId ||
+			state?.projectionId !== args.projectionId ||
+			state.status !== "ready" ||
+			(state.revision ?? 0) !== args.revision
+		)
+			return { stale: true, counts, cursor: null };
+		if (
+			!Number.isSafeInteger(args.revision) ||
+			args.revision < 0 ||
+			args.localeIds.length > MAX_PROJECTED_LOCALES ||
+			new Set(args.localeIds).size !== args.localeIds.length
+		)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Invalid catalog count request.",
+			});
+		const selected = new Set(args.localeIds);
+		for (const localeId of selected) {
+			const locale = await ctx.db.get(localeId);
+			if (
+				!locale ||
+				locale.projectId !== args.projectId ||
+				locale.isSource ||
+				locale.archivedAt !== undefined ||
+				!locale.catalogPath
+			)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Choose an active target language.",
+				});
+		}
+		const batch = await ctx.db
+			.query("catalogWorkspaceNavigationRows")
+			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+				q.eq("projectId", args.projectId).eq("projectionId", args.projectionId),
+			)
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 64,
+				maximumBytesRead: 512 * 1024,
+			});
+		for (const row of batch.page) {
+			let introduced = false;
+			for (const target of row.targets) {
+				if (!selected.has(target.localeId)) continue;
+				counts[target.valueState]++;
+				introduced ||= target.firstReviewPending === true;
+			}
+			if (introduced) counts.introduced++;
+		}
+		return {
+			stale: false,
+			counts,
+			cursor: batch.isDone ? null : batch.continueCursor,
+		};
+	},
+});

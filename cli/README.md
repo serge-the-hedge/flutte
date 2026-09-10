@@ -16,7 +16,11 @@ blabla sync
 ```
 
 `sync` reads the bound ARB files and tracked sibling catalogs from the checkout, uploads each catalog separately,
-then finalizes one durable Source Snapshot and prints the receipt. Each file is
+then finalizes one durable Source Snapshot. Progress and diagnostics go to stderr;
+stdout reports the result, new/changed/removed keys, and changed translation values
+when the server provides those counts. Long server requests show elapsed waiting
+time, not an estimated percentage. Repeated snapshots are identified as already
+synced; previews explicitly leave the accepted catalog unchanged. Each file is
 limited to 8 MiB; there is no combined upload byte limit. Uploaded files remain
 private staging evidence until finalization succeeds. Incomplete uploads expire
 after 24 hours, and cleanup preserves files owned by a published Snapshot. It exits with status `0` only when ingestion

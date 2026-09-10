@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,6 +19,7 @@ void main() {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(server.close);
         final output = <String>[];
+        final diagnostics = <String>[];
         server.listen((request) async {
           await request.drain<void>();
           request.response.headers.contentType = ContentType.json;
@@ -52,6 +54,18 @@ void main() {
                       'run': {
                         'id': 'run_1',
                         'status': succeeded ? 'succeeded' : 'failed',
+                        'snapshotKind': succeeded ? 'baseline' : null,
+                        'reused': false,
+                        'summary': succeeded
+                            ? {
+                                'outcome': 'updated',
+                                'sourceKeyCount': 120,
+                                'addedKeyCount': 3,
+                                'changedSourceKeyCount': 2,
+                                'removedKeyCount': 1,
+                                'targetValueChangeCount': 7,
+                              }
+                            : null,
                         'snapshotId': succeeded ? 'snapshot_1' : null,
                         'diagnosticCount': succeeded ? 0 : 1,
                         'diagnostics': succeeded
@@ -86,11 +100,21 @@ void main() {
           ],
           environment: const {},
           write: output.add,
-          writeError: output.add,
+          writeError: diagnostics.add,
+        );
+        expect(diagnostics.first, 'Checking checkout…');
+        expect(diagnostics, contains('Uploading catalogs: 3/3'));
+        expect(
+          diagnostics,
+          contains('Waiting for Blabla to validate and apply the snapshot…'),
         );
         expect(code, succeeded ? 0 : 1);
-        if (!succeeded) expect(output.join('\n'), contains('Catalog rejected'));
+        if (!succeeded)
+          expect(diagnostics.join('\n'), contains('Catalog rejected'));
         if (succeeded) {
+          expect(output, contains('120 keys in the accepted catalog.'));
+          expect(output, contains('Keys: 3 new, 2 source changed, 1 removed.'));
+          expect(output, contains('Translation values changed: 7.'));
           expect(output.join('\n'), contains('"intl_fr.arb" — locale: "fr"'));
           expect(output.join('\n'), contains('Discovered catalog files'));
           expect(
@@ -99,6 +123,138 @@ void main() {
               'https://blabla.example/projects/project_1/sync#discovered-catalogs',
             ),
           );
+        }
+      },
+    );
+  }
+
+  for (final succeeded in [true, false]) {
+    test(
+      'reports waiting during finalization and stops after ${succeeded ? 'success' : 'failure'}',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(server.close);
+        final release = Completer<void>();
+        final progress = <String>[];
+        server.listen((request) async {
+          await request.drain<void>();
+          request.response.headers.contentType = ContentType.json;
+          if (request.uri.path.endsWith('/snapshot-uploads')) {
+            request.response.write(jsonEncode({'sessionId': 'upload_1'}));
+          } else if (request.uri.path.endsWith('/file')) {
+            request.response.write('{}');
+          } else {
+            await release.future;
+            if (!succeeded) {
+              request.response.statusCode = HttpStatus.badRequest;
+              request.response.write(jsonEncode({'error': 'Rejected'}));
+            } else {
+              request.response.write(
+                jsonEncode({
+                  'version': 1,
+                  'run': {
+                    'id': 'run_1',
+                    'status': 'succeeded',
+                    'snapshotId': 'snapshot_1',
+                    'diagnosticCount': 0,
+                    'diagnostics': [],
+                    'unboundLocaleFileCount': 0,
+                    'absentTargetLocaleCount': 0,
+                  },
+                }),
+              );
+            }
+          }
+          await request.response.close();
+        });
+        final gateway = HttpSnapshotSyncGateway(
+          baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+          token: 'test-token',
+          progressInterval: const Duration(milliseconds: 5),
+          onProgress: (line) {
+            progress.add(line);
+            if (line.startsWith('Still waiting') && !release.isCompleted)
+              release.complete();
+          },
+        );
+        final submission = gateway.submit(
+          repository: 'repo',
+          commit: 'commit',
+          files: const [SnapshotFile(catalogPath: 'en.arb', content: '{}')],
+        );
+        if (succeeded) {
+          expect((await submission).succeeded, isTrue);
+        } else {
+          await expectLater(
+            submission,
+            throwsA(isA<RepositoryAdapterException>()),
+          );
+        }
+        expect(progress, contains(startsWith('Still waiting for Blabla')));
+        expect(
+          progress.indexOf('Uploading catalogs: 1/1'),
+          lessThan(
+            progress.indexWhere((line) => line.startsWith('Still waiting')),
+          ),
+        );
+        final count = progress.length;
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        expect(
+          progress.length,
+          count,
+          reason: 'Progress timer must stop when the request ends',
+        );
+      },
+    );
+  }
+
+  for (final outcome in ['unchanged', 'reused', 'preview', 'legacy']) {
+    test(
+      'distinguishes $outcome sync results without inventing changes',
+      () async {
+        final fixture = await SyncFixture.create();
+        addTearDown(fixture.dispose);
+        final output = <String>[];
+        await RepositorySyncAdapter().sync(
+          checkout: fixture.root,
+          gateway: RecordingSnapshotGateway(
+            _syncContext(),
+            receipt: SnapshotSyncReceipt(
+              version: 1,
+              runId: 'run_1',
+              status: 'succeeded',
+              snapshotId: 'snapshot_1',
+              diagnosticCount: 0,
+              diagnostics: [],
+              unboundLocaleFileCount: 0,
+              absentTargetLocaleCount: 0,
+              reused: outcome == 'reused',
+              snapshotKind: outcome == 'preview' ? 'preview' : 'baseline',
+              summary: outcome == 'legacy' || outcome == 'preview'
+                  ? null
+                  : SnapshotSyncSummary(
+                      outcome: 'updated',
+                      sourceKeyCount: 3,
+                      addedKeyCount: outcome == 'reused' ? 3 : 0,
+                      changedSourceKeyCount: 0,
+                      removedKeyCount: 0,
+                      targetValueChangeCount: 0,
+                    ),
+            ),
+          ),
+          write: output.add,
+        );
+        final text = output.join('\n');
+        expect(text, isNot(contains('Keys:')));
+        switch (outcome) {
+          case 'unchanged':
+            expect(text, contains('No catalog changes.'));
+          case 'reused':
+            expect(text, contains('Already synced:'));
+          case 'preview':
+            expect(text, contains('accepted catalog is unchanged'));
+          case 'legacy':
+            expect(text, isNot(contains('No catalog changes.')));
         }
       },
     );
@@ -577,7 +733,9 @@ SnapshotSyncContext _syncContext() => SnapshotSyncContext(
 );
 
 class RecordingSnapshotGateway implements SnapshotSyncGateway {
-  RecordingSnapshotGateway(this.context);
+  RecordingSnapshotGateway(this.context, {this.receipt});
+
+  final SnapshotSyncReceipt? receipt;
 
   final SnapshotSyncContext context;
   String? repository;
@@ -599,22 +757,23 @@ class RecordingSnapshotGateway implements SnapshotSyncGateway {
     this.commit = commit;
     this.files = files;
     this.lineage = lineage;
-    return const SnapshotSyncReceipt(
-      version: 1,
-      runId: 'run_1',
-      status: 'succeeded',
-      snapshotId: 'snapshot_1',
-      diagnosticCount: 0,
-      diagnostics: [],
-      unboundLocaleFileCount: 1,
-      unboundLocaleFiles: [
-        UnboundCatalogFile(
-          catalogPath: 'packages/brickit_generated/lib/l10n/intl_fr.arb',
-          declaredLocaleCode: 'fr',
-        ),
-      ],
-      absentTargetLocaleCount: 0,
-    );
+    return receipt ??
+        const SnapshotSyncReceipt(
+          version: 1,
+          runId: 'run_1',
+          status: 'succeeded',
+          snapshotId: 'snapshot_1',
+          diagnosticCount: 0,
+          diagnostics: [],
+          unboundLocaleFileCount: 1,
+          unboundLocaleFiles: [
+            UnboundCatalogFile(
+              catalogPath: 'packages/brickit_generated/lib/l10n/intl_fr.arb',
+              declaredLocaleCode: 'fr',
+            ),
+          ],
+          absentTargetLocaleCount: 0,
+        );
   }
 }
 
