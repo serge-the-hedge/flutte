@@ -611,6 +611,7 @@ export function ManagedStrings({
 				historyProjectId={address.projectId}
 				key={`${collectionId}:${JSON.stringify(search.locales ?? "all")}`}
 				searchPlaceholder="Search names and source text"
+				showFocusControls={false}
 				emptyContent={
 					<div className="rounded-md border p-6">
 						<p>{search.q ? "No matching strings." : "No strings yet."}</p>

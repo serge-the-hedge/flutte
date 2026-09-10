@@ -183,6 +183,8 @@ type CatalogWorkspaceEditorInput = {
 type CatalogControls = {
 	historyProjectId?: string;
 	searchPlaceholder?: string;
+	/** Only offer Focus when the caller filters the complete result set by scope. */
+	showFocusControls?: boolean;
 	onManageKey?: (key: StringsCatalogKey) => void;
 	onSelectionChange?: (ids: readonly string[]) => void;
 };
@@ -1143,6 +1145,8 @@ function CatalogScopeStrip({
 	) => void;
 	workHandoff?: { keyCount: number; onClear: () => void };
 }) {
+	if (useContext(CatalogControlsContext).showFocusControls === false)
+		return null;
 	return (
 		<nav
 			className="flex flex-wrap items-center gap-1.5"
