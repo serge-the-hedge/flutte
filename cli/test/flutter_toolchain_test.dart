@@ -132,6 +132,23 @@ void main() {
     },
   );
 
+  test(
+    'inline YAML constraint prevents an incompatible automatic refresh',
+    () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      final sdk = await fixture.sdk('explicit', 'Flutter 3.44.6');
+      await File(
+        fixture.path('pubspec.yaml'),
+      ).writeAsString('environment: {sdk: ^3.12.0, flutter: ^3.47.0}');
+      final resolved = await FlutterToolchainResolver(
+        environment: {},
+      ).resolve(fixture.root, explicitSdk: sdk.path);
+      expect(resolved.projectConstraint, '^3.47.0');
+      expect(resolved.canRefreshGeneratedOutput, isFalse);
+    },
+  );
+
   test('refresh requires an intended SDK and a compatible known version', () {
     ResolvedFlutter sdk(String source, String version) => ResolvedFlutter(
       executable: '/flutter',

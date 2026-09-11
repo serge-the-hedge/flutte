@@ -804,7 +804,9 @@ adapter, not a second product workflow.
   when declared, and a second generation run producing identical output. The
   verified refresh becomes a separate preceding commit on the review branch;
   candidate verification compares the release against that refreshed baseline.
-  The refresh and complete delivery candidate are verified before changing the original checkout. Unsafe drift
+  Both commits are created and their final files verified in staging before Git
+  checks out the completed review branch in the original checkout. Commit-hook
+  failures or changes to the verified output stop delivery before that checkout. Unsafe drift
   stops with the changed paths, SDK selection source, a durable diff under Git's
   `blabla/diagnostics/` directory, and recovery guidance. Combined delivery admits
   only the generated files corresponding to target catalogs changed by the

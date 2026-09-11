@@ -296,6 +296,40 @@ class ReleaseRepositoryAdapter {
         changedPaths,
       );
 
+      await _git(staging.root, ['add', '--', ...changedPaths]);
+      final stagedPaths = await _gitLines(staging.root, [
+        'diff',
+        '--cached',
+        '--name-only',
+        '--',
+        ...changedPaths,
+      ]);
+      if (!_sameSet(stagedPaths.toSet(), changedPaths.toSet())) {
+        throw RepositoryAdapterException(
+          'The local Git index changed while the release was being prepared. No commit was created.',
+        );
+      }
+      final commitTitle = localeArtifact == null
+          ? sourceChanged
+                ? 'fix(l10n): deliver reviewed localization'
+                : 'fix(l10n): deliver reviewed translations'
+          : sourceChanged
+          ? 'feat(l10n): deliver reviewed localization and ${localeArtifact.locale.code}'
+          : 'feat(l10n): deliver reviewed translations and ${localeArtifact.locale.code}';
+      final localeTrailers = localeArtifact == null
+          ? ''
+          : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Locale-Values: $localeValueCount\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
+      await _git(staging.root, [
+        'commit',
+        '--only',
+        '-m',
+        '$commitTitle\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Source-Changed: ${sourceChanged ? 'yes' : 'no'}\nBlabla-Skipped-Keys: ${delivery.skipped.length}$localeTrailers',
+        '--',
+        ...changedPaths,
+      ]);
+
+      await staging.verifyCandidate({...baseline.files, ...candidateFiles});
+
       final current = await request.gateway.readRelease(request.recordId);
       _validateSameRelease(summary, current);
       if (localeArtifact != null) {
@@ -323,40 +357,7 @@ class ReleaseRepositoryAdapter {
       );
       await staging.ensureCheckoutUnchanged(currentBranch);
 
-      await _git(checkout, ['switch', '-c', branchName]);
-      await baseline.writeCommit(checkout, request.flutter);
-      await _writeCandidateFiles(checkout, candidateFiles);
-      await _git(checkout, ['add', '--', ...changedPaths]);
-      final stagedPaths = await _gitLines(checkout, [
-        'diff',
-        '--cached',
-        '--name-only',
-        '--',
-        ...changedPaths,
-      ]);
-      if (!_sameSet(stagedPaths.toSet(), changedPaths.toSet())) {
-        throw RepositoryAdapterException(
-          'The local Git index changed while the release was being prepared. No commit was created.',
-        );
-      }
-      final commitTitle = localeArtifact == null
-          ? sourceChanged
-                ? 'fix(l10n): deliver reviewed localization'
-                : 'fix(l10n): deliver reviewed translations'
-          : sourceChanged
-          ? 'feat(l10n): deliver reviewed localization and ${localeArtifact.locale.code}'
-          : 'feat(l10n): deliver reviewed translations and ${localeArtifact.locale.code}';
-      final localeTrailers = localeArtifact == null
-          ? ''
-          : '\nBlabla-Locale-Proposal: ${localeArtifact.proposalId}\nBlabla-Locale-Values: $localeValueCount\nBlabla-Source-Snapshot: ${localeArtifact.sourceSnapshot.id}';
-      await _git(checkout, [
-        'commit',
-        '--only',
-        '-m',
-        '$commitTitle\n\nBlabla-Release-Record: ${summary.releaseRecord.id}\nBlabla-Baseline-Commit: ${summary.releaseRecord.baselineCommit}\nBlabla-Applied-Onto: $appliedOnto\nBlabla-Applied-Keys: ${delivery.applied.length}\nBlabla-Source-Changed: ${sourceChanged ? 'yes' : 'no'}\nBlabla-Skipped-Keys: ${delivery.skipped.length}$localeTrailers',
-        '--',
-        ...changedPaths,
-      ]);
+      await staging.publish(branchName);
 
       final body =
           (baseline.files.isEmpty
@@ -802,52 +803,6 @@ class ReleaseRepositoryAdapter {
       files[path] = await (await _regularFile(checkout, path)).readAsBytes();
     }
     return files;
-  }
-
-  Future<void> _writeCandidateFiles(
-    Directory checkout,
-    Map<String, List<int>> files,
-  ) async {
-    for (final entry in files.entries) {
-      final destination = await _safeCandidateDestination(checkout, entry.key);
-      await destination.parent.create(recursive: true);
-      await destination.writeAsBytes(entry.value, flush: true);
-    }
-  }
-
-  Future<File> _safeCandidateDestination(
-    Directory root,
-    String relativePath,
-  ) async {
-    if (!_isSafeRelativePath(relativePath)) {
-      throw RepositoryAdapterException(
-        'Localization path is not a safe repository-relative file: $relativePath.',
-      );
-    }
-    var current = root.path;
-    final segments = relativePath.split('/');
-    for (final segment in segments.take(segments.length - 1)) {
-      current = '$current${Platform.pathSeparator}$segment';
-      if (await FileSystemEntity.type(current, followLinks: false) ==
-          FileSystemEntityType.link) {
-        throw RepositoryAdapterException(
-          'Blabla refuses symlinked localization paths: $relativePath.',
-        );
-      }
-    }
-    final destination = _file(root, relativePath);
-    final destinationType = await FileSystemEntity.type(
-      destination.path,
-      followLinks: false,
-    );
-    if (destinationType == FileSystemEntityType.link ||
-        (destinationType != FileSystemEntityType.notFound &&
-            destinationType != FileSystemEntityType.file)) {
-      throw RepositoryAdapterException(
-        'Blabla refuses a non-file localization destination: $relativePath.',
-      );
-    }
-    return destination;
   }
 
   Future<void> _assertRegularLocalizationFiles(

@@ -92,26 +92,23 @@ class GeneratedLocalizationBaseline {
       );
     }
     await baseline._commit(staging.root, flutter);
-    if ((await baseline._changedPaths(staging.root)).isNotEmpty) {
+    final residue = await baseline._changedPaths(staging.root);
+    if (residue.isNotEmpty) {
+      changed.addAll(residue);
       await stop(
         'The staging checkout changed while committing the refresh.',
         'Resolve local Git hook changes before delivering.',
       );
     }
-    return baseline;
-  }
-
-  /// Called only after the complete candidate and original checkout are verified.
-  /// --only preserves unrelated staged work in existing-locale delivery.
-  Future<void> writeCommit(Directory checkout, ResolvedFlutter flutter) async {
-    if (files.isEmpty) return;
-    for (final entry in files.entries) {
-      await (await _regularFile(
-        checkout,
-        entry.key,
-      )).writeAsBytes(entry.value, flush: true);
+    try {
+      await staging.verifyCandidate(baseline.files);
+    } on RepositoryAdapterException catch (error) {
+      await stop(
+        error.message,
+        'Resolve the Git hook changes shown in the saved diff before delivering.',
+      );
     }
-    await _commit(checkout, flutter);
+    return baseline;
   }
 
   Future<void> _commit(Directory checkout, ResolvedFlutter flutter) async {
@@ -138,6 +135,7 @@ class GeneratedLocalizationBaseline {
     final diff = StringBuffer(
       await _git(staging.root, [
         'diff',
+        staging.commit,
         '--binary',
         '--no-ext-diff',
         '--no-textconv',

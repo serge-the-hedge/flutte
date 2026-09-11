@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:pub_semver/pub_semver.dart';
+import 'package:yaml/yaml.dart';
 
 import 'command_runner.dart';
 
@@ -232,22 +233,18 @@ class FlutterToolchainResolver {
       '${checkout.path}${Platform.pathSeparator}pubspec.yaml',
     );
     if (!await pubspec.exists()) return null;
-    var inEnvironment = false;
-    for (final line in (await pubspec.readAsLines())) {
-      if (RegExp(r'^environment\s*:\s*$').hasMatch(line)) {
-        inEnvironment = true;
-        continue;
+    try {
+      final document = loadYaml(await pubspec.readAsString());
+      if (document case {'environment': {'flutter': final constraint}}) {
+        if (constraint is String) return constraint;
+        throw RepositoryAdapterException(
+          'The Flutter constraint in ${pubspec.path} must be a string.',
+        );
       }
-      if (inEnvironment &&
-          RegExp(r'^\S').hasMatch(line) &&
-          !RegExp(r'^\s').hasMatch(line)) {
-        inEnvironment = false;
-      }
-      if (!inEnvironment) continue;
-      final match = RegExp(
-        '^\\s+flutter\\s*:\\s*[\\\'\\"]?([^\\\'\\"#]+)',
-      ).firstMatch(line);
-      if (match != null) return match.group(1)?.trim();
+    } on YamlException catch (error) {
+      throw RepositoryAdapterException(
+        'Could not read ${pubspec.path}: ${error.message}',
+      );
     }
     return null;
   }

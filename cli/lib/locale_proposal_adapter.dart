@@ -421,15 +421,8 @@ class RepositoryAdapter {
         changedPaths,
       );
 
-      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
-      await _ensureRelevantPathsAreClean(checkout);
-      await _ensureIndexIsClean(checkout);
-      await staging.ensureCheckoutUnchanged(currentBranch);
-      await _git(checkout, ['switch', '-c', branchName]);
-      await baseline.writeCommit(checkout, request.flutter);
-      await _writeCandidateFiles(checkout, candidateFiles);
-      await _git(checkout, ['add', '--', ...changedPaths]);
-      final stagedPaths = await _gitLines(checkout, [
+      await _git(staging.root, ['add', '--', ...changedPaths]);
+      final stagedPaths = await _gitLines(staging.root, [
         'diff',
         '--cached',
         '--name-only',
@@ -439,11 +432,19 @@ class RepositoryAdapter {
           'The local Git index changed while this Locale was being prepared. No commit was created.',
         );
       }
-      await _git(checkout, [
+      await _git(staging.root, [
         'commit',
         '-m',
         'feat(l10n): add ${artifact.locale.code}\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}',
       ]);
+
+      await staging.verifyCandidate({...baseline.files, ...candidateFiles});
+
+      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
+      await _ensureRelevantPathsAreClean(checkout);
+      await _ensureIndexIsClean(checkout);
+      await staging.ensureCheckoutUnchanged(currentBranch);
+      await staging.publish(branchName);
 
       final pullRequestCommand =
           'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
@@ -664,17 +665,6 @@ class RepositoryAdapter {
       files[path] = await file.readAsBytes();
     }
     return files;
-  }
-
-  Future<void> _writeCandidateFiles(
-    Directory checkout,
-    Map<String, List<int>> files,
-  ) async {
-    for (final entry in files.entries) {
-      final destination = _file(checkout, entry.key);
-      await destination.parent.create(recursive: true);
-      await destination.writeAsBytes(entry.value, flush: true);
-    }
   }
 
   File _file(Directory root, String relativePath) =>

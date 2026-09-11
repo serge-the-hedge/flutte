@@ -900,6 +900,8 @@ void main() {
     'unstable',
     'sdk',
     'candidate',
+    'hook',
+    'hook-committed',
   ]) {
     test(
       'keeps checkout untouched on $failure during refresh preparation',
@@ -938,6 +940,17 @@ echo "$count" >> lib/l10n/app_localizations_de.dart
         final head = await fixture.git(['rev-parse', 'HEAD']);
         final summary = await existingLocaleRelease(fixture);
         final artifact = await combinedPortugueseArtifact(fixture, summary);
+        if (failure == 'hook' || failure == 'hook-committed') {
+          final hook = fixture.file(
+            '.git/hooks/${failure == 'hook' ? 'post-commit' : 'pre-commit'}',
+          );
+          await hook.writeAsString(
+            failure == 'hook'
+                ? '#!/bin/sh\necho hook-residue > hook-residue.txt\n'
+                : '#!/bin/sh\necho hook-change >> $generated\ngit add -- $generated\n',
+          );
+          expect((await Process.run('chmod', ['+x', hook.path])).exitCode, 0);
+        }
         final flutter = failure == 'sdk'
             ? ResolvedFlutter(
                 executable: wrapper.path,
@@ -973,6 +986,8 @@ echo "$count" >> lib/l10n/app_localizations_de.dart
             'interface' || 'unexpected' => 'unexpected surface',
             'unstable' => 'different output',
             'sdk' => 'project Flutter constraint',
+            'hook' => 'staging checkout changed',
+            'hook-committed' => 'Git hooks changed',
             _ => 'candidate failed',
           }),
         );
@@ -999,6 +1014,66 @@ echo "$count" >> lib/l10n/app_localizations_de.dart
             '--porcelain',
           ])).split('\n').where((line) => line.startsWith('worktree ')),
           hasLength(1),
+        );
+      },
+    );
+  }
+
+  for (final standalone in [false, true]) {
+    test(
+      'candidate commit rejection preserves checkout and index ($standalone)',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        const generated =
+            'packages/brickit_generated/lib/l10n/app_localizations_de.dart';
+        await fixture.file(generated).writeAsString('stale generated output');
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'stale generation']);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        final summary = await existingLocaleRelease(fixture);
+        final artifact = await combinedPortugueseArtifact(fixture, summary);
+        final hook = fixture.file('.git/hooks/pre-commit');
+        await hook.writeAsString(r'''#!/bin/sh
+case "$(git diff --cached --name-only)" in
+  *.arb*) echo 'candidate commit rejected' >&2; exit 1 ;;
+esac
+''');
+        expect((await Process.run('chmod', ['+x', hook.path])).exitCode, 0);
+        if (!standalone) {
+          await fixture.file('unrelated.txt').writeAsString('keep staged');
+          await fixture.git(['add', 'unrelated.txt']);
+        }
+        await expectLater(
+          standalone
+              ? RepositoryAdapter().deliver(requestFor(fixture, artifact))
+              : ReleaseRepositoryAdapter().deliver(
+                  ReleaseDeliveryRequest(
+                    checkout: fixture.root,
+                    recordId: summary.releaseRecord.id,
+                    flutter: testFlutter(fixture.flutterExecutable),
+                    gateway: StaticReleaseGateway(summary),
+                    write: (_) {},
+                  ),
+                ),
+          throwsA(
+            isA<RepositoryAdapterException>().having(
+              (e) => e.message,
+              'hook failure',
+              contains('candidate commit rejected'),
+            ),
+          ),
+        );
+        expect(await fixture.git(['rev-parse', 'HEAD']), head);
+        expect(await fixture.git(['branch', '--show-current']), 'develop');
+        expect(
+          await fixture.git(['status', '--porcelain']),
+          standalone ? isEmpty : 'A  unrelated.txt',
+        );
+        expect(
+          await fixture.file(generated).readAsString(),
+          'stale generated output',
         );
       },
     );

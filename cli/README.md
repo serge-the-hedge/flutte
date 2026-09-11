@@ -184,10 +184,11 @@ refresh, delivery handles it automatically when all of these hold:
   `app_localizations.dart`, catalogs, file set, and permissions remain unchanged.
 - A second generation run produces identical output.
 
-Delivery verifies the full candidate before writing, then creates a separate
+Delivery prepares and verifies both commits in the temporary worktree, then uses
+Git to check out the completed review branch. It creates a separate
 `chore(l10n): refresh generated localization` commit before the delivery commit.
-Review both commits on the same branch. A failed candidate does not leave a
-refresh commit in your checkout. Unrelated staged work remains outside both
+Review both commits on the same branch. A failed candidate or commit hook does not leave a
+refresh commit in your checkout. Hook changes to the verified output stop delivery. Unrelated staged work remains outside both
 commits for existing-Locale delivery.
 
 If refresh cannot be automated, the command lists the actual changed files,
