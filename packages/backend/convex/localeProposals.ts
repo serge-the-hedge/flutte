@@ -945,6 +945,7 @@ export const begin = internalMutation({
 	args: {
 		projectId: v.id("projects"),
 		localeCode: v.string(),
+		fromProposalId: v.optional(v.id("localeProposals")),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		sourceSnapshotFileId: v.id("sourceSnapshotFiles"),
 		sourceCatalogPath: v.string(),
@@ -962,12 +963,29 @@ export const begin = internalMutation({
 			args.projectId,
 			localeCode,
 		);
-		if (!configured)
+		const predecessor = args.fromProposalId
+			? await ctx.db.get(args.fromProposalId)
+			: null;
+		if (
+			args.fromProposalId &&
+			(!predecessor ||
+				predecessor.projectId !== args.projectId ||
+				predecessor.localeCode !== localeCode)
+		)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale Proposal continuation was not found.",
+			});
+		// Carry-forward may reuse immutable history after setup is removed. It never
+		// grants permission to configure a new language or invent a regional mapping.
+		const identity =
+			configured ??
+			(predecessor ? proposalDeliveryIdentity(predecessor) : null);
+		if (!identity)
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: `New Locale ${localeCode} is not configured for this project.`,
 			});
-		const identity = configured;
 		assertIntroductionCatalogPath(identity.catalogPath, args.sourceCatalogPath);
 		const existingLocale = await ctx.db
 			.query("locales")
@@ -1023,17 +1041,6 @@ export const begin = internalMutation({
 			validationError("Locale Proposal source evidence is invalid.");
 		}
 		const timestamp = now();
-		if (!configured)
-			await ctx.db.insert("localeIntroductionTargets", {
-				projectId: args.projectId,
-				localeCode,
-				label: identity.label,
-				catalogPath: identity.catalogPath,
-				runtimeLocale: identity.runtimeLocale,
-				createdAt: timestamp,
-				updatedAt: timestamp,
-				updatedBy: args.createdBy.id,
-			});
 		return await ctx.db.insert("localeProposals", {
 			projectId: args.projectId,
 			sourceSnapshotId: args.sourceSnapshotId,
@@ -1070,6 +1077,7 @@ export async function ensureLocaleProposalForReview(
 	projectId: Id<"projects">,
 	userId: string,
 	localeCode: string,
+	fromProposalId?: Id<"localeProposals">,
 ): Promise<{ proposalId: Id<"localeProposals"> }> {
 	const project = await projectFor(ctx, projectId);
 	if (!project.baselineSnapshotId) {
@@ -1109,6 +1117,7 @@ export async function ensureLocaleProposalForReview(
 		{
 			projectId,
 			localeCode,
+			fromProposalId,
 			sourceSnapshotId: source.snapshotId,
 			sourceSnapshotFileId: source.sourceSnapshotFileId,
 			sourceCatalogPath: source.sourceCatalogPath,
@@ -1156,6 +1165,7 @@ export const ensureForCarryForward = internalMutation({
 			args.projectId,
 			args.userId,
 			from.localeCode,
+			from._id,
 		);
 	},
 });
