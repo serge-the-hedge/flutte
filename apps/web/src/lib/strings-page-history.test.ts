@@ -1,48 +1,45 @@
 import { expect, test } from "bun:test";
-import { previousStringsPages } from "./strings-page-history";
+import {
+	previousStringsPage,
+	rememberStringsPage,
+	type StringsPageHistory,
+	type StringsPagePosition,
+} from "./strings-page-history";
 
-test("browser Back shortens page history without losing a permalink start", () => {
-	const start = { key: "message70" };
-	const second = { after: 101 };
-	const history = { context: "de", pages: [start, second] };
-	expect(previousStringsPages(history, "de", { after: 133 })).toEqual([
-		start,
-		second,
-	]);
-	expect(previousStringsPages(history, "de", second)).toEqual([start]);
-	expect(previousStringsPages(history, "de", start)).toEqual([]);
-});
-test("a language, filter, release or Baseline change starts a separate history", () => {
+for (const kind of ["repository", "basic"] as const) {
+	const page = (index: number): StringsPagePosition =>
+		kind === "repository" ? { after: index } : { cursor: `native-${index}` };
+	test(`${kind}: mixed UI Previous and browser Back preserve each visited predecessor`, () => {
+		const first = { key: "start-key" };
+		const second = page(2);
+		const third = page(3);
+		let history: StringsPageHistory = { context: kind, links: [] };
+		history = rememberStringsPage(history, kind, first, second);
+		history = rememberStringsPage(history, kind, second, third);
+		// UI Previous from 3 to 2, followed by browser Back to 3.
+		expect(previousStringsPage(history, kind, third)).toEqual(second);
+		expect(previousStringsPage(history, kind, second)).toEqual(first);
+		expect(previousStringsPage(history, kind, third)).toEqual(second);
+		// Browser Back to 1, then Next follows a different freshly read continuation.
+		const alternate = page(4);
+		history = rememberStringsPage(history, kind, first, alternate);
+		expect(previousStringsPage(history, kind, alternate)).toEqual(first);
+		expect(previousStringsPage(history, kind, third)).toEqual(second);
+		expect(previousStringsPage(history, kind, second)).toEqual(first);
+		expect(previousStringsPage(history, kind, first)).toBeUndefined();
+	});
+}
+test("project/filter changes isolate links and old contexts are discarded on Next", () => {
+	const history = rememberStringsPage(
+		{ context: "old", links: [] },
+		"old",
+		{},
+		{ cursor: "next" },
+	);
 	expect(
-		previousStringsPages(
-			{ context: "old", pages: [{}, { after: 31 }] },
-			"new",
-			{ after: 63 },
-		),
-	).toEqual([]);
-});
-
-test("native cursor pages reconcile browser Back and retain an exact-key starting point", () => {
-	const start = { key: "store.subtitle" };
-	const second = { cursor: "native-page-2" };
-	const history = { context: "basic-marketing", pages: [start, second] };
-	expect(
-		previousStringsPages(history, "basic-marketing", {
-			cursor: "native-page-3",
-		}),
-	).toEqual([start, second]);
-	expect(previousStringsPages(history, "basic-marketing", second)).toEqual([
-		start,
-	]);
-	expect(previousStringsPages(history, "basic-marketing", start)).toEqual([]);
-});
-
-test("native cursor history cannot leak across a tag/search or project change", () => {
-	expect(
-		previousStringsPages(
-			{ context: "old", pages: [{}, { cursor: "page-2" }] },
-			"new",
-			{ cursor: "page-3" },
-		),
-	).toEqual([]);
+		previousStringsPage(history, "new", { cursor: "next" }),
+	).toBeUndefined();
+	const next = rememberStringsPage(history, "new", {}, { cursor: "new-next" });
+	expect(previousStringsPage(next, "new", { cursor: "next" })).toBeUndefined();
+	expect(previousStringsPage(next, "new", { cursor: "new-next" })).toEqual({});
 });

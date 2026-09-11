@@ -41,7 +41,8 @@ import type {
 import { stringsLanguagesFromSearch } from "@/lib/strings-languages";
 import { matchingRepositoryKeys } from "@/lib/strings-matching-keys";
 import {
-	previousStringsPages,
+	previousStringsPage,
+	rememberStringsPage,
 	type StringsPageHistory,
 } from "@/lib/strings-page-history";
 import type { StringsSearch } from "@/lib/strings-search";
@@ -202,9 +203,9 @@ function RepositoryStrings() {
 	]);
 	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
 		context: pageContext,
-		pages: [],
+		links: [],
 	});
-	const previousPages = previousStringsPages(pageHistory, pageContext, {
+	const previousPage = previousStringsPage(pageHistory, pageContext, {
 		after: search.after,
 		key: search.key,
 	});
@@ -682,7 +683,6 @@ function RepositoryStrings() {
 				/>
 			) : null}
 			<StringsCatalogView
-				hideSearchCount
 				selectedMessageIds={selectedKeys}
 				onSelectionChange={setSelectedKeys}
 				tagNamesByMessage={tagNamesByMessage}
@@ -776,11 +776,7 @@ function RepositoryStrings() {
 					hasPrevious={search.after !== undefined}
 					hasNext={page?.nextAfter != null}
 					onPrevious={() => {
-						const previous = previousPages.at(-1);
-						setPageHistory({
-							context: pageContext,
-							pages: previousPages.slice(0, -1),
-						});
+						const previous = previousPage;
 						void navigate({
 							search: (current) => ({
 								...current,
@@ -791,13 +787,14 @@ function RepositoryStrings() {
 					}}
 					onNext={() => {
 						if (page?.nextAfter == null) return;
-						setPageHistory({
-							context: pageContext,
-							pages: [
-								...previousPages,
+						setPageHistory((current) =>
+							rememberStringsPage(
+								current,
+								pageContext,
 								{ after: search.after, key: search.key },
-							],
-						});
+								{ after: page.nextAfter ?? undefined },
+							),
+						);
 						void navigate({
 							search: (current) => ({
 								...current,
