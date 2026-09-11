@@ -17,6 +17,12 @@ import {
 import { encodedSize as byteLength } from "./catalogWorkspaceView";
 import { sha256Hex } from "./lib";
 import {
+	matchesMessageTags,
+	readMessageTagIds,
+	tagRevision,
+	validateTagIds,
+} from "./messageTags";
+import {
 	guidanceContextValidator,
 	readGuidance,
 	readGuidanceRevision,
@@ -345,12 +351,17 @@ export const workspaceSearch = internalQuery({
 	args: {
 		token: v.string(),
 		...searchOptions,
+		tagIds: v.optional(v.array(v.id("tags"))),
 		localeCode: v.optional(v.string()),
 		quality: v.optional(v.union(v.literal("all"), v.literal("confirmed"))),
 		view: v.optional(v.union(v.literal("compact"), v.literal("full"))),
 	},
 	handler: async (ctx, args) => {
 		const token = await authenticate(ctx, args.token, "search");
+		const tags = await validateTagIds(ctx, token.projectId, args.tagIds);
+		const metadataRevision = tags.length
+			? await tagRevision(ctx, token.projectId)
+			: 0;
 		const options = normalizedSearch(args);
 		const projection = await activeProjectionFor(ctx, token.projectId);
 		if (!projection) return { results: [], hasMore: false, nextCursor: null };
@@ -362,6 +373,8 @@ export const workspaceSearch = internalQuery({
 		const filter = await sha256Hex(
 			JSON.stringify({
 				...options,
+				tags,
+				metadataRevision,
 				limit: undefined,
 				localeCode: args.localeCode,
 				quality: args.quality ?? "all",
@@ -483,6 +496,7 @@ export const workspaceSearch = internalQuery({
 		const rows = indexedPage.page;
 		type Entry = ReturnType<typeof discoveryEntry> & {
 			evidence: Awaited<ReturnType<typeof readWorkspaceTargetEvidence>>;
+			tagIds: Id<"tags">[];
 			matchedFields: ReturnType<typeof matchedFields>;
 		};
 		type CompactEntry = Pick<
@@ -492,6 +506,7 @@ export const workspaceSearch = internalQuery({
 			| "evidence"
 			| "matchedFields"
 			| "characterLimit"
+			| "tagIds"
 		> & {
 			source: { value: string; pendingProposal: boolean };
 			target: { value: string };
@@ -517,6 +532,18 @@ export const workspaceSearch = internalQuery({
 		});
 		for (const [rowIndex, row] of rows.entries()) {
 			if (!row.messageId.startsWith(options.keyPrefix)) continue;
+			if (
+				!(await matchesMessageTags(
+					ctx,
+					{ projectId: token.projectId, messageId: row.messageId },
+					tags,
+				))
+			)
+				continue;
+			const assignedTags = await readMessageTagIds(ctx, {
+				projectId: token.projectId,
+				messageId: row.messageId,
+			});
 			const start =
 				row.catalogIndex === position.catalogIndex ? position.targetIndex : 0;
 			if (start > row.targets.length)
@@ -574,6 +601,7 @@ export const workspaceSearch = internalQuery({
 					args.view === "compact"
 						? {
 								characterLimit: current.characterLimit,
+								tagIds: assignedTags,
 								messageId: row.messageId,
 								localeCode: target.localeCode,
 								source: {
@@ -584,7 +612,12 @@ export const workspaceSearch = internalQuery({
 								evidence,
 								matchedFields: matches,
 							}
-						: { ...discoveryEntry(current), evidence, matchedFields: matches };
+						: {
+								...discoveryEntry(current),
+								evidence,
+								matchedFields: matches,
+								tagIds: assignedTags,
+							};
 				const bytes = byteLength(entry);
 				if (resultBytes + bytes > MAX_DISCOVERY_RESPONSE_BYTES - 4096) {
 					if (!results.length)

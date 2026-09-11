@@ -144,6 +144,200 @@ async function commit(input = field()) {
 }
 
 describe("Catalog editor draft lifecycle", () => {
+	test("controlled selection can exceed the task limit without echoing state changes", async () => {
+		const selections: string[][] = [];
+		function SelectionHarness() {
+			const [selected, setSelected] = useState(
+				Array.from({ length: 34 }, (_, index) => `other-${index}`),
+			);
+			return (
+				<StringsCatalogView
+					{...props({ messageIds: ["welcome"] })}
+					selectedMessageIds={selected}
+					onSelectionChange={(ids) => {
+						selections.push([...ids]);
+						setSelected([...ids]);
+					}}
+					onCreateTranslationTask={async () => {}}
+				/>
+			);
+		}
+		await testDom.render(<SelectionHarness />);
+		expect(selections).toEqual([]);
+		await act(async () =>
+			testDom.container
+				.querySelector<HTMLButtonElement>(
+					'[aria-label="Add welcome to Translation Task"]',
+				)
+				?.click(),
+		);
+		expect(selections.at(-1)).toHaveLength(35);
+		expect(testDom.container.textContent).toContain(
+			"Select up to 32 strings to start a task.",
+		);
+		expect(
+			[...testDom.container.querySelectorAll<HTMLButtonElement>("button")].find(
+				(button) => button.textContent === "Start task",
+			)?.disabled,
+		).toBe(true);
+		expect(testDom.container.textContent).not.toContain("35 selected");
+		expect(
+			[...testDom.container.querySelectorAll<HTMLButtonElement>("button")].find(
+				(button) => button.textContent === "Clear",
+			),
+		).toBeUndefined();
+		expect(selections).toHaveLength(1);
+	});
+
+	test("starts a task for off-page selected strings using project target languages", async () => {
+		const tasks: Array<
+			Parameters<NonNullable<Props["onCreateTranslationTask"]>>[0]
+		> = [];
+		await render({
+			...props({ messageIds: ["visible"] }),
+			selectedMessageIds: ["off-page"],
+			sourceLocaleId: "en",
+			availableLocales: [
+				{ id: "en", code: "en" },
+				{ id: "fr", code: "fr" },
+				{ id: "de", code: "de" },
+			],
+			onCreateTranslationTask: async (task) => {
+				tasks.push(task);
+			},
+		});
+		await act(async () =>
+			[...testDom.container.querySelectorAll<HTMLButtonElement>("button")]
+				.find((button) => button.textContent === "Start task")
+				?.click(),
+		);
+		const dialog = document.querySelector('[role="alertdialog"]');
+		const choices = [
+			...(dialog?.querySelectorAll<HTMLButtonElement>("fieldset button") ?? []),
+		];
+		expect(choices.map((button) => button.textContent)).toEqual(["fr", "de"]);
+		await act(async () =>
+			choices.find((button) => button.textContent === "de")?.click(),
+		);
+		await act(async () =>
+			[...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+				.find((button) => button.textContent === "Create task")
+				?.click(),
+		);
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]?.localeId).toBe("de");
+		expect(tasks[0]?.messageIds).toEqual(["off-page"]);
+	});
+
+	test("advanced properties and locale switching retain the same draft and concurrency basis", async () => {
+		const commits: CatalogWorkspaceCommit[] = [];
+		const next = props({
+			messageIds: ["welcome"],
+			onCommitValue: async (input) => {
+				commits.push(input);
+				return { basis: input.basis };
+			},
+		});
+		await render({
+			...next,
+			renderProperties: () => (
+				<input aria-label="String context" defaultValue="Original context" />
+			),
+		});
+		await act(async () =>
+			testDom.container
+				.querySelector<HTMLButtonElement>(
+					'[aria-label="Properties for welcome"]',
+				)
+				?.click(),
+		);
+		const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+		expect(dialog()).not.toBeNull();
+		const context = dialog()?.querySelector<HTMLInputElement>(
+			'[aria-label="String context"]',
+		);
+		if (!context) throw new Error("No properties editor");
+		await type("Changed context", context);
+		const chooseLocale = async (code: string) => {
+			const picker =
+				dialog()?.querySelector<HTMLInputElement>('[role="combobox"]');
+			if (!picker) throw new Error("No language picker");
+			await act(async () => {
+				picker.focus();
+				picker.click();
+			});
+			await type(code, picker);
+			await act(async () => {
+				picker.dispatchEvent(
+					new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+				);
+			});
+			await act(async () => {
+				document.querySelector<HTMLElement>(`[role="option"]`)?.click();
+			});
+		};
+		await chooseLocale("fr");
+		const target = dialog()?.querySelector<HTMLTextAreaElement>(
+			'textarea[data-workspace-locale-id="fr"]',
+		);
+		if (!target) throw new Error("No French editor");
+		await type("A kept draft", target);
+		await chooseLocale("en");
+		await chooseLocale("fr");
+		const restored = dialog()?.querySelector<HTMLTextAreaElement>(
+			'textarea[data-workspace-locale-id="fr"]',
+		);
+		expect(restored?.value).toBe("A kept draft");
+		expect(context.value).toBe("Changed context");
+		if (!restored) throw new Error("Draft editor missing");
+		await commit(restored);
+		expect(commits[0]?.basis).toEqual({
+			kind: "repository",
+			expectedSourceFingerprint: "source-1",
+			expectedGitValueFingerprint: "git-1",
+			expectedGitValueRevision: 0,
+			expectedWorkspaceRevision: 0,
+		});
+		await act(async () =>
+			document
+				.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')
+				?.click(),
+		);
+		expect(dialog()).toBeNull();
+	});
+
+	test("closing advanced properties respects its guard, and viewers get no editable value", async () => {
+		let canClose = false;
+		const next = props({ messageIds: ["welcome"] });
+		await render({
+			...next,
+			onCommitValue: undefined,
+			renderProperties: () => <p>Read-only properties</p>,
+			onBeforeCloseAdvanced: () => canClose,
+		});
+		await act(async () =>
+			testDom.container
+				.querySelector<HTMLButtonElement>(
+					'[aria-label="Properties for welcome"]',
+				)
+				?.click(),
+		);
+		expect(document.querySelector('[role="dialog"] textarea')).toBeNull();
+		await act(async () =>
+			document
+				.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')
+				?.click(),
+		);
+		expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+		canClose = true;
+		await act(async () =>
+			document
+				.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')
+				?.click(),
+		);
+		expect(document.querySelector('[role="dialog"]')).toBeNull();
+	});
+
 	test("keeps over-limit drafts editable, blocks keyboard saves, and allows a fitting Unicode value", async () => {
 		const saves: CatalogWorkspaceCommit[] = [];
 		const next = props({
@@ -177,7 +371,6 @@ describe("Catalog editor draft lifecycle", () => {
 			if (!card) throw new Error("Missing card fixture");
 			const navigation: unknown[] = [];
 			const selections: string[][] = [];
-			const managed: string[] = [];
 			const display = name ?? "Welcome";
 			await render({
 				...next,
@@ -203,12 +396,16 @@ describe("Catalog editor draft lifecycle", () => {
 				]),
 				onNavigationChange: (state) => navigation.push(state),
 				onSelectionChange: (ids) => selections.push([...ids]),
-				onManageKey: (key) => managed.push(key.id),
+				renderProperties: (key) => <p>Properties for {key.id}</p>,
 			});
 			const permalink = testDom.container.querySelector<HTMLButtonElement>(
 				`[aria-label="Open ${display} permalink"]`,
 			);
-			expect(permalink?.textContent).toBe(name ?? "");
+			expect(permalink?.textContent).toBe("");
+			const nameEntry = testDom.container.querySelector(
+				`[aria-label="Properties for ${display}"]`,
+			);
+			expect(nameEntry?.textContent).toBe(name ?? "");
 			expect(permalink?.classList.contains("font-mono")).toBe(false);
 			const input = testDom.container.querySelector<HTMLTextAreaElement>(
 				'textarea[data-workspace-message-id="generated-id"]',
@@ -231,11 +428,13 @@ describe("Catalog editor draft lifecycle", () => {
 			await act(async () => {
 				testDom.container
 					.querySelector<HTMLButtonElement>(
-						`[aria-label="Details for ${display}"]`,
+						`[aria-label="Properties for ${display}"]`,
 					)
 					?.click();
 			});
-			expect(managed).toEqual(["generated-id"]);
+			expect(document.querySelector("[role=dialog]")?.textContent).toContain(
+				"Properties for generated-id",
+			);
 		},
 	);
 

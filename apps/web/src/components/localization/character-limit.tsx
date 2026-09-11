@@ -86,6 +86,7 @@ export function RepositoryCharacterLimit({
 	onUnsavedWorkChange,
 	onBusyChange,
 	disabled,
+	embedded = false,
 }: {
 	projectId: string;
 	messageId: string;
@@ -94,10 +95,11 @@ export function RepositoryCharacterLimit({
 	onUnsavedWorkChange: (dirty: boolean) => void;
 	onBusyChange?: (busy: boolean) => void;
 	disabled?: boolean;
+	embedded?: boolean;
 }) {
 	const save = useMutation(api.messageConstraints.setCharacterLimit);
 	const [value, setValue] = useState(limit?.toString() ?? "");
-	const [expected] = useState(limit ?? null);
+	const [expected, setExpected] = useState(limit ?? null);
 	const [busy, setBusy] = useState(false);
 	useEffect(() => {
 		onBusyChange?.(busy);
@@ -120,7 +122,10 @@ export function RepositoryCharacterLimit({
 	const [error, setError] = useState<string | null>(null);
 	return (
 		<form
-			className="flex flex-col gap-3 rounded-md border p-3"
+			className={cn(
+				"flex flex-col gap-3",
+				!embedded && "rounded-md border p-3",
+			)}
 			onSubmit={async (event) => {
 				event.preventDefault();
 				if (
@@ -138,7 +143,8 @@ export function RepositoryCharacterLimit({
 						characterLimit: parsedCharacterLimit(value) ?? null,
 						expectedCharacterLimit: expected,
 					});
-					onClose();
+					if (embedded) setExpected(parsedCharacterLimit(value) ?? null);
+					else onClose();
 				} catch (cause) {
 					setError(
 						cause instanceof Error
@@ -150,34 +156,42 @@ export function RepositoryCharacterLimit({
 				}
 			}}
 		>
-			<h2 className="font-medium">{messageId}</h2>
+			{!embedded ? <h2 className="font-medium">{messageId}</h2> : null}
 			<CharacterLimitField
 				value={value}
 				onChange={setValue}
 				disabled={disabled || busy}
 			/>
-			<div className="flex gap-2">
-				<Button
-					type="submit"
-					size="xs"
-					disabled={
-						disabled ||
-						busy ||
-						(value !== "" && parsedCharacterLimit(value) === undefined)
-					}
-				>
-					Save
-				</Button>
-				<Button
-					type="button"
-					size="xs"
-					variant="ghost"
-					disabled={busy}
-					onClick={onClose}
-				>
-					Cancel
-				</Button>
-			</div>
+			{!embedded || !disabled ? (
+				<div className="flex gap-2">
+					<Button
+						type="submit"
+						size="xs"
+						disabled={
+							disabled ||
+							busy ||
+							(value !== "" && parsedCharacterLimit(value) === undefined)
+						}
+					>
+						Save
+					</Button>
+					<Button
+						type="button"
+						size="xs"
+						variant="ghost"
+						disabled={busy}
+						onClick={() => {
+							if (embedded) {
+								setValue(limit?.toString() ?? "");
+								setExpected(limit ?? null);
+								setError(null);
+							} else onClose();
+						}}
+					>
+						{embedded ? "Reset" : "Cancel"}
+					</Button>
+				</div>
+			) : null}
 			{error ? (
 				<p role="alert" className="text-destructive text-xs">
 					{error}

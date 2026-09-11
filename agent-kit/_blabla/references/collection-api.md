@@ -14,10 +14,11 @@ tasks by the returned identity, never by name; old keys initially serve as names
 
 `GET /workspace/search` (`search`) accepts `q`, `localeCode`, `searchIn`
 (`all`, `key`, `source`, `target`), `match` (`substring`, `exact`), `keyPrefix`,
-`quality` (`all`, `confirmed`), `limit` (1–50), and `cursor`.
+`quality` (`all`, `confirmed`), repeated `tagId` filters (matches any selected tag),
+`limit` (1–50), and `cursor`. See [tags](tags-api.md) for discovery and assignment.
 
 Hits carry project content/key/Locale identity, `name`, Source and target values, fingerprints,
-revision basis, value state, matching fields, and confirmation attribution.
+revision basis, value state, matching fields, tag IDs, and confirmation attribution.
 Plain text is searched literally, including braces. `searchIn: "all"` also matches
 names and can return `"name"` in `matchedFields`; `"key"` still matches identity.
 Search scans at most 64
@@ -44,8 +45,8 @@ guidance also enforces its own text budget. Braces are ordinary text.
 ## Download
 
 `POST /workspace/download` (`read`) accepts the same `keys`/`locales` and
-`mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text` keyed by
-message then Locale, omissions, and revision evidence for that read. The JSON
+`mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text` and the same typed `document`, keyed by message then Locale,
+omissions, and revision evidence for that read. The JSON
 contains `values` and a separate `names` map keyed by the same stable identities;
 unnamed strings have `null` names.
 

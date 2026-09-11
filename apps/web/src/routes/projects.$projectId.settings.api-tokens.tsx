@@ -275,6 +275,26 @@ function ApiTokensForProject({ projectId }: { projectId: string }) {
 											</FieldContent>
 										</Field>
 									) : null}
+									{!isReviewer ? (
+										<Field orientation="horizontal">
+											<Checkbox
+												id="tags-write-token"
+												checked={selectedScopes.includes("tags-write")}
+												disabled={isCreating}
+												onCheckedChange={(checked) =>
+													toggleScope("tags-write", checked === true)
+												}
+											/>
+											<FieldContent>
+												<FieldLabel htmlFor="tags-write-token">
+													Allow tag editing
+												</FieldLabel>
+												<FieldDescription>
+													Create tags and organize strings in this project.
+												</FieldDescription>
+											</FieldContent>
+										</Field>
+									) : null}
 									<Field>
 										<FieldLabel htmlFor="token-name">Name</FieldLabel>
 										<Input

@@ -31,6 +31,7 @@ import {
 	readCharacterLimit,
 	writeCharacterLimit,
 } from "./messageConstraints";
+import { matchesMessageTags, tagRevision, validateTagIds } from "./messageTags";
 import { requireEditor, requireViewer } from "./permissions";
 
 type ReadCtx = QueryCtx | MutationCtx;
@@ -315,6 +316,7 @@ function parseCursor(
 	cursor: string | undefined,
 	collectionId: Id<"contentCollections">,
 	q: string,
+	tagBasis: string,
 ) {
 	if (cursor === undefined) return null;
 	if (cursor.length > 8192)
@@ -329,6 +331,7 @@ function parseCursor(
 			parsed.collectionId === collectionId &&
 			"q" in parsed &&
 			parsed.q === q &&
+			tagBasis === "" &&
 			!("version" in parsed) &&
 			"key" in parsed &&
 			typeof parsed.key === "string" &&
@@ -347,9 +350,14 @@ function parseCursor(
 			parsed.q === q &&
 			typeof parsed.cursor === "string" &&
 			parsed.cursor.length > 0
-		)
+		) {
+			if (("tagBasis" in parsed ? parsed.tagBasis : "") !== tagBasis)
+				fail("STALE_BASIS", "Tags changed. Restart from the first page.");
 			return parsed.cursor;
-	} catch {}
+		}
+	} catch (error) {
+		if (error instanceof ConvexError) throw error;
+	}
 	fail(
 		"VALIDATION",
 		"This cursor does not belong to the collection and search. Restart from the first page.",
@@ -364,9 +372,19 @@ export async function readManagedPage(
 		q?: string;
 		limit?: number;
 		focusKey?: string;
+		tagIds?: Id<"tags">[];
+		expectedTagRevision?: number;
 	},
 ) {
 	await requireManagedCollection(ctx, input.projectId, input.collectionId);
+	const tags = await validateTagIds(ctx, input.projectId, input.tagIds);
+	const revision = await tagRevision(ctx, input.projectId);
+	if (
+		input.expectedTagRevision !== undefined &&
+		input.expectedTagRevision !== revision
+	)
+		fail("STALE_BASIS", "Tags changed. Restart from the first page.");
+	const tagBasis = tags.length ? JSON.stringify([tags, revision]) : "";
 	const q = (input.q ?? "").trim().toLowerCase();
 	const limit = input.limit ?? 16;
 	if (
@@ -393,7 +411,7 @@ export async function readManagedPage(
 			source && source.archivedAt === undefined
 				? [await sourceEntry(ctx, source)]
 				: [];
-		const result = { items, nextCursor: null };
+		const result = { items, nextCursor: null, tagRevision: revision };
 		if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 			fail(
 				"LIMIT_EXCEEDED",
@@ -401,7 +419,7 @@ export async function readManagedPage(
 			);
 		return result;
 	}
-	const cursor = parseCursor(input.cursor, input.collectionId, q);
+	const cursor = parseCursor(input.cursor, input.collectionId, q, tagBasis);
 	const page = await ctx.db
 		.query("managedMessages")
 		.withIndex("by_collection", (index) =>
@@ -409,11 +427,18 @@ export async function readManagedPage(
 		)
 		.order("asc")
 		.paginate({ cursor, numItems: limit, maximumRowsRead: 16 });
+	const tagMatches = new Set<string>();
+	for (const source of page.page)
+		if (
+			await matchesMessageTags(ctx, { ...input, messageId: source.key }, tags)
+		)
+			tagMatches.add(source.key);
 	const items = await Promise.all(
 		page.page
 			.filter(
 				(row) =>
 					row.archivedAt === undefined &&
+					tagMatches.has(row.key) &&
 					(q.length === 0 ||
 						row.key.toLowerCase().includes(q) ||
 						(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
@@ -423,10 +448,12 @@ export async function readManagedPage(
 	);
 	const result = {
 		items,
+		tagRevision: revision,
 		nextCursor: page.isDone
 			? null
 			: JSON.stringify({
 					version: 2,
+					tagBasis,
 					collectionId: input.collectionId,
 					q,
 					cursor: page.continueCursor,
@@ -493,8 +520,14 @@ export async function exportManagedSelection(
 		messageIds: string[];
 		localeIds: Id<"locales">[];
 		mode: "reviewed" | "partial" | "draft";
+		expectedTagRevision?: number;
 	},
 ) {
+	if (
+		input.expectedTagRevision !== undefined &&
+		input.expectedTagRevision !== (await tagRevision(ctx, input.projectId))
+	)
+		fail("STALE_BASIS", "Tags changed. Restart the export.");
 	if (input.messageIds.length === 0 || input.localeIds.length === 0)
 		fail("VALIDATION", "Select at least one string and language.");
 	const { items } = await readContextPairs(ctx, input, {
@@ -539,21 +572,19 @@ export async function exportManagedSelection(
 		);
 	const names: Record<string, string | null> = Object.create(null);
 	for (const item of items) names[item.messageId] = item.name;
-	const text = JSON.stringify(
-		{
-			names,
-			collectionId: input.collectionId,
-			mode: input.mode,
-			values,
-			omitted,
-			evidence,
-		},
-		null,
-		2,
-	);
-	if (new TextEncoder().encode(text).byteLength > MAX_MANAGED_RESPONSE_BYTES)
+	const document = {
+		names,
+		collectionId: input.collectionId,
+		mode: input.mode,
+		values,
+		omitted,
+		evidence,
+	};
+	const text = JSON.stringify(document, null, 2);
+	const result = { text, document, omitted, mode: input.mode };
+	if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 		fail("LIMIT_EXCEEDED", "Download exceeds 1 MiB. Select fewer values.");
-	return { text, omitted, mode: input.mode };
+	return result;
 }
 export const page = query({
 	args: {
@@ -562,6 +593,8 @@ export const page = query({
 		q: v.optional(v.string()),
 		limit: v.optional(v.number()),
 		focusKey: v.optional(v.string()),
+		tagIds: v.optional(v.array(v.id("tags"))),
+		expectedTagRevision: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
@@ -582,6 +615,7 @@ export const context = query({
 export const exportSelection = query({
 	args: {
 		...addressFields,
+		expectedTagRevision: v.optional(v.number()),
 		messageIds: v.array(v.string()),
 		localeIds: v.array(v.id("locales")),
 		mode: v.union(

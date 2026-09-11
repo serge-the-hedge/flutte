@@ -10,6 +10,7 @@ import {
 	AlertDialogTitle,
 	AlertDialogTrigger,
 } from "@blabla/ui/components/alert-dialog";
+import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import { Checkbox } from "@blabla/ui/components/checkbox";
 import {
@@ -100,7 +101,12 @@ import {
 	sameStringsWindowMessageIds,
 	stringsWindowKeyCap,
 } from "@/lib/strings-window";
+import {
+	CatalogAdvancedView,
+	type CatalogLocale,
+} from "./catalog-advanced-view";
 import { CatalogDraftRecovery } from "./catalog-draft-recovery";
+import { CatalogLongValue } from "./catalog-long-value";
 import { CatalogValueRow, QUIET_CATALOG_FIELD } from "./catalog-value-row";
 import { CharacterCount } from "./character-limit";
 import { TranslationHistoryRow } from "./translation-history";
@@ -185,7 +191,20 @@ type CatalogControls = {
 	searchPlaceholder?: string;
 	/** Only offer Focus when the caller filters the complete result set by scope. */
 	showFocusControls?: boolean;
-	onManageKey?: (key: StringsCatalogKey) => void;
+	availableLocales?: CatalogLocale[];
+	sourceLocaleId?: string;
+	renderProperties?: (
+		key: StringsCatalogKey,
+		close: () => void,
+	) => React.ReactNode;
+	renderAdvancedValue?: (
+		key: StringsCatalogKey,
+		localeId: string,
+	) => React.ReactNode;
+	onBeforeCloseAdvanced?: () => boolean;
+	onOpenAdvanced?: (key: StringsCatalogKey, localeId?: string) => void;
+	tagNamesByMessage?: ReadonlyMap<string, readonly string[]>;
+	selectedMessageIds?: readonly string[];
 	onSelectionChange?: (ids: readonly string[]) => void;
 };
 const CatalogControlsContext = createContext<CatalogControls>({});
@@ -235,10 +254,12 @@ function CatalogValue({
 	value,
 	sourceValue,
 	characterLimit,
+	onOpen,
 }: {
 	value: CatalogWorkspaceValue;
 	sourceValue?: string;
 	characterLimit?: number;
+	onOpen?: () => void;
 }) {
 	const isEmpty = value.value.length === 0;
 	const presentation = presentCatalogWorkspaceValue({
@@ -257,17 +278,23 @@ function CatalogValue({
 			: value.value;
 	return (
 		<CatalogValueRow localeCode={value.localeCode} tone={presentation.tone}>
-			<p
-				dir="auto"
-				className={cn(
-					"px-2 py-1 text-[13px] leading-relaxed",
-					isEmpty
-						? "text-muted-foreground/70 italic"
-						: "whitespace-pre-wrap break-words",
-				)}
+			<CatalogLongValue
+				value={value.value}
+				label={value.localeCode}
+				onOpen={onOpen}
 			>
-				{visibleValue}
-			</p>
+				<p
+					dir="auto"
+					className={cn(
+						"px-2 py-1 text-[13px] leading-relaxed",
+						isEmpty
+							? "text-muted-foreground/70 italic"
+							: "whitespace-pre-wrap break-words",
+					)}
+				>
+					{visibleValue}
+				</p>
+			</CatalogLongValue>
 			<CharacterCount value={value.value} limit={characterLimit} />
 			<ValuePhraseLine phrase={presentation.phrase} tone={presentation.tone} />
 		</CatalogValueRow>
@@ -282,6 +309,7 @@ function EditableCatalogValue({
 	characterLimit,
 	onCommitValue,
 	onMoveFocus,
+	onOpen,
 }: {
 	messageId: string;
 	messageLabel?: string;
@@ -290,6 +318,7 @@ function EditableCatalogValue({
 	characterLimit?: number;
 	onCommitValue: CommitCatalogValue;
 	onMoveFocus: MoveCatalogWorkspaceFocus;
+	onOpen?: () => void;
 }) {
 	const currentDraftSource = useMemo<CatalogWorkspaceDraftSource>(() => {
 		const basis = catalogValueEditBasis(value);
@@ -318,6 +347,7 @@ function EditableCatalogValue({
 		session.getSnapshot,
 	);
 	const [isFocused, setIsFocused] = useState(false);
+	const editedHere = useRef(false);
 	const renderedValueRef = useRef(currentDraftSource.value);
 	const draftSource = optimisticSource?.committed ?? currentDraftSource;
 	const isDirty = draft.isDirty;
@@ -490,6 +520,7 @@ function EditableCatalogValue({
 		(event) => {
 			if (event.key === "Escape") {
 				event.preventDefault();
+				event.stopPropagation();
 				revert();
 				return;
 			}
@@ -595,23 +626,35 @@ function EditableCatalogValue({
 					Renders nothing — {value.intentionalBlankReason}
 				</button>
 			) : (
-				<IcuMessageSegmentEditor
-					format={basis.kind === "repository" ? "icu" : "plain"}
-					messageId={messageId}
-					messageLabel={messageLabel}
-					localeId={value.localeId}
-					localeCode={value.localeCode}
-					sourceValue={value.isSource ? undefined : sourceValue}
+				<CatalogLongValue
 					value={draft.value}
-					disabled={isSaving}
-					canChangeStructure={!value.isSource}
-					onValueChange={updateDraft}
-					onKeyDown={onEditorKeyDown}
-					onFocus={() => setIsFocused(true)}
-					onBlur={() => setIsFocused(false)}
-					fieldClassName={QUIET_CATALOG_FIELD}
-					showRawToggle={isFocused || (isDirty && !isSaving)}
-				/>
+					label={`${messageLabel ?? messageId} ${value.localeCode}`}
+					onOpen={onOpen}
+					editing={isFocused || (isDirty && editedHere.current)}
+					messageId={messageId}
+					localeId={value.localeId}
+				>
+					<IcuMessageSegmentEditor
+						format={basis.kind === "repository" ? "icu" : "plain"}
+						messageId={messageId}
+						messageLabel={messageLabel}
+						localeId={value.localeId}
+						localeCode={value.localeCode}
+						sourceValue={value.isSource ? undefined : sourceValue}
+						value={draft.value}
+						disabled={isSaving}
+						canChangeStructure={!value.isSource}
+						onValueChange={updateDraft}
+						onKeyDown={onEditorKeyDown}
+						onFocus={() => {
+							editedHere.current = true;
+							setIsFocused(true);
+						}}
+						onBlur={() => setIsFocused(false)}
+						fieldClassName={QUIET_CATALOG_FIELD}
+						showRawToggle={isFocused || (isDirty && !isSaving)}
+					/>
+				</CatalogLongValue>
 			)}
 
 			<CharacterCount value={draft.value} limit={characterLimit} />
@@ -727,7 +770,9 @@ function EditableCatalogValue({
 /** The Catalog Workspace supplies the full optimistic-concurrency token for
  * either a Source Proposal or target edit. Strings only decides whether that
  * opaque value is editable and renders the shared field shape. */
-function CatalogWorkspaceValueField({
+const KEEP_CATALOG_FOCUS: MoveCatalogWorkspaceFocus = () => false;
+
+export function CatalogWorkspaceValueField({
 	messageId,
 	messageLabel,
 	value,
@@ -735,7 +780,9 @@ function CatalogWorkspaceValueField({
 	characterLimit,
 	canEdit,
 	onCommitValue,
-	onMoveFocus,
+	onMoveFocus = KEEP_CATALOG_FOCUS,
+	onOpen,
+	advanced = false,
 }: {
 	messageId: string;
 	messageLabel?: string;
@@ -744,7 +791,9 @@ function CatalogWorkspaceValueField({
 	characterLimit?: number;
 	canEdit: boolean;
 	onCommitValue?: CommitCatalogValue;
-	onMoveFocus: MoveCatalogWorkspaceFocus;
+	onMoveFocus?: MoveCatalogWorkspaceFocus;
+	onOpen?: () => void;
+	advanced?: boolean;
 }) {
 	const { historyProjectId } = useContext(CatalogControlsContext);
 	const editor = { value, canEdit, onCommitValue };
@@ -757,9 +806,11 @@ function CatalogWorkspaceValueField({
 			characterLimit={characterLimit}
 			onCommitValue={editor.onCommitValue}
 			onMoveFocus={onMoveFocus}
+			onOpen={advanced ? undefined : onOpen}
 		/>
 	) : (
 		<CatalogValue
+			onOpen={advanced ? undefined : onOpen}
 			value={value}
 			sourceValue={sourceValue}
 			characterLimit={characterLimit}
@@ -839,12 +890,12 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 				} as React.CSSProperties
 			}
 			className={cn(
-				"group/key flex flex-col gap-2 border-b py-4",
+				"group/key flex flex-col gap-1 border-b py-6",
 				selected && "-mx-2 bg-muted/25 px-2",
 				highlighted && "-mx-3 bg-muted/40 px-3",
 			)}
 		>
-			<header className="flex items-baseline gap-2">
+			<header className="flex flex-wrap items-baseline gap-2">
 				{canEdit || controls.onSelectionChange ? (
 					<Checkbox
 						checked={selected}
@@ -860,41 +911,39 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						)}
 					/>
 				) : null}
-				{title === null ? (
-					<IconButton
-						label="Open string"
-						icon={Link2}
-						size="icon-xs"
-						onClick={() =>
-							onNavigationChange({ query: "", key: catalogKey.id })
-						}
-						aria-label={`Open ${accessibleTitle} permalink`}
-					/>
-				) : (
+				{title !== null ? (
 					<button
 						type="button"
-						onClick={() =>
-							onNavigationChange({ query: "", key: catalogKey.id })
-						}
+						onClick={() => controls.onOpenAdvanced?.(catalogKey)}
 						className={cn(
 							"min-w-0 rounded-sm text-left text-[13px] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 							catalogKey.name === undefined
 								? "truncate font-mono text-foreground/90"
 								: "break-words font-medium",
 						)}
-						aria-label={`Open ${accessibleTitle} permalink`}
+						aria-label={`Properties for ${accessibleTitle}`}
 					>
 						{title}
 					</button>
-				)}
-				{controls.onManageKey ? (
-					<IconButton
-						label="Details"
-						icon={Info}
-						onClick={() => controls.onManageKey?.(catalogKey)}
-						aria-label={`Details for ${accessibleTitle}`}
-					/>
 				) : null}
+				<IconButton
+					label="Properties"
+					icon={Info}
+					onClick={() => controls.onOpenAdvanced?.(catalogKey)}
+					aria-label={`Properties for ${accessibleTitle}`}
+				/>
+				<IconButton
+					label="Permalink"
+					icon={Link2}
+					size="icon-xs"
+					onClick={() => onNavigationChange({ query: "", key: catalogKey.id })}
+					aria-label={`Open ${accessibleTitle} permalink`}
+				/>
+				{controls.tagNamesByMessage?.get(catalogKey.id)?.map((name) => (
+					<Badge key={name} variant="secondary">
+						{name}
+					</Badge>
+				))}
 				{hasMultiArmIcu ? (
 					<span
 						role="img"
@@ -932,6 +981,12 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 				<CatalogWorkspaceValueField
 					messageId={catalogKey.id}
 					messageLabel={accessibleTitle}
+					onOpen={() =>
+						controls.onOpenAdvanced?.(
+							catalogKey,
+							catalogKey.source.localeId ?? catalogKey.source.localeCode,
+						)
+					}
 					value={catalogKey.source}
 					sourceValue={catalogKey.source.value}
 					characterLimit={catalogKey.characterLimit}
@@ -945,6 +1000,12 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 							key={value.localeId ?? value.localeCode}
 							messageId={catalogKey.id}
 							messageLabel={accessibleTitle}
+							onOpen={() =>
+								controls.onOpenAdvanced?.(
+									catalogKey,
+									value.localeId ?? value.localeCode,
+								)
+							}
 							value={value}
 							sourceValue={catalogKey.source.value}
 							characterLimit={catalogKey.characterLimit}
@@ -1565,10 +1626,8 @@ function VirtualizedCatalog({
 		const focusPendingField = () => {
 			const field = Array.from(
 				scrollElementRef.current?.querySelectorAll<
-					HTMLInputElement | HTMLTextAreaElement
-				>(
-					"input[data-workspace-message-id][data-workspace-locale-id], textarea[data-workspace-message-id][data-workspace-locale-id]",
-				) ?? [],
+					HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement
+				>("[data-workspace-message-id][data-workspace-locale-id]") ?? [],
 			).find(
 				(candidate) =>
 					candidate.dataset.workspaceMessageId ===
@@ -1682,11 +1741,13 @@ function TranslationTaskSelection({
 	locales,
 	onClear,
 	onCreate,
+	showSelectionSummary,
 }: {
 	selectedMessageIds: readonly string[];
 	locales: readonly { localeId: string; localeCode: string }[];
 	onClear: () => void;
 	onCreate: CreateTranslationTask;
+	showSelectionSummary: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [localeId, setLocaleId] = useState(locales[0]?.localeId ?? "");
@@ -1706,7 +1767,13 @@ function TranslationTaskSelection({
 		setError(null);
 	};
 	const create = async () => {
-		if (!selectedLocale || title.trim().length === 0 || isCreating) return;
+		if (
+			!selectedLocale ||
+			title.trim().length === 0 ||
+			isCreating ||
+			selectedMessageIds.length > MAX_TRANSLATION_TASK_KEYS
+		)
+			return;
 		setIsCreating(true);
 		setError(null);
 		try {
@@ -1729,25 +1796,40 @@ function TranslationTaskSelection({
 	};
 
 	return (
-		<div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 border bg-background/95 px-3 py-2 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/80">
-			<ListChecks aria-hidden="true" className="size-4 text-muted-foreground" />
-			<p className="text-xs">
-				{selectedMessageIds.length} selected
-				{selectedMessageIds.length >= MAX_TRANSLATION_TASK_KEYS
-					? " · task limit reached"
-					: ""}
-			</p>
-			<Button
-				type="button"
-				size="xs"
-				variant="ghost"
-				className="ml-auto"
-				onClick={onClear}
-			>
-				Clear
-			</Button>
+		<div
+			className={cn(
+				"flex flex-wrap items-center gap-2",
+				showSelectionSummary
+					? "sticky top-2 z-20 border bg-background/95 px-3 py-2 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/80"
+					: "justify-end",
+			)}
+		>
+			{showSelectionSummary ? (
+				<>
+					<ListChecks
+						aria-hidden="true"
+						className="size-4 text-muted-foreground"
+					/>
+					<p className="text-xs">{selectedMessageIds.length} selected</p>
+					<Button
+						type="button"
+						size="xs"
+						variant="ghost"
+						className="ml-auto"
+						onClick={onClear}
+					>
+						Clear
+					</Button>
+				</>
+			) : null}
+			{selectedMessageIds.length > MAX_TRANSLATION_TASK_KEYS ? (
+				<p className="text-muted-foreground text-xs">
+					Select up to {MAX_TRANSLATION_TASK_KEYS} strings to start a task.
+				</p>
+			) : null}
 			<AlertDialog open={open} onOpenChange={openDialog}>
 				<AlertDialogTrigger
+					disabled={selectedMessageIds.length > MAX_TRANSLATION_TASK_KEYS}
 					render={<Button type="button" size="xs" variant="default" />}
 				>
 					Start task
@@ -1806,7 +1888,10 @@ function TranslationTaskSelection({
 						<AlertDialogCancel disabled={isCreating}>Cancel</AlertDialogCancel>
 						<AlertDialogAction
 							disabled={
-								isCreating || !selectedLocale || title.trim().length === 0
+								isCreating ||
+								!selectedLocale ||
+								title.trim().length === 0 ||
+								selectedMessageIds.length > MAX_TRANSLATION_TASK_KEYS
 							}
 							onClick={(event) => {
 								event.preventDefault();
@@ -1861,32 +1946,50 @@ function StringsCatalogNavigator({
 	const projectionId = navigation.projectionId ?? "";
 	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
 	const introducedMessageCount = navigation.introducedMessageCount;
-	const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
+	const [localSelection, setLocalSelection] = useState<Set<string>>(
 		() => new Set(),
 	);
 	const controls = useContext(CatalogControlsContext);
-	useEffect(() => {
-		controls.onSelectionChange?.([...selectedMessageIds]);
-	}, [controls.onSelectionChange, selectedMessageIds]);
+	const selectedMessageIds = useMemo(
+		() =>
+			controls.selectedMessageIds === undefined
+				? localSelection
+				: new Set(controls.selectedMessageIds),
+		[controls.selectedMessageIds, localSelection],
+	);
+	const changeSelection = useCallback(
+		(next: Set<string>) => {
+			if (controls.selectedMessageIds === undefined) setLocalSelection(next);
+			controls.onSelectionChange?.([...next]);
+		},
+		[controls.selectedMessageIds, controls.onSelectionChange],
+	);
 	const onSelectedMessageChange = useCallback(
 		(messageId: string, selected: boolean) => {
-			setSelectedMessageIds((current) => {
-				const next = new Set(current);
-				if (selected) {
-					if (next.size >= MAX_TRANSLATION_TASK_KEYS) return current;
-					next.add(messageId);
-				} else {
-					next.delete(messageId);
-				}
-				return next;
-			});
+			const next = new Set(selectedMessageIds);
+			if (selected) next.add(messageId);
+			else next.delete(messageId);
+			changeSelection(next);
 		},
-		[],
+		[selectedMessageIds, changeSelection],
 	);
-	const taskLocales = useMemo(
-		() => translationTaskLocales(navigation.keys ?? [], selectedMessageIds),
-		[navigation.keys, selectedMessageIds],
-	);
+	const taskLocales = useMemo(() => {
+		// Project membership is independent of the current browse page and of
+		// the display-language filter. A retained selection can be entirely offscreen.
+		const sourceLocaleId =
+			controls.sourceLocaleId ?? navigation.keys?.[0]?.source.localeId;
+		if (controls.availableLocales && sourceLocaleId) {
+			return controls.availableLocales
+				.filter((locale) => locale.id !== sourceLocaleId)
+				.map((locale) => ({ localeId: locale.id, localeCode: locale.code }));
+		}
+		return translationTaskLocales(navigation.keys ?? [], selectedMessageIds);
+	}, [
+		controls.availableLocales,
+		controls.sourceLocaleId,
+		navigation.keys,
+		selectedMessageIds,
+	]);
 
 	if (navigation.kind === "incomplete") {
 		const failed = navigation.status === "failed";
@@ -1977,7 +2080,8 @@ function StringsCatalogNavigator({
 				<TranslationTaskSelection
 					selectedMessageIds={[...selectedMessageIds]}
 					locales={taskLocales}
-					onClear={() => setSelectedMessageIds(new Set())}
+					showSelectionSummary={controls.selectedMessageIds === undefined}
+					onClear={() => changeSelection(new Set())}
 					onCreate={onCreateTranslationTask}
 				/>
 			) : null}
@@ -2072,8 +2176,40 @@ export function StringsCatalogView(
 		},
 ) {
 	const [drafts] = useState(() => new CatalogEditorDrafts());
+	const [advanced, setAdvanced] = useState<{
+		key: StringsCatalogKey;
+		localeId?: string;
+		returnFocus: HTMLElement | null;
+	} | null>(null);
+	const openAdvanced = useCallback(
+		(key: StringsCatalogKey, localeId?: string) => {
+			setAdvanced({
+				key,
+				localeId,
+				returnFocus:
+					document.activeElement instanceof HTMLElement
+						? document.activeElement
+						: null,
+			});
+		},
+		[],
+	);
+	const closeAdvanced = () => {
+		if (props.onBeforeCloseAdvanced?.() === false) return;
+		setAdvanced(null);
+	};
+	const advancedKey = advanced
+		? (props.hydratedCards.get(advanced.key.id) ?? advanced.key)
+		: null;
+	const advancedLocales = advancedKey
+		? (props.availableLocales ??
+			[advancedKey.source, ...advancedKey.targets].map((value) => ({
+				id: value.localeId ?? value.localeCode,
+				code: value.localeCode,
+			})))
+		: [];
 	return (
-		<CatalogControlsContext value={props}>
+		<CatalogControlsContext value={{ ...props, onOpenAdvanced: openAdvanced }}>
 			<CatalogDraftsContext value={drafts}>
 				<CatalogDraftRecovery
 					drafts={drafts}
@@ -2081,6 +2217,49 @@ export function StringsCatalogView(
 					onUnsavedWorkChange={props.onUnsavedWorkChange}
 				/>
 				<StringsCatalogContent {...props} />
+				{advanced && advancedKey ? (
+					<CatalogAdvancedView
+						key={advancedKey.id}
+						title={
+							stringDisplayName({
+								id: advancedKey.id,
+								name: advancedKey.name,
+								sourceValue: advancedKey.source.value,
+							}).label
+						}
+						locales={advancedLocales}
+						initialLocaleId={
+							advanced.localeId ??
+							advancedKey.source.localeId ??
+							advancedKey.source.localeCode
+						}
+						initiallyShowProperties={advanced.localeId === undefined}
+						properties={props.renderProperties?.(advancedKey, () =>
+							setAdvanced(null),
+						)}
+						onClose={closeAdvanced}
+						returnFocus={advanced.returnFocus}
+						renderValue={(localeId) => {
+							if (props.renderAdvancedValue)
+								return props.renderAdvancedValue(advancedKey, localeId);
+							const value = [advancedKey.source, ...advancedKey.targets].find(
+								(candidate) =>
+									(candidate.localeId ?? candidate.localeCode) === localeId,
+							);
+							return value ? (
+								<CatalogWorkspaceValueField
+									advanced
+									messageId={advancedKey.id}
+									value={value}
+									sourceValue={advancedKey.source.value}
+									characterLimit={advancedKey.characterLimit}
+									canEdit={props.onCommitValue !== undefined}
+									onCommitValue={props.onCommitValue}
+								/>
+							) : null;
+						}}
+					/>
+				) : null}
 			</CatalogDraftsContext>
 		</CatalogControlsContext>
 	);

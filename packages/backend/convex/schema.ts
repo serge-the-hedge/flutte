@@ -259,6 +259,21 @@ const contractTransformCode = v.union(
 );
 
 export default defineSchema({
+	messageTagState: defineTable({
+		projectId: v.id("projects"),
+		revision: v.number(),
+	}).index("by_projectId", ["projectId"]),
+	messageTagAssignments: defineTable({
+		projectId: v.id("projects"),
+		collectionId: v.optional(v.id("contentCollections")),
+		messageId: v.string(),
+		tagId: v.id("tags"),
+	}).index("by_projectId_and_collectionId_and_messageId_and_tagId", [
+		"projectId",
+		"collectionId",
+		"messageId",
+		"tagId",
+	]),
 	messageConstraints: defineTable({
 		projectId: v.id("projects"),
 		collectionId: v.optional(v.id("contentCollections")),
@@ -519,6 +534,7 @@ export default defineSchema({
 		archivedAt: v.optional(v.number()),
 	})
 		.index("by_project", ["projectId"])
+		.index("by_projectId_and_archivedAt", ["projectId", "archivedAt"])
 		.index("by_project_slug", ["projectId", "slug"]),
 
 	translationKeys: defineTable({

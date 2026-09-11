@@ -138,6 +138,11 @@ export const currentProject = internalQuery({
 			tokenScopes: token.scopes,
 			localeIntroductionTargets: introductionTargets,
 			capabilities: {
+				tags: {
+					writeScope: "tags-write",
+					canWrite: token.scopes.includes("tags-write"),
+					filter: true,
+				},
 				languages: {
 					writeScope: "languages-write",
 					canWrite: token.scopes.includes("languages-write"),

@@ -52,6 +52,7 @@ type AgentScope = TokenScope;
 type AgentRateLimitName =
 	| "agentDictionaryWrite"
 	| "agentLanguagesWrite"
+	| "agentTagsWrite"
 	| "agentRead"
 	| "agentReview"
 	| "agentSearch"
@@ -1182,6 +1183,7 @@ http.route({
 						const options = {
 							token,
 							q: url.searchParams.get("q") ?? undefined,
+							tagIds: url.searchParams.getAll("tagId") as Id<"tags">[],
 							localeCode: url.searchParams.get("localeCode") ?? undefined,
 							limit: Number(url.searchParams.get("limit") ?? 16),
 							cursor: url.searchParams.get("cursor") ?? undefined,
@@ -1407,6 +1409,90 @@ http.route({
 				FORBIDDEN: 403,
 				STALE_BASIS: 409,
 			});
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/tags",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", (token) =>
+					ctx.runQuery(internalApi.messageTags.listForAgent, { token }),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
+		}
+	}),
+});
+http.route({
+	path: "/api/agent/v1/tags",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			return agentJson(
+				await withAgent(ctx, request, "tags-write", "agentTagsWrite", (token) =>
+					ctx.runMutation(internalApi.messageTags.createForAgent, {
+						token,
+						name: requiredJsonString(body, "name"),
+					}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
+		}
+	}),
+});
+http.route({
+	path: "/api/agent/v1/workspace/tags",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const keys = new URL(request.url).searchParams.getAll("key");
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", (token) =>
+					ctx.runQuery(internalApi.messageTags.assignmentsForAgent, {
+						token,
+						keys,
+					}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404 });
+		}
+	}),
+});
+http.route({
+	path: "/api/agent/v1/workspace/tags",
+	method: "PATCH",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			const keys = body.keys;
+			if (!isStringArray(keys))
+				throw new Error("keys must be an array of string identities.");
+			const addTagIds = body.addTagIds;
+			const removeTagIds = body.removeTagIds;
+			if (addTagIds !== undefined && !isStringArray(addTagIds))
+				throw new Error("addTagIds must be an array of tag IDs.");
+			if (removeTagIds !== undefined && !isStringArray(removeTagIds))
+				throw new Error("removeTagIds must be an array of tag IDs.");
+			return agentJson(
+				await withAgent(ctx, request, "tags-write", "agentTagsWrite", (token) =>
+					ctx.runMutation(internalApi.messageTags.updateForAgent, {
+						token,
+						keys,
+						addTagIds: addTagIds as Id<"tags">[] | undefined,
+						removeTagIds: removeTagIds as Id<"tags">[] | undefined,
+					}),
+				),
+			);
+		} catch (error) {
+			return routeError(error, { NOT_FOUND: 404, CONFLICT: 409 });
 		}
 	}),
 });

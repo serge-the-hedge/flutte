@@ -1,7 +1,4 @@
-import { characterCount } from "@blabla/backend/convex/characterLimits";
 import { Button } from "@blabla/ui/components/button";
-import { Input } from "@blabla/ui/components/input";
-import { Textarea } from "@blabla/ui/components/textarea";
 import { useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation, useQueries, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
@@ -16,6 +13,7 @@ import {
 	windowBatchKey,
 } from "@/lib/catalog-window-requests";
 import { api, convexId } from "@/lib/convex-api";
+import { exportManagedKeys, matchingManagedKeys } from "@/lib/managed-export";
 import type {
 	CatalogWorkspaceCommit,
 	StringsCatalogKey,
@@ -24,14 +22,13 @@ import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useManagedPage } from "@/lib/use-managed-page";
-import {
-	CharacterCount,
-	CharacterLimitField,
-	parsedCharacterLimit,
-} from "./character-limit";
+import { ManagedAdvancedValue } from "./advanced-string-values";
 import { ManagedLanguages } from "./managed-languages";
 import { ManagedStringComposer } from "./managed-string-composer";
 import { PageHeader } from "./project-shell";
+import { ManagedStringProperties } from "./string-properties";
+import { StringSelectionTools } from "./string-selection-tools";
+import { StringTagFilter, StringTags } from "./string-tags";
 import { StringsCatalogView } from "./strings-catalog-view";
 import { StringsLanguageSelector } from "./strings-language-selector";
 
@@ -156,16 +153,36 @@ export function ManagedStrings({
 	const project = useQuery(api.projects.get, { projectId: address.projectId });
 	const collection = useQuery(api.contentCollections.get, address);
 	const locales = useQuery(api.locales.list, { projectId: address.projectId });
-	const page = useManagedPage({
-		...address,
-		cursor: search.cursor,
-		focusKey: search.cursor ? undefined : search.key,
-		q: search.q,
+	const tagOptions = useQuery(api.messageTags.list, {
+		projectId: address.projectId,
 	});
+	const page = useManagedPage(
+		{
+			...address,
+			cursor: search.cursor,
+			q: search.q,
+			focusKey: search.cursor ? undefined : search.key,
+			tagIds: search.tags?.map((id) => convexId<"tags">(id)),
+		},
+		() => onSearch({ ...search, cursor: undefined }),
+	);
+	const tagMembership = useQuery(
+		api.messageTags.forMessages,
+		page?.items.length
+			? { ...address, messageIds: page.items.map((item) => item.messageId) }
+			: "skip",
+	);
+	const tagNamesByMessage = new Map(
+		(tagMembership ?? []).map((item) => [
+			item.messageId,
+			(tagOptions?.items ?? [])
+				.filter((tag) => item.tagIds.includes(tag.id))
+				.map((tag) => tag.name),
+		]),
+	);
 	const commitTarget = useMutation(api.managedContent.commit);
 	const saveSource = useMutation(api.managedContent.saveSource);
 	const createMessage = useMutation(api.managedContent.createMessage);
-	const archive = useMutation(api.managedContent.archiveMessage);
 	const createTask = useMutation(api.agentTranslationProposals.createTask);
 	const convex = useConvex();
 	const [hasUnsaved, setHasUnsaved] = useState(false);
@@ -173,24 +190,8 @@ export function ManagedStrings({
 	const [composerTargetDrafts, setComposerTargetDrafts] = useState<
 		readonly string[]
 	>([]);
-	const [form, setForm] = useState<{
-		messageId: string;
-		sourceRevision: number;
-		name: string;
-		value: string;
-		originalValue: string;
-		context: string;
-		limitText: string;
-		expectedCharacterLimit: number | null;
-	} | null>(null);
-	const formLimit = form ? parsedCharacterLimit(form.limitText) : undefined;
-	const invalidForm =
-		!!form &&
-		((form.limitText !== "" && formLimit === undefined) ||
-			(form.value !== form.originalValue &&
-				formLimit !== undefined &&
-				characterCount(form.value) > formLimit));
 	const [formDirty, setFormDirty] = useState(false);
+	const [propertiesBusy, setPropertiesBusy] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [languagesOpen, setLanguagesOpen] = useState(false);
 	const [languageDirty, setLanguageDirty] = useState(false);
@@ -328,6 +329,7 @@ export function ManagedStrings({
 	};
 	const changeSearch = (next: StringsSearch) => {
 		setPrevious([]);
+		setSelectedKeys([]);
 		onSearch({
 			...next,
 			key:
@@ -345,16 +347,34 @@ export function ManagedStrings({
 		setBusy(true);
 		setExportNote("");
 		try {
-			const result = await convex.query(api.managedContent.exportSelection, {
-				...address,
-				messageIds: [
-					...(selectedKeys.length
-						? selectedKeys
-						: (page?.items.map((item) => item.messageId) ?? [])),
-				],
-				localeIds: chosen.map((locale) => locale._id),
-				mode: exportMode,
-			});
+			const expectedTagRevision = tagOptions?.revision;
+			const messageIds = selectedKeys.length
+				? [...selectedKeys]
+				: await matchingManagedKeys(
+						convex,
+						{
+							...address,
+							q: search.q,
+							focusKey: search.key,
+							tagIds: search.tags?.map((id) => convexId<"tags">(id)),
+							expectedTagRevision,
+						},
+						!search.cursor && !search.key ? page : undefined,
+						(count) => setExportNote(`Finding strings… ${count}`),
+					);
+			const result = await exportManagedKeys(
+				convex,
+				{
+					...address,
+					messageIds,
+					localeIds: chosen.map((locale) => locale._id),
+					mode: exportMode,
+					...(expectedTagRevision === undefined ? {} : { expectedTagRevision }),
+				},
+				(count) =>
+					setExportNote(`Exporting ${count} / ${messageIds.length} strings…`),
+			);
+
 			if (copy) await navigator.clipboard.writeText(result.text);
 			else {
 				const url = URL.createObjectURL(
@@ -367,14 +387,15 @@ export function ManagedStrings({
 				URL.revokeObjectURL(url);
 			}
 			setExportNote(
-				`${copy ? "Copied" : "Downloaded"} ${selectedKeys.length ? "selected strings" : "this page"}. ${result.omitted.length} values omitted.`,
+				`${copy ? "Copied" : "Downloaded"} ${messageIds.length} strings. ${result.omitted} values omitted.`,
 			);
 		} catch (error) {
-			toast.error(
+			const message =
 				error instanceof Error
 					? error.message
-					: "Could not export translations",
-			);
+					: "Could not export translations";
+			setExportNote(message);
+			toast.error(message);
 		} finally {
 			setBusy(false);
 		}
@@ -427,141 +448,6 @@ export function ManagedStrings({
 					onUnsavedWorkChange={setLanguageDirty}
 				/>
 			)}
-			{form && (
-				<form
-					className="mb-5 flex flex-col gap-3 rounded-md border p-4"
-					onSubmit={async (event) => {
-						event.preventDefault();
-						if (busy || invalidForm) return;
-						setBusy(true);
-						try {
-							await saveSource({
-								...address,
-								messageId: form.messageId,
-								sourceValue: form.value,
-								name: form.name.trim() || null,
-								characterLimit: parsedCharacterLimit(form.limitText) ?? null,
-								expectedCharacterLimit: form.expectedCharacterLimit,
-								context: form.context,
-								expectedSourceRevision: form.sourceRevision,
-							});
-
-							setForm(null);
-							setFormDirty(false);
-						} catch (error) {
-							toast.error(
-								error instanceof Error
-									? error.message
-									: "Could not save string",
-							);
-						} finally {
-							setBusy(false);
-						}
-					}}
-				>
-					<fieldset disabled={busy || !canEdit} className="contents">
-						<h2 className="font-medium">String details</h2>
-						<label className="text-sm" htmlFor="managed-source-name">
-							Name <span className="text-muted-foreground">(optional)</span>
-							<Input
-								id="managed-source-name"
-								value={form.name}
-								placeholder="App Store subtitle"
-								onChange={(event) => {
-									setForm({ ...form, name: event.target.value });
-									setFormDirty(true);
-								}}
-							/>
-						</label>
-						<label className="text-sm" htmlFor="managed-source-text">
-							Source text
-							<Textarea
-								id="managed-source-text"
-								value={form.value}
-								onChange={(event) => {
-									setForm({ ...form, value: event.target.value });
-									setFormDirty(true);
-								}}
-							/>
-						</label>
-						<label className="text-sm" htmlFor="managed-source-context">
-							Context <span className="text-muted-foreground">(optional)</span>
-							<Textarea
-								id="managed-source-context"
-								value={form.context}
-								placeholder="Where this appears, intended meaning, or length guidance"
-								onChange={(event) => {
-									setForm({ ...form, context: event.target.value });
-									setFormDirty(true);
-								}}
-							/>
-						</label>
-						<CharacterLimitField
-							value={form.limitText}
-							onChange={(limitText) => {
-								setForm({ ...form, limitText });
-								setFormDirty(true);
-							}}
-						/>
-						<CharacterCount
-							value={form.value}
-							limit={parsedCharacterLimit(form.limitText)}
-						/>
-						<div className="flex gap-2">
-							<Button type="submit" disabled={busy || invalidForm}>
-								Save
-							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => {
-									setForm(null);
-									setFormDirty(false);
-								}}
-							>
-								Cancel
-							</Button>
-							{form.messageId && form.sourceRevision !== undefined && (
-								<Button
-									type="button"
-									variant="destructive"
-									disabled={busy}
-									onClick={async () => {
-										if (!form.messageId || form.sourceRevision === undefined)
-											return;
-										if (
-											!window.confirm(
-												"Archive this string? Its history will be preserved.",
-											)
-										)
-											return;
-										setBusy(true);
-										try {
-											await archive({
-												...address,
-												messageId: form.messageId,
-												expectedSourceRevision: form.sourceRevision,
-											});
-											setForm(null);
-											setFormDirty(false);
-										} catch (error) {
-											toast.error(
-												error instanceof Error
-													? error.message
-													: "Could not archive string",
-											);
-										} finally {
-											setBusy(false);
-										}
-									}}
-								>
-									Archive
-								</Button>
-							)}
-						</div>
-					</fieldset>
-				</form>
-			)}
 			<div className="mb-4 flex flex-wrap items-center gap-3">
 				<div className="w-64">
 					<StringsLanguageSelector
@@ -570,6 +456,19 @@ export function ManagedStrings({
 						onChange={(codes) => changeSearch({ ...search, locales: codes })}
 					/>
 				</div>
+				{tagOptions ? (
+					<StringTagFilter
+						tags={tagOptions.items}
+						value={search.tags ?? []}
+						onChange={(tags) =>
+							changeSearch({
+								...search,
+								tags: tags.length ? tags : undefined,
+								key: undefined,
+							})
+						}
+					/>
+				) : null}
 				{context.loading && (
 					<span className="text-muted-foreground text-sm" role="status">
 						Loading languages…
@@ -607,14 +506,44 @@ export function ManagedStrings({
 					{context.error.message}
 				</p>
 			)}
+			{page ? (
+				<StringSelectionTools
+					projectId={projectId}
+					collectionId={collectionId}
+					tags={tagOptions?.items ?? []}
+					selected={selectedKeys}
+					onSelectionChange={setSelectedKeys}
+					canEdit={canEdit}
+					selectAll={(progress) =>
+						matchingManagedKeys(
+							convex,
+							{
+								...address,
+								q: search.q,
+								focusKey: search.key,
+								tagIds: search.tags?.map((id) => convexId<"tags">(id)),
+								expectedTagRevision: tagOptions?.revision,
+							},
+							!search.cursor && !search.key ? page : undefined,
+							progress,
+						)
+					}
+				/>
+			) : null}
 			<StringsCatalogView
+				selectedMessageIds={selectedKeys}
+				tagNamesByMessage={tagNamesByMessage}
 				historyProjectId={address.projectId}
 				key={`${collectionId}:${JSON.stringify(search.locales ?? "all")}`}
 				searchPlaceholder="Search names and source text"
 				showFocusControls={false}
 				emptyContent={
 					<div className="rounded-md border p-6">
-						<p>{search.q ? "No matching strings." : "No strings yet."}</p>
+						<p>
+							{search.q || search.tags?.length
+								? "No matching strings on this page."
+								: "No strings yet."}
+						</p>
 						{search.q && (
 							<Button
 								variant="ghost"
@@ -636,30 +565,51 @@ export function ManagedStrings({
 				onCommitValue={commit}
 				onUnsavedWorkChange={setHasUnsaved}
 				onSelectionChange={setSelectedKeys}
-				onManageKey={
-					canEdit && !busy
-						? (key) => {
-								if (
-									formDirty &&
-									!window.confirm("Discard unsaved string details?")
-								)
-									return;
-								const basis = key.source.editBasis;
-								if (basis?.kind !== "managedSource") return;
-								setForm({
-									messageId: key.id,
-									sourceRevision: basis.sourceRevision,
-									name: key.name === undefined ? key.id : (key.name ?? ""),
-									value: key.source.value,
-									originalValue: key.source.value,
-									context: key.context ?? "",
-									limitText: key.characterLimit?.toString() ?? "",
-									expectedCharacterLimit: key.characterLimit ?? null,
-								});
-								setFormDirty(false);
-							}
-						: undefined
+				sourceLocaleId={sourceLocale?._id}
+				availableLocales={
+					sourceLocale
+						? [sourceLocale, ...enabled].map((locale) => ({
+								id: locale._id,
+								code: locale.code,
+								label: locale.label,
+							}))
+						: []
 				}
+				onBeforeCloseAdvanced={() =>
+					!propertiesBusy &&
+					(!formDirty || window.confirm("Discard unsaved string properties?"))
+				}
+				renderProperties={(key, close) => (
+					<div className="flex flex-col gap-5">
+						<ManagedStringProperties
+							key={key.id}
+							projectId={projectId}
+							collectionId={collectionId}
+							catalogKey={key}
+							canEdit={canEdit}
+							onDirtyChange={setFormDirty}
+							onBusyChange={setPropertiesBusy}
+							onArchived={close}
+						/>
+						<StringTags
+							projectId={projectId}
+							collectionId={collectionId}
+							messageId={key.id}
+							canEdit={canEdit}
+						/>
+					</div>
+				)}
+				renderAdvancedValue={(key, localeId) => (
+					<ManagedAdvancedValue
+						key={`${key.id}:${localeId}`}
+						projectId={projectId}
+						collectionId={collectionId}
+						catalogKey={key}
+						localeId={localeId}
+						canEdit={canEdit}
+						onCommitValue={commit}
+					/>
+				)}
 				onCreateTranslationTask={
 					canEdit
 						? async (input) => {
@@ -715,7 +665,7 @@ export function ManagedStrings({
 						Export{" "}
 						{selectedKeys.length
 							? `${selectedKeys.length} selected`
-							: "this page"}
+							: "all matching"}
 					</span>
 					<select
 						aria-label="Export content"
@@ -734,11 +684,7 @@ export function ManagedStrings({
 						icon={Copy}
 						variant="outline"
 						disabled={
-							busy ||
-							hasUnsaved ||
-							formDirty ||
-							!chosen.length ||
-							!page?.items.length
+							busy || hasUnsaved || formDirty || !chosen.length || !page
 						}
 						onClick={() => void exportValues(true)}
 					/>
@@ -747,11 +693,7 @@ export function ManagedStrings({
 						icon={Download}
 						variant="outline"
 						disabled={
-							busy ||
-							hasUnsaved ||
-							formDirty ||
-							!chosen.length ||
-							!page?.items.length
+							busy || hasUnsaved || formDirty || !chosen.length || !page
 						}
 						onClick={() => void exportValues(false)}
 					/>

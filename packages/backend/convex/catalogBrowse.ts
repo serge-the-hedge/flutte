@@ -21,6 +21,7 @@ import {
 } from "./catalogWorkspaceNavigation";
 import { readWorkspaceTarget } from "./catalogWorkspaceRead";
 import { currentSourceProposalRows, encodedSize } from "./catalogWorkspaceView";
+import { matchesMessageTags, tagRevision, validateTagIds } from "./messageTags";
 import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmations";
 import { requireViewer } from "./permissions";
 import {
@@ -99,6 +100,8 @@ export const page = query({
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
+		tagIds: v.optional(v.array(v.id("tags"))),
+		expectedTagRevision: v.optional(v.number()),
 		introducedOriginUnknown: v.optional(v.boolean()),
 		localeId: v.optional(v.id("locales")),
 		localeIds: v.optional(v.array(v.id("locales"))),
@@ -134,6 +137,16 @@ export const page = query({
 			projectionId: projection._id,
 			expectedRowCount: projection.expectedKeyCount,
 		});
+		const tags = await validateTagIds(ctx, args.projectId, args.tagIds);
+		const metadataRevision = await tagRevision(ctx, args.projectId);
+		if (
+			args.expectedTagRevision !== undefined &&
+			args.expectedTagRevision !== metadataRevision
+		)
+			throw new ConvexError({
+				code: "STALE_BASIS",
+				message: "Tags changed. Restart from the first page.",
+			});
 		const origins = await preparedOrigins(ctx, args);
 		const after = args.after ?? -1;
 		const scanTargetIndex = args.scanTargetIndex ?? 0;
@@ -237,6 +250,16 @@ export const page = query({
 		let resumeTarget = 0;
 		let partial = false;
 		for (const row of batch.page) {
+			if (
+				!(await matchesMessageTags(
+					ctx,
+					{ projectId: args.projectId, messageId: row.messageId },
+					tags,
+				))
+			) {
+				last = row.catalogIndex;
+				continue;
+			}
 			if (membership && !membership.has(row.messageId)) {
 				last = row.catalogIndex;
 				continue;
@@ -359,6 +382,7 @@ export const page = query({
 			last !== batch.page[batch.page.length - 1]?.catalogIndex;
 		return {
 			stale: false,
+			tagRevision: metadataRevision,
 			keys,
 			counts,
 			nextAfter: batch.page.length && remaining ? last : null,
@@ -380,6 +404,8 @@ export const scopeCounts = query({
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
 		introducedSnapshotIds: v.optional(v.array(v.id("sourceSnapshots"))),
+		tagIds: v.optional(v.array(v.id("tags"))),
+		expectedTagRevision: v.optional(v.number()),
 		introducedOriginUnknown: v.optional(v.boolean()),
 		revision: v.number(),
 		localeIds: v.array(v.id("locales")),
@@ -414,6 +440,13 @@ export const scopeCounts = query({
 				code: "VALIDATION",
 				message: "Invalid catalog count request.",
 			});
+		const tags = await validateTagIds(ctx, args.projectId, args.tagIds);
+		const metadataRevision = await tagRevision(ctx, args.projectId);
+		if (
+			args.expectedTagRevision !== undefined &&
+			args.expectedTagRevision !== metadataRevision
+		)
+			return { stale: true, counts, cursor: null };
 		const origins = await preparedOrigins(ctx, args);
 		const selected = new Set(args.localeIds);
 		for (const localeId of selected) {
@@ -445,6 +478,14 @@ export const scopeCounts = query({
 						maximumBytesRead: 512 * 1024,
 					});
 		for (const row of batch.page) {
+			if (
+				!(await matchesMessageTags(
+					ctx,
+					{ projectId: args.projectId, messageId: row.messageId },
+					tags,
+				))
+			)
+				continue;
 			let introduced = false;
 			for (const target of row.targets) {
 				if (!selected.has(target.localeId)) continue;

@@ -95,6 +95,8 @@ describe("Basic project workflow", () => {
 	const exportQuery = spyOn(client, "query").mockImplementation(
 		async (query, args) => {
 			calls.push({ name: getFunctionName(query), args });
+			if (getFunctionName(query) === "managedContent:page")
+				return results["managedContent:page"];
 			return {
 				text: '{"values":{"subtitle":{"fr":"Construire"}}}',
 				omitted: [],
@@ -413,5 +415,212 @@ describe("Basic project workflow", () => {
 			dom.container.querySelectorAll('[data-workspace-message-id="subtitle"]'),
 		).toHaveLength(22);
 		expect(dom.container.textContent).not.toContain("Loading languages");
+	});
+	test("exports every matching tagged string across pages without duplicating overlaps", async () => {
+		const previousPage = results["managedContent:page"];
+		const previousTags = results["messageTags:list"];
+		results["messageTags:list"] = {
+			items: [
+				{ id: "app-store", name: "App Store" },
+				{ id: "play", name: "Google Play" },
+			],
+			revision: 7,
+		};
+		results["managedContent:page"] = {
+			items: [
+				{
+					messageId: "subtitle",
+					sourceValue: "Build",
+					sourceRevision: 1,
+					sourceFingerprint: "source",
+				},
+			],
+			nextCursor: "second-page",
+			tagRevision: 7,
+		};
+		watch.mockImplementation((query) => ({
+			onUpdate: () => () => {},
+			localQueryResult: () =>
+				(getFunctionName(query) === "managedContent:page"
+					? { items: [], nextCursor: "second-page", tagRevision: 7 }
+					: results[getFunctionName(query)]) as never,
+			localQueryLogs: () => [],
+			journal: () => undefined,
+		}));
+		let firstRead = true;
+		exportQuery.mockImplementation(async (query, args) => {
+			if (getFunctionName(query) === "managedContent:page" && firstRead) {
+				firstRead = false;
+				throw new ConvexError({
+					code: "LIMIT_EXCEEDED",
+					message: "Smaller page required",
+				});
+			}
+			if (
+				getFunctionName(query) === "managedContent:page" &&
+				!(args as { cursor?: string }).cursor
+			)
+				return results["managedContent:page"];
+			if (getFunctionName(query) === "managedContent:page")
+				return {
+					items: [
+						{
+							messageId: "description",
+							sourceValue: "Describe",
+							sourceRevision: 1,
+							sourceFingerprint: "source",
+						},
+					],
+					nextCursor: null,
+					tagRevision: 7,
+				};
+			const ids = (args as { messageIds: string[] }).messageIds;
+			const values: Record<string, Record<string, string>> = {};
+			for (const id of ids)
+				values[id] = {
+					fr: id === "subtitle" ? "Construire" : "Description complète",
+				};
+			const document = {
+				names: { subtitle: null, description: null },
+				collectionId: "marketing",
+				mode: "reviewed",
+				values,
+				omitted: [],
+				evidence: [],
+			};
+			return {
+				text: JSON.stringify(document),
+				document,
+				omitted: [],
+				mode: "reviewed",
+			};
+		});
+		const previousClipboard = Object.getOwnPropertyDescriptor(
+			navigator,
+			"clipboard",
+		);
+		let copied = "";
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: {
+				writeText: async (text: string) => {
+					copied = text;
+				},
+			},
+		});
+		try {
+			const root = createRootRoute({
+				component: () => (
+					<ConvexProvider client={client}>
+						<ManagedStrings
+							projectId="project"
+							collectionId="marketing"
+							search={{ tags: ["app-store", "play"], cursor: "later-page" }}
+							onSearch={() => {}}
+						/>
+					</ConvexProvider>
+				),
+			});
+			const router = createRouter({
+				routeTree: root,
+				history: createMemoryHistory({ initialEntries: ["/"] }),
+			});
+			await router.load();
+			await dom.render(<RouterProvider router={router} />);
+			await act(async () => button("Copy JSON").click());
+			expect(JSON.parse(copied).values).toEqual({
+				subtitle: { fr: "Construire" },
+				description: { fr: "Description complète" },
+			});
+			expect(dom.container.textContent).toContain("2 strings");
+		} finally {
+			results["managedContent:page"] = previousPage;
+			results["messageTags:list"] = previousTags;
+			if (previousClipboard)
+				Object.defineProperty(navigator, "clipboard", previousClipboard);
+			else Reflect.deleteProperty(navigator, "clipboard");
+		}
+	});
+	test("a later export failure never copies an incomplete group", async () => {
+		const previousPage = results["managedContent:page"];
+		const entries = Array.from({ length: 33 }, (_, index) => ({
+			messageId: `key-${index}`,
+			sourceValue: "Source",
+			sourceRevision: 1,
+			sourceFingerprint: "source",
+		}));
+		results["managedContent:page"] = {
+			items: entries.slice(0, 16),
+			nextCursor: "remainder",
+		};
+		watch.mockImplementation((query) => ({
+			onUpdate: () => () => {},
+			localQueryResult: () => results[getFunctionName(query)] as never,
+			localQueryLogs: () => [],
+			journal: () => undefined,
+		}));
+		exportQuery.mockImplementation(async (query, args) => {
+			if (getFunctionName(query) === "managedContent:page")
+				return { items: entries.slice(16), nextCursor: null };
+			if ((args as { messageIds: string[] }).messageIds.includes("key-32"))
+				throw new Error("Review the remaining translation before exporting.");
+			const document = {
+				names: {},
+				collectionId: "marketing",
+				mode: "reviewed",
+				values: {},
+				omitted: [],
+				evidence: [],
+			};
+			return {
+				text: JSON.stringify(document),
+				document,
+				omitted: [],
+				mode: "reviewed",
+			};
+		});
+		const previousClipboard = Object.getOwnPropertyDescriptor(
+			navigator,
+			"clipboard",
+		);
+		let copied = "";
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: {
+				writeText: async (text: string) => {
+					copied = text;
+				},
+			},
+		});
+		try {
+			const root = createRootRoute({
+				component: () => (
+					<ConvexProvider client={client}>
+						<ManagedStrings
+							projectId="project"
+							collectionId="marketing"
+							search={{}}
+							onSearch={() => {}}
+						/>
+					</ConvexProvider>
+				),
+			});
+			const router = createRouter({
+				routeTree: root,
+				history: createMemoryHistory({ initialEntries: ["/"] }),
+			});
+			await router.load();
+			await dom.render(<RouterProvider router={router} />);
+			await act(async () => button("Copy JSON").click());
+			expect(dom.container.textContent).toContain(
+				"Review the remaining translation before exporting.",
+			);
+			expect(copied).toBe("");
+		} finally {
+			results["managedContent:page"] = previousPage;
+			if (previousClipboard)
+				Object.defineProperty(navigator, "clipboard", previousClipboard);
+			else Reflect.deleteProperty(navigator, "clipboard");
+		}
 	});
 });

@@ -17,6 +17,9 @@ the same project-scoped addresses. The following catalog details apply to reposi
 
 ### `GET /workspace/search`
 
+Optional repeated `tagId` filters match any selected [project tag](tags-api.md).
+Hits include `tagIds`; filtered continuations require unchanged tag membership.
+
 Searches effective Source and current targets in Catalog Order using case-folded
 literal substrings, including punctuation, accents, and unspaced scripts.
 

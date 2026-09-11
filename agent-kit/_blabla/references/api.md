@@ -42,6 +42,7 @@ do not grant permissions. Use a separate name for each project and role. Verify
 | Assignment | Scopes |
 | --- | --- |
 | Translation with example lookup | `read`, `search`, `propose` |
+| Tag organization | `read`, `search`, `tags-write` |
 | Language setup or editing | `read`, `languages-write`; add `propose` for translation tasks |
 | Dictionary authoring | `read`, `dictionary-write`; add `search` for examples |
 | Independent review | `read`, `search`, `review`, on a separate credential |
@@ -83,13 +84,14 @@ Loopback HTTP is allowed for local testing. Both tools reject redirects.
 - `read`: project metadata, workspace context, and task/proposal reads.
 - `search`: workspace search and work discovery.
 - `propose`: Translation Task and candidate creation; it cannot apply values.
+- `tags-write`: create project tags and add/remove current-message assignments.
 - `languages-write`: add project languages or edit permitted language metadata.
   Repository additions configure future proposals; they do not bind files or deliver to Git.
 - `dictionary-write`: create, replace, or remove active Dictionary entries with
   revision checks and agent attribution. It does not author Voice Guides or
   grant translation review or release powers.
 - `review`: independent exact candidate acceptance or rejection, subject to human
-  authorization. It cannot coexist with `propose`, `languages-write`, `dictionary-write`, `export`, or
+  authorization. It cannot coexist with `propose`, `languages-write`, `tags-write`, `dictionary-write`, `export`, or
   `snapshot-submission` on a token.
 - `export`: immutable Release Bundle delivery through the local Repository
   Adapter; it does not grant a remote Git write.
@@ -105,6 +107,7 @@ See [scan/resume](transport.md#bounded-scans) for bounded terminal execution.
 | Contract | Open when using |
 | --- | --- |
 | [Context](context-api.md) | Project discovery, search, guidance, or work queues |
+| [Tags](tags-api.md) | Tag discovery, assignment, or filtered search |
 | [Languages](languages-api.md) | Adding languages or editing their code/name |
 | [Basic projects](collection-api.md) | Plain-text workspace search/context or downloads |
 | [Translation Tasks](translation-api.md) | Task creation, pages, and candidates |
