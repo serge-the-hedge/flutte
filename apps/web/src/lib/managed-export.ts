@@ -114,10 +114,12 @@ export async function exportManagedKeys(
 	let membershipRevision: number | undefined;
 	for (const result of results) {
 		const document = result.document;
-		Object.assign(names, document.names);
-		for (const [id, localized] of Object.entries(document.values)) {
-			values[id] ??= Object.create(null);
-			Object.assign(values[id], localized);
+		for (const item of document.names) names[item.messageId] = item.name;
+		for (const item of document.values) {
+			values[item.messageId] ??= Object.create(null);
+			const localized = values[item.messageId];
+			for (const entry of item.values)
+				localized[entry.localeCode] = entry.value;
 		}
 		omitted.push(...document.omitted);
 		for (const item of document.evidence) {

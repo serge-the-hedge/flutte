@@ -1,3 +1,4 @@
+import { convexToJson } from "convex/values";
 import { describe, expect, test } from "vitest";
 import {
 	authenticatedBackend,
@@ -313,6 +314,30 @@ describe("managed content", () => {
 		expect(
 			await s.t.run((ctx) => ctx.db.query("sourceSnapshots").collect()),
 		).toEqual([]);
+	});
+	test("exports arbitrary message identities through the Convex transport without changing JSON map keys", async () => {
+		const s = await setup();
+		const keys = ["étiquette", "$headline", "__proto__"];
+		for (const key of keys)
+			await s.owner.mutation(api.managedContent.createMessage, {
+				...s.address,
+				key,
+				name: null,
+				sourceValue: `Source ${key}`,
+				translations: [{ localeId: s.localeId, value: `Value ${key}` }],
+			});
+		const result = await s.owner.query(api.managedContent.exportSelection, {
+			...s.address,
+			messageIds: keys,
+			localeIds: [s.localeId],
+			mode: "reviewed",
+		});
+		expect(() => convexToJson(result)).not.toThrow();
+		const json = JSON.parse(result.text);
+		for (const key of keys) {
+			expect(json.names[key]).toBeNull();
+			expect(json.values[key]["pt-BR"]).toBe(`Value ${key}`);
+		}
 	});
 	test("source edits invalidate stale saves; context edits preserve currency and notes", async () => {
 		const s = await setup();

@@ -438,10 +438,11 @@ describe("Basic project workflow", () => {
 			nextCursor: "second-page",
 			tagRevision: 7,
 		};
-		watch.mockImplementation((query) => ({
+		watch.mockImplementation((query, args) => ({
 			onUpdate: () => () => {},
 			localQueryResult: () =>
-				(getFunctionName(query) === "managedContent:page"
+				(getFunctionName(query) === "managedContent:page" &&
+				args.cursor !== "second-page"
 					? { items: [], nextCursor: "second-page", tagRevision: 7 }
 					: results[getFunctionName(query)]) as never,
 			localQueryLogs: () => [],
@@ -490,7 +491,22 @@ describe("Basic project workflow", () => {
 			};
 			return {
 				text: JSON.stringify(document),
-				document,
+				document: {
+					...document,
+					names: Object.entries(document.names).map(([messageId, name]) => ({
+						messageId,
+						name,
+					})),
+					values: Object.entries(document.values).map(
+						([messageId, values]) => ({
+							messageId,
+							values: Object.entries(values).map(([localeCode, value]) => ({
+								localeCode,
+								value,
+							})),
+						}),
+					),
+				},
 				omitted: [],
 				mode: "reviewed",
 			};
@@ -527,6 +543,9 @@ describe("Basic project workflow", () => {
 			});
 			await router.load();
 			await dom.render(<RouterProvider router={router} />);
+			expect(
+				dom.container.querySelector('[data-workspace-message-id="subtitle"]'),
+			).not.toBeNull();
 			await act(async () => button("Copy JSON").click());
 			expect(JSON.parse(copied).values).toEqual({
 				subtitle: { fr: "Construire" },
@@ -553,7 +572,7 @@ describe("Basic project workflow", () => {
 			items: entries.slice(0, 16),
 			nextCursor: "remainder",
 		};
-		watch.mockImplementation((query) => ({
+		watch.mockImplementation((query, _args) => ({
 			onUpdate: () => () => {},
 			localQueryResult: () => results[getFunctionName(query)] as never,
 			localQueryLogs: () => [],
@@ -574,7 +593,22 @@ describe("Basic project workflow", () => {
 			};
 			return {
 				text: JSON.stringify(document),
-				document,
+				document: {
+					...document,
+					names: Object.entries(document.names).map(([messageId, name]) => ({
+						messageId,
+						name,
+					})),
+					values: Object.entries(document.values).map(
+						([messageId, values]) => ({
+							messageId,
+							values: Object.entries(values).map(([localeCode, value]) => ({
+								localeCode,
+								value,
+							})),
+						}),
+					),
+				},
 				omitted: [],
 				mode: "reviewed",
 			};

@@ -45,7 +45,7 @@ guidance also enforces its own text budget. Braces are ordinary text.
 ## Download
 
 `POST /workspace/download` (`read`) accepts the same `keys`/`locales` and
-`mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text` and the same typed `document`, keyed by message then Locale,
+`mode`: `reviewed` (default), `partial`, or `draft`. Returns JSON `text`, keyed by message then Locale, and a typed `document` with transport-safe name/value entry arrays,
 omissions, and revision evidence for that read. The JSON
 contains `values` and a separate `names` map keyed by the same stable identities;
 unnamed strings have `null` names.
