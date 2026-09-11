@@ -82,8 +82,7 @@ Returns a bounded page of the proposal's current candidate revisions. Use
 `GET /strings/search`, `POST /context`, `POST /change-sets`,
 `POST /strings/tags`, and `POST /export` return `410 Gone` with
 `code: RETIRED_WORKFLOW`. Replace legacy search/context with the workspace
-endpoints and proposed writes with Translation Tasks. There is no current
-agent tag-authoring workflow.
+endpoints and proposed writes with Translation Tasks. Use the [current tag API](tags-api.md) for project tag organization.
 
 `GET /change-sets/:id` is an authenticated historical read returning stored items,
 `retired: true`, and a migration explanation. It cannot apply them; pending work

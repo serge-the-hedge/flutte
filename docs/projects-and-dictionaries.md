@@ -22,7 +22,7 @@ Enter inserts a line break. Failed saves keep the draft, and adding does not
 change your search or page. Name and context are optional details.
 
 Names accept spaces and Unicode, can repeat, and can be changed or cleared from
-**Details**. Unnamed strings show their text without a placeholder name. Stable IDs are assigned
+**Properties**. Unnamed strings show their text without a placeholder name. Stable IDs are assigned
 automatically and remain unchanged in links, tasks and exports. Existing keys
 initially appear as names. Strings stay in creation order when renamed; search
 finds names and source text. Large text pages automatically use smaller batches.
@@ -49,17 +49,37 @@ source/reviewed/stale/draft status visible. JSON output offers:
 - **Draft**: working values, labelled as draft.
 
 A download keeps values under stable IDs and includes a separate `names` map
-for readable labels; renaming never changes the output identity. It is one
-consistent read, not a claim of external publication. Context
-accepts at most 50 keys, 20 languages and 128 pairs; downloads accept 128 keys,
+for readable labels; renaming never changes the output identity. The web UI exports
+the selection or all matching strings, walking bounded reads with progress and
+creating the file only after every read succeeds. This is a live workspace export,
+not a frozen release or a claim of external publication. Individual context reads
+accept at most 50 keys, 20 languages and 128 pairs; downloads accept 128 keys,
 1,000 languages and 1,024 pairs. Both enforce byte budgets. Larger selections
-must be divided; nothing is silently truncated. Values are limited to 256 KiB,
+are divided automatically by the web UI; API callers must page or split them.
+Nothing is silently truncated. Values are limited to 256 KiB,
 context notes to 8 KiB, and retained language memberships to 1,000 per Basic project.
 Creating a string accepts up to 128 initial translations within a 1 MiB payload.
 
+## Finding and opening strings
+
+Short values edit inline. Long values show three compact lines; their text and
+expand icon open the same advanced view at that language. The name or properties
+icon opens properties above the editor. Search the language picker to switch
+locales; drafts stay attached to their values. Preview spacing never changes saved
+text. Properties, character limits and translation history use the existing edit
+and review rules.
+
+Tags belong to a project, and each string can have several. Create or assign them
+in Properties, or add/remove them from a selection. Selected tags match **any** of
+them and combine with other filters. **Select all matching** covers every page and
+deduplicates overlaps. Tag changes do not alter source revisions or reviews.
+Translation Tasks still accept up to 32 strings per task; that does not limit tag
+selection or Basic JSON exports. Agents can read tags and use the explicit
+`tags-write` scope to organize strings; see the [tag API](../agent-kit/_blabla/references/tags-api.md).
+
 ## Character limits
 
-In either project type, **Details** can set or clear an optional character limit
+In either project type, **Properties** can set or clear an optional character limit
 for a string. One limit applies to every language; counters appear only when a
 limit is set. Over-limit authored values cannot be saved through the UI or agent
 API. Limits survive source edits, snapshot syncs and collection promotion.

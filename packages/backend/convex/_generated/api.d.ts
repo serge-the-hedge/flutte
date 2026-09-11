@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as messageTags from "../messageTags.js";
 import type * as messageConstraints from "../messageConstraints.js";
 import type * as contentModel from "../contentModel.js";
 import type * as contentCollections from "../contentCollections.js";
@@ -84,6 +85,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  messageTags: typeof messageTags;
   messageConstraints: typeof messageConstraints;
   contentModel: typeof contentModel;
   contentCollections: typeof contentCollections;

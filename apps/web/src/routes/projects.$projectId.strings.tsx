@@ -7,11 +7,12 @@ import {
 	useParams,
 	useSearch,
 } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IconButton } from "@/components/icon-button";
+import { RepositoryAdvancedValue } from "@/components/localization/advanced-string-values";
 import { RepositoryCharacterLimit } from "@/components/localization/character-limit";
 import { DiscoveredCatalogNotice } from "@/components/localization/discovered-catalogs";
 import { LegacyContentLink } from "@/components/localization/legacy-content-projects";
@@ -20,6 +21,11 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { StringSelectionTools } from "@/components/localization/string-selection-tools";
+import {
+	StringTagFilter,
+	StringTags,
+} from "@/components/localization/string-tags";
 import { StringsCatalogView } from "@/components/localization/strings-catalog-view";
 import { StringsLanguageSelector } from "@/components/localization/strings-language-selector";
 import { StringsSnapshotSelector } from "@/components/localization/strings-snapshot-selector";
@@ -34,6 +40,7 @@ import type {
 	StringsCatalogNavigationState,
 } from "@/lib/strings-catalog-navigation";
 import { stringsLanguagesFromSearch } from "@/lib/strings-languages";
+import { matchingRepositoryKeys } from "@/lib/strings-matching-keys";
 import {
 	previousStringsPages,
 	type StringsPageHistory,
@@ -72,6 +79,11 @@ export const Route = createFileRoute("/projects/$projectId/strings")({
 				: undefined,
 		cursor: typeof search.cursor === "string" ? search.cursor : undefined,
 		locales: stringsLanguagesFromSearch(search),
+		tags:
+			Array.isArray(search.tags) &&
+			search.tags.every((id) => typeof id === "string")
+				? [...new Set(search.tags as string[])].sort()
+				: undefined,
 		snapshots:
 			search.snapshots === "unknown"
 				? "unknown"
@@ -142,16 +154,19 @@ function StringsRoute() {
 
 function RepositoryStrings() {
 	const [hasUnsavedWork, setHasUnsavedWork] = useState(false);
-	const [details, setDetails] = useState<StringsCatalogKey | null>(null);
+	const convex = useConvex();
+	const [selectedKeys, setSelectedKeys] = useState<readonly string[]>([]);
 	const [detailsDirty, setDetailsDirty] = useState(false);
 	const [detailsBusy, setDetailsBusy] = useState(false);
-	const [detailsSession, setDetailsSession] = useState(0);
 	useCatalogNavigationGuard(hasUnsavedWork || detailsDirty);
 	const { projectId } = useParams({ from: "/projects/$projectId/strings" });
 	const search = useSearch({ from: "/projects/$projectId/strings" });
 	const navigate = useNavigate({ from: "/projects/$projectId/strings" });
 	const convexProjectId = convexId<"projects">(projectId);
 	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
+	const tagOptions = useQuery(api.messageTags.list, {
+		projectId: convexProjectId,
+	});
 	const targets = (locales ?? []).filter(
 		(locale) =>
 			!locale.isSource && locale.archivedAt === undefined && locale.catalogPath,
@@ -184,6 +199,7 @@ function RepositoryStrings() {
 		search.scope,
 		search.release,
 		search.snapshots,
+		search.tags,
 	]);
 	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
 		context: pageContext,
@@ -230,6 +246,7 @@ function RepositoryStrings() {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
 					localeIds: selectedLocaleIds,
+					tagIds: search.tags?.map((id) => convexId<"tags">(id)),
 					introducedSnapshotIds: Array.isArray(search.snapshots)
 						? search.snapshots.map((id) => convexId<"sourceSnapshots">(id))
 						: undefined,
@@ -252,13 +269,32 @@ function RepositoryStrings() {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
 					revision: overview.revision,
+					expectedTagRevision: tagOptions?.revision,
 					localeIds: selectedLocaleIds,
+					tagIds: search.tags?.map((id) => convexId<"tags">(id)),
 					introducedSnapshotIds: Array.isArray(search.snapshots)
 						? search.snapshots.map((id) => convexId<"sourceSnapshots">(id))
 						: undefined,
 					introducedOriginUnknown: search.snapshots === "unknown" || undefined,
 				}
 			: "skip",
+	);
+	const tagMembership = useQuery(
+		api.messageTags.forMessages,
+		page?.keys.length
+			? {
+					projectId: convexProjectId,
+					messageIds: page.keys.map((key) => key.messageId),
+				}
+			: "skip",
+	);
+	const tagNamesByMessage = new Map(
+		(tagMembership ?? []).map((item) => [
+			item.messageId,
+			(tagOptions?.items ?? [])
+				.filter((tag) => item.tagIds.includes(tag.id))
+				.map((tag) => tag.name),
+		]),
 	);
 	const navigation =
 		overview?.kind === "ready"
@@ -552,6 +588,22 @@ function RepositoryStrings() {
 						}}
 					/>
 				</div>
+				{tagOptions ? (
+					<StringTagFilter
+						tags={tagOptions.items}
+						value={search.tags ?? []}
+						onChange={(tags) =>
+							void navigate({
+								search: (previous) => ({
+									...previous,
+									tags: tags.length ? tags : undefined,
+									after: undefined,
+									key: undefined,
+								}),
+							})
+						}
+					/>
+				) : null}
 				<StringsSnapshotSelector
 					projectId={projectId}
 					value={search.snapshots}
@@ -592,33 +644,102 @@ function RepositoryStrings() {
 					Loading languages…
 				</p>
 			) : null}
-			{details ? (
-				<RepositoryCharacterLimit
-					key={`${details.id}:${detailsSession}`}
+			{overview?.kind === "ready" && page && !page.stale ? (
+				<StringSelectionTools
 					projectId={projectId}
-					messageId={details.id}
-					limit={details.characterLimit}
-					disabled={navigation?.kind !== "ready" || !navigation.canEdit}
-					onClose={() => setDetails(null)}
-					onUnsavedWorkChange={setDetailsDirty}
-					onBusyChange={setDetailsBusy}
+					tags={tagOptions?.items ?? []}
+					selected={selectedKeys}
+					onSelectionChange={setSelectedKeys}
+					canEdit={!!overview.canEdit}
+					selectAll={(progress) =>
+						matchingRepositoryKeys(
+							convex,
+							{
+								projectId: convexProjectId,
+								projectionId: overview.projectionId,
+								localeIds: selectedLocaleIds,
+								q: search.q,
+								focusKey: search.key,
+								scope: search.scope,
+								tagIds: search.tags?.map((id) => convexId<"tags">(id)),
+								expectedTagRevision: tagOptions?.revision,
+								introducedSnapshotIds: Array.isArray(search.snapshots)
+									? search.snapshots.map((id) =>
+											convexId<"sourceSnapshots">(id),
+										)
+									: undefined,
+								introducedOriginUnknown:
+									search.snapshots === "unknown" || undefined,
+								messageIds:
+									releaseHandoff?.status === "published" &&
+									releaseHandoff.keys.length
+										? releaseHandoff.keys.map((key) => key.messageId)
+										: undefined,
+							},
+							progress,
+						)
+					}
 				/>
 			) : null}
 			<StringsCatalogView
+				selectedMessageIds={selectedKeys}
+				onSelectionChange={setSelectedKeys}
+				tagNamesByMessage={tagNamesByMessage}
 				historyProjectId={convexProjectId}
-				onManageKey={
-					navigation?.kind === "ready" && navigation.canEdit && !detailsBusy
-						? (key) => {
-								if (
-									detailsDirty &&
-									!window.confirm("Discard unsaved string details?")
-								)
-									return;
-								setDetailsSession((session) => session + 1);
-								setDetails(key);
-								setDetailsDirty(false);
-							}
-						: undefined
+				sourceLocaleId={locales?.find((locale) => locale.isSource)?._id}
+				availableLocales={(locales ?? [])
+					.filter(
+						(locale) =>
+							locale.archivedAt === undefined &&
+							(locale.isSource || locale.catalogPath),
+					)
+					.map((locale) => ({
+						id: locale._id,
+						code: locale.code,
+						label: locale.label,
+					}))}
+				onBeforeCloseAdvanced={() =>
+					!detailsBusy &&
+					(!detailsDirty ||
+						window.confirm("Discard unsaved string properties?"))
+				}
+				renderProperties={(key) => (
+					<div className="flex flex-col gap-5">
+						{key.context ? (
+							<p className="whitespace-pre-wrap text-muted-foreground text-sm">
+								{key.context}
+							</p>
+						) : null}
+						<RepositoryCharacterLimit
+							embedded
+							key={key.id}
+							projectId={projectId}
+							messageId={key.id}
+							limit={key.characterLimit}
+							disabled={navigation?.kind !== "ready" || !navigation.canEdit}
+							onClose={() => {}}
+							onUnsavedWorkChange={setDetailsDirty}
+							onBusyChange={setDetailsBusy}
+						/>
+						<StringTags
+							projectId={projectId}
+							messageId={key.id}
+							canEdit={navigation?.kind === "ready" && !!navigation.canEdit}
+						/>
+					</div>
+				)}
+				renderAdvancedValue={(key, localeId) =>
+					overview?.kind === "ready" ? (
+						<RepositoryAdvancedValue
+							key={`${key.id}:${localeId}`}
+							projectId={projectId}
+							projectionId={overview.projectionId}
+							catalogKey={key}
+							localeId={localeId}
+							canEdit={!!overview.canEdit}
+							onCommitValue={onCommitValue}
+						/>
+					) : null
 				}
 				key={`${projectId}:${selectionKey}`}
 				onUnsavedWorkChange={setHasUnsavedWork}

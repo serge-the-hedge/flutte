@@ -8,7 +8,7 @@ type PageArgs = Omit<FunctionArgs<typeof api.managedContent.page>, "limit">;
 type Page = FunctionReturnType<typeof api.managedContent.page>;
 
 /** Keep native cursor boundaries intact; oversized pages retry with fewer rows. */
-export function useManagedPage(input: PageArgs) {
+export function useManagedPage(input: PageArgs, onStaleCursor?: () => void) {
 	const key = JSON.stringify(input);
 	const scope = JSON.stringify([input.projectId, input.collectionId]);
 	const args = useMemo(() => JSON.parse(key) as PageArgs, [key]);
@@ -22,6 +22,16 @@ export function useManagedPage(input: PageArgs) {
 	);
 	const { page } = useQueries(queries) as { page: Page | Error | undefined };
 	const data: unknown = page instanceof ConvexError ? page.data : null;
+	const stale =
+		!!input.cursor &&
+		data !== null &&
+		typeof data === "object" &&
+		"code" in data &&
+		data.code === "STALE_BASIS" &&
+		!!onStaleCursor;
+	useEffect(() => {
+		if (stale) onStaleCursor?.();
+	}, [stale, onStaleCursor]);
 	const retry =
 		input.focusKey === undefined &&
 		limit > 1 &&
@@ -32,6 +42,7 @@ export function useManagedPage(input: PageArgs) {
 	useEffect(() => {
 		if (retry) setSize({ scope, limit: Math.max(1, Math.floor(limit / 2)) });
 	}, [retry, scope, limit]);
+	if (stale) return undefined;
 	if (page instanceof Error) {
 		if (!retry) throw page;
 		return undefined;

@@ -20,6 +20,12 @@ import {
 	readManagedContext,
 	readManagedTarget,
 } from "./managedContent";
+import {
+	matchesMessageTags,
+	readMessageTagIds,
+	tagRevision,
+	validateTagIds,
+} from "./messageTags";
 import { readGuidance } from "./translationGuidance";
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -194,6 +200,7 @@ export const search = internalQuery({
 	args: {
 		...address,
 		...searchOptions,
+		tagIds: v.optional(v.array(v.id("tags"))),
 		localeCode: v.optional(v.string()),
 		quality: v.optional(v.union(v.literal("all"), v.literal("confirmed"))),
 	},
@@ -204,6 +211,10 @@ export const search = internalQuery({
 			token.projectId,
 			args.collectionId,
 		);
+		const tags = await validateTagIds(ctx, token.projectId, args.tagIds);
+		const metadataRevision = tags.length
+			? await tagRevision(ctx, token.projectId)
+			: 0;
 		const options = normalizedSearch(args);
 		const { q, limit } = options;
 		const locales = await resolveLocales(
@@ -216,6 +227,8 @@ export const search = internalQuery({
 			JSON.stringify([
 				collection._id,
 				collection.membershipRevision,
+				tags,
+				metadataRevision,
 				q,
 				args.localeCode ?? null,
 				args.quality ?? "all",
@@ -257,7 +270,8 @@ export const search = internalQuery({
 		}
 		const cursor = (nextKey: string, index: number) =>
 			JSON.stringify({ basis, key: nextKey, localeIndex: index });
-		const items: ReturnType<typeof searchEntry>[] = [];
+		const items: (ReturnType<typeof searchEntry> & { tagIds: Id<"tags">[] })[] =
+			[];
 		if (locales.length === 0)
 			return boundedResponse({
 				collection: { id: collection._id, name: collection.name },
@@ -274,7 +288,18 @@ export const search = internalQuery({
 		let readBytes = 0;
 		for await (const source of rows) {
 			readBytes += encodedSize(source);
-			if (source.archivedAt !== undefined) {
+			if (
+				source.archivedAt !== undefined ||
+				!(await matchesMessageTags(
+					ctx,
+					{
+						projectId: token.projectId,
+						collectionId: args.collectionId,
+						messageId: source.key,
+					},
+					tags,
+				))
+			) {
 				if (++scans >= 64 || readBytes > 4 * 1024 * 1024)
 					return boundedResponse({
 						collection: { id: collection._id, name: collection.name },
@@ -327,7 +352,14 @@ export const search = internalQuery({
 					(args.quality === "confirmed" && current.valueState !== "settled")
 				)
 					continue;
-				const item = searchEntry(current, matchedFields);
+				const item = {
+					...searchEntry(current, matchedFields),
+					tagIds: await readMessageTagIds(ctx, {
+						projectId: token.projectId,
+						collectionId: args.collectionId,
+						messageId: source.key,
+					}),
+				};
 				if (
 					encodedSize([...items, item]) >
 					MAX_RESPONSE_BYTES - SEARCH_RESPONSE_OVERHEAD_BYTES
