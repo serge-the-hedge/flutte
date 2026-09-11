@@ -10,6 +10,7 @@ import { getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
 import { act } from "react";
 import { createDomTest } from "@/test/dom";
+import { RepositoryAdvancedValue } from "./advanced-string-values";
 import { ManagedStrings } from "./managed-strings";
 
 describe("Basic project workflow", () => {
@@ -132,6 +133,112 @@ describe("Basic project workflow", () => {
 		if (!found) throw new Error(`Missing ${text}`);
 		return found;
 	}
+	test("opens the Basic advanced view with the actual source editor and properties", async () => {
+		const root = createRootRoute({
+			component: () => (
+				<ConvexProvider client={client}>
+					<ManagedStrings
+						projectId="project"
+						collectionId="marketing"
+						search={{}}
+						onSearch={() => {}}
+					/>
+				</ConvexProvider>
+			),
+		});
+		const router = createRouter({
+			routeTree: root,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		await router.load();
+		await dom.render(<RouterProvider router={router} />);
+		const properties = dom.container.querySelector<HTMLButtonElement>(
+			'[aria-label^="Properties for"]',
+		);
+		if (!properties) throw new Error("Missing properties entry");
+		await act(async () => properties.click());
+		const dialog = document.querySelector('[role="dialog"]');
+		expect(dialog?.textContent).toContain("Properties");
+		expect(
+			dialog?.querySelector<HTMLTextAreaElement>(
+				'[data-workspace-locale-id="en-id"]',
+			)?.value,
+		).toBe("Build {anything}");
+		const picker = dialog?.querySelector<HTMLInputElement>('[role="combobox"]');
+		if (!picker) throw new Error("Missing language picker");
+		await act(async () => {
+			picker.focus();
+			picker.click();
+		});
+		await type(picker, "fr");
+		await act(async () =>
+			picker.dispatchEvent(
+				new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+			),
+		);
+		await act(async () =>
+			document.querySelector<HTMLElement>('[role="option"]')?.click(),
+		);
+		const target = dialog?.querySelector<HTMLTextAreaElement>(
+			'[data-workspace-locale-id="fr-id"]',
+		);
+		if (!target) throw new Error("Missing French editor");
+		await act(async () => target.focus());
+		await type(target, "Construire ensemble");
+		await act(async () => picker.focus());
+		expect(
+			calls.filter((call) => call.name === "managedContent:commit").at(-1)
+				?.args,
+		).toMatchObject({
+			projectId: "project",
+			collectionId: "marketing",
+			messageId: "subtitle",
+			localeId: "fr-id",
+			intent: { kind: "save", value: "Construire ensemble" },
+		});
+	});
+
+	test("repository advanced values render from a loaded window without a subscription loop", async () => {
+		const source = {
+			localeId: "en-id",
+			localeCode: "en",
+			isSource: true,
+			value: "Build",
+			materialized: false,
+		};
+		const target = {
+			localeId: "fr-id",
+			localeCode: "fr",
+			isSource: false,
+			value: "Construire",
+			materialized: false,
+		};
+		results["catalogWorkspaceNavigation:window"] = [
+			{ id: "subtitle", values: [source, target] },
+		];
+		try {
+			for (const localeId of ["en-id", "fr-id"]) {
+				await dom.render(
+					<ConvexProvider client={client}>
+						<RepositoryAdvancedValue
+							projectId="project"
+							projectionId="projection"
+							catalogKey={{ id: "subtitle", source, targets: [target] }}
+							localeId={localeId}
+							canEdit={false}
+							onCommitValue={async (input) => ({ basis: input.basis })}
+						/>
+					</ConvexProvider>,
+				);
+				expect(dom.container.textContent).toContain(
+					localeId === "en-id" ? "Build" : "Construire",
+				);
+			}
+		} finally {
+			delete results["catalogWorkspaceNavigation:window"];
+		}
+	});
+
 	test("authors source text without a checkout and enables an unbound language", async () => {
 		const searches: unknown[] = [];
 		const root = createRootRoute({

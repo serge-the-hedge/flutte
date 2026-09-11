@@ -1,4 +1,8 @@
-export type StringsPagePosition = { after?: number; key?: string };
+export type StringsPagePosition = {
+	after?: number;
+	cursor?: string;
+	key?: string;
+};
 export type StringsPageHistory = {
 	context: string;
 	pages: StringsPagePosition[];
@@ -12,7 +16,10 @@ export function previousStringsPages(
 ) {
 	if (history.context !== context) return [];
 	const index = history.pages.findIndex(
-		(page) => page.after === current.after && page.key === current.key,
+		(page) =>
+			page.after === current.after &&
+			page.cursor === current.cursor &&
+			page.key === current.key,
 	);
 	return index < 0 ? history.pages : history.pages.slice(0, index);
 }

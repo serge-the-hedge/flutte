@@ -62,6 +62,10 @@ Creating a string accepts up to 128 initial translations within a 1 MiB payload.
 
 ## Finding and opening strings
 
+Both project types use the same Previous/Next controls and show the number of
+strings on the current page. Page sizes can shrink for large text to keep reads
+bounded; a page count is not a project total.
+
 Short values edit inline. Long values show three compact lines; their text and
 expand icon open the same advanced view at that language. The name or properties
 icon opens properties above the editor. Search the language picker to switch

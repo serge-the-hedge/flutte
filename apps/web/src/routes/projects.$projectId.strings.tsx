@@ -8,10 +8,8 @@ import {
 	useSearch,
 } from "@tanstack/react-router";
 import { useConvex, useMutation, useQuery } from "convex/react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { IconButton } from "@/components/icon-button";
 import { RepositoryAdvancedValue } from "@/components/localization/advanced-string-values";
 import { RepositoryCharacterLimit } from "@/components/localization/character-limit";
 import { DiscoveredCatalogNotice } from "@/components/localization/discovered-catalogs";
@@ -28,6 +26,7 @@ import {
 } from "@/components/localization/string-tags";
 import { StringsCatalogView } from "@/components/localization/strings-catalog-view";
 import { StringsLanguageSelector } from "@/components/localization/strings-language-selector";
+import { StringsPagination } from "@/components/localization/strings-pagination";
 import { StringsSnapshotSelector } from "@/components/localization/strings-snapshot-selector";
 import { api, convexId } from "@/lib/convex-api";
 import {
@@ -683,6 +682,7 @@ function RepositoryStrings() {
 				/>
 			) : null}
 			<StringsCatalogView
+				hideSearchCount
 				selectedMessageIds={selectedKeys}
 				onSelectionChange={setSelectedKeys}
 				tagNamesByMessage={tagNamesByMessage}
@@ -771,54 +771,42 @@ function RepositoryStrings() {
 				onCreateTranslationTask={onCreateTranslationTask}
 			/>
 			{overview?.kind === "ready" ? (
-				<div className="mt-4 flex items-center justify-between gap-3">
-					<IconButton
-						label="Previous page"
-						icon={ChevronLeft}
-						variant="outline"
-						disabled={page === undefined || search.after === undefined}
-						onClick={() => {
-							const previous = previousPages.at(-1);
-							setPageHistory({
-								context: pageContext,
-								pages: previousPages.slice(0, -1),
-							});
-							void navigate({
-								search: (current) => ({
-									...current,
-									after: previous?.after,
-									key: previous?.key,
-								}),
-							});
-						}}
-					/>
-					<span className="text-muted-foreground text-sm">
-						{page?.keys.length ?? 0} strings on this page
-					</span>
-					<IconButton
-						label="Next page"
-						icon={ChevronRight}
-						variant="outline"
-						disabled={page?.nextAfter == null}
-						onClick={() => {
-							if (page?.nextAfter == null) return;
-							setPageHistory({
-								context: pageContext,
-								pages: [
-									...previousPages,
-									{ after: search.after, key: search.key },
-								],
-							});
-							void navigate({
-								search: (current) => ({
-									...current,
-									after: page.nextAfter ?? undefined,
-									key: undefined,
-								}),
-							});
-						}}
-					/>
-				</div>
+				<StringsPagination
+					count={page?.stale ? undefined : page?.keys.length}
+					hasPrevious={search.after !== undefined}
+					hasNext={page?.nextAfter != null}
+					onPrevious={() => {
+						const previous = previousPages.at(-1);
+						setPageHistory({
+							context: pageContext,
+							pages: previousPages.slice(0, -1),
+						});
+						void navigate({
+							search: (current) => ({
+								...current,
+								after: previous?.after,
+								key: previous?.key,
+							}),
+						});
+					}}
+					onNext={() => {
+						if (page?.nextAfter == null) return;
+						setPageHistory({
+							context: pageContext,
+							pages: [
+								...previousPages,
+								{ after: search.after, key: search.key },
+							],
+						});
+						void navigate({
+							search: (current) => ({
+								...current,
+								after: page.nextAfter ?? undefined,
+								key: undefined,
+							}),
+						});
+					}}
+				/>
 			) : null}
 		</>
 	);

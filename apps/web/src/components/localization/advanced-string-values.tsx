@@ -1,5 +1,6 @@
 import { useQueries, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
+import { useMemo } from "react";
 import { api, convexId } from "@/lib/convex-api";
 import {
 	readStringsCatalogKey,
@@ -25,30 +26,37 @@ export function ManagedAdvancedValue({
 	canEdit: boolean;
 	onCommitValue: CommitCatalogValue;
 }) {
-	const address = {
-		projectId: convexId<"projects">(projectId),
-		collectionId: convexId<"contentCollections">(collectionId),
-	};
+	const address = useMemo(
+		() => ({
+			projectId: convexId<"projects">(projectId),
+			collectionId: convexId<"contentCollections">(collectionId),
+		}),
+		[projectId, collectionId],
+	);
 	const collection = useQuery(api.contentCollections.get, address);
 	const isSource = localeId === catalogKey.source.localeId;
-	const results = useQueries({
-		source: {
-			query: api.managedContent.page,
-			args: { ...address, focusKey: catalogKey.id, limit: 1 },
-		},
-		...(!isSource
-			? {
-					target: {
-						query: api.managedContent.context,
-						args: {
-							...address,
-							messageIds: [catalogKey.id],
-							localeIds: [convexId<"locales">(localeId)],
+	const queries = useMemo(
+		() => ({
+			source: {
+				query: api.managedContent.page,
+				args: { ...address, focusKey: catalogKey.id, limit: 1 },
+			},
+			...(!isSource
+				? {
+						target: {
+							query: api.managedContent.context,
+							args: {
+								...address,
+								messageIds: [catalogKey.id],
+								localeIds: [convexId<"locales">(localeId)],
+							},
 						},
-					},
-				}
-			: {}),
-	}) as {
+					}
+				: {}),
+		}),
+		[address, catalogKey.id, isSource, localeId],
+	);
+	const results = useQueries(queries) as {
 		source:
 			| FunctionReturnType<typeof api.managedContent.page>
 			| Error
@@ -135,20 +143,30 @@ export function RepositoryAdvancedValue({
 	canEdit: boolean;
 	onCommitValue: CommitCatalogValue;
 }) {
-	const result = useQueries({
-		window: {
-			query: api.catalogWorkspaceNavigation.window,
-			args: {
-				projectId: convexId<"projects">(projectId),
-				expectedProjectionId: projectionId,
-				messageIds: [catalogKey.id],
-				localeIds:
-					catalogKey.source.localeId === localeId
-						? []
-						: [convexId<"locales">(localeId)],
+	const queries = useMemo(
+		() => ({
+			window: {
+				query: api.catalogWorkspaceNavigation.window,
+				args: {
+					projectId: convexId<"projects">(projectId),
+					expectedProjectionId: projectionId,
+					messageIds: [catalogKey.id],
+					localeIds:
+						catalogKey.source.localeId === localeId
+							? []
+							: [convexId<"locales">(localeId)],
+				},
 			},
-		},
-	}) as {
+		}),
+		[
+			projectId,
+			projectionId,
+			catalogKey.id,
+			catalogKey.source.localeId,
+			localeId,
+		],
+	);
+	const result = useQueries(queries) as {
 		window:
 			| FunctionReturnType<typeof api.catalogWorkspaceNavigation.window>
 			| Error
