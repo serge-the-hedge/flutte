@@ -107,6 +107,31 @@ describe("current message tags", () => {
 		);
 	});
 
+	test("focused links respect tag filters and remain available without a filter", async () => {
+		const s = await setup();
+		const app = await s.createTag("App Store");
+		const play = await s.createTag("Google Play");
+		await s.owner.mutation(api.messageTags.updateMany, {
+			...s.address,
+			messageIds: [s.messageId],
+			addTagIds: [app],
+		});
+		const focused = { ...s.address, focusKey: s.messageId };
+		const mismatched = await s.owner.query(api.managedContent.page, {
+			...focused,
+			tagIds: [play],
+		});
+		expect(mismatched.items).toEqual([]);
+		expect(mismatched.nextCursor).toBeNull();
+		const matching = await s.owner.query(api.managedContent.page, {
+			...focused,
+			tagIds: [app, play],
+		});
+		expect(matching.items.map((item) => item.messageId)).toEqual([s.messageId]);
+		const direct = await s.owner.query(api.managedContent.page, focused);
+		expect(direct.items.map((item) => item.messageId)).toEqual([s.messageId]);
+	});
+
 	test("filters OR tags before hydration, walks empty pages, and rejects changed membership", async () => {
 		const s = await setup();
 		const app = await s.createTag("App Store");

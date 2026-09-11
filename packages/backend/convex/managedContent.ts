@@ -408,7 +408,9 @@ export async function readManagedPage(
 			)
 			.unique();
 		const items =
-			source && source.archivedAt === undefined
+			source &&
+			source.archivedAt === undefined &&
+			(await matchesMessageTags(ctx, { ...input, messageId: source.key }, tags))
 				? [await sourceEntry(ctx, source)]
 				: [];
 		const result = { items, nextCursor: null, tagRevision: revision };
