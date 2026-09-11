@@ -388,6 +388,56 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		t = createBackend();
 	});
 
+	test("the Portuguese alias needs configured setup and preserves explicitly configured regional identity", async () => {
+		const user = await authenticatedBackend(t, "explicit-locale-owner");
+		const projectId = await createProject(user);
+		await ingestSourceBaseline(user, projectId);
+		await user.mutation(api.localeIntroductionTargets.remove, {
+			projectId,
+			localeCode: "pt",
+		});
+		const { token } = await proposalToken(user, projectId);
+		const missing = await agentRequest(
+			t,
+			token,
+			"/api/agent/v1/locale-proposals/pt",
+			{ method: "POST" },
+		);
+		expect(missing.status).toBe(400);
+		expect(await missing.json()).toMatchObject({
+			code: "NOT_FOUND",
+			error: expect.stringContaining("not configured"),
+		});
+		expect(
+			await t.run((ctx) => ctx.db.query("localeProposals").collect()),
+		).toEqual([]);
+		await user.mutation(api.localeIntroductionTargets.save, {
+			projectId,
+			localeCode: "pt",
+			label: "Portuguese (Portugal)",
+			catalogPath: "intl_pt.arb",
+			runtimeLocale: "pt-PT",
+		});
+		const proposal = await successfulJson<AgentProposal>(
+			await agentRequest(t, token, "/api/agent/v1/locale-proposals", {
+				method: "POST",
+				body: JSON.stringify({ localeCode: "pt" }),
+			}),
+		);
+		expect(proposal.locale).toEqual({
+			code: "pt",
+			label: "Portuguese (Portugal)",
+			runtimeLocale: "pt-PT",
+		});
+		await user.mutation(api.localeIntroductionTargets.remove, {
+			projectId,
+			localeCode: "pt",
+		});
+		const resumed = await createPortugueseProposal(t, token);
+		expect(resumed.proposalId).toBe(proposal.proposalId);
+		expect(resumed.locale).toEqual(proposal.locale);
+	});
+
 	test("authorized independent review retains provenance and can finalize after policy is disabled", async () => {
 		const { user, projectId, proposalId, taskId, reviewAuthorization } =
 			await authorizedLocaleReviewFixture(t);
@@ -2429,7 +2479,7 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		await ingestSourceBaseline(user, projectId);
 		const { proposalId } = await user.mutation(
 			api.localeProposals.ensureForReview,
-			{ projectId },
+			{ projectId, localeCode: "pt" },
 		);
 		const page = await user.query(api.localeProposals.getForReview, {
 			proposalId,

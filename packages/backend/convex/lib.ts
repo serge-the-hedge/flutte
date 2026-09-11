@@ -11,6 +11,7 @@ export const tokenScopeValidator = v.union(
 	v.literal("dictionary-write"),
 	v.literal("languages-write"),
 	v.literal("tags-write"),
+	v.literal("strings-write"),
 	v.literal("export"),
 	v.literal("snapshot-submission"),
 );

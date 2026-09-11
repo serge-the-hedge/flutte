@@ -72,12 +72,14 @@ type ReviewFocus =
  * route or from a Translation Task whose private adapter is that proposal. */
 export function LocaleProposalWorkbench({
 	projectId,
+	localeCode,
 	initialProposalId,
 	taskId,
 	title = "New Locale",
 	showTaskNavigation = false,
 }: {
 	projectId: string;
+	localeCode: string;
 	initialProposalId?: string;
 	taskId?: string;
 	title?: string;
@@ -87,7 +89,7 @@ export function LocaleProposalWorkbench({
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const currentProposalId = useQuery(
 		api.localeProposals.currentForReview,
-		initialProposalId ? "skip" : { projectId: convexProjectId },
+		initialProposalId ? "skip" : { projectId: convexProjectId, localeCode },
 	);
 	const ensureForReview = useMutation(api.localeProposals.ensureForReview);
 	const stageForReview = useMutation(api.localeProposals.stageForReview);
@@ -335,7 +337,10 @@ export function LocaleProposalWorkbench({
 
 	const prepare = () =>
 		run("prepare", async () => {
-			const result = await ensureForReview({ projectId: convexProjectId });
+			const result = await ensureForReview({
+				projectId: convexProjectId,
+				localeCode,
+			});
 			setProposalId(result.proposalId);
 			setNotice(
 				"The catalog is ready for manual editing or agent-assisted review.",

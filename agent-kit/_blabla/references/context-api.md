@@ -2,6 +2,11 @@
 
 ### `GET /projects/current`
 
+`agentReview.enabled` reports the human project setting. When false, exact
+candidate revisions can still receive explicit human delegation; every review
+remains subject to server authorization and a separate reviewer credential.
+`capabilities.strings` advertises Basic source creation and its `strings-write` scope.
+
 Returns project identity, Source/active Locale codes, token scopes, and current
 capabilities/bounds. `capabilities.newLocaleTargets` lists configured inactive
 codes; `localeIntroductionTargets` adds their label, catalog path, and Runtime

@@ -46,12 +46,12 @@ submission returns `STALE_BASIS` without writing evidence. Corrections append a
 new immutable revision and name the current `expectedCandidateRevision`.
 
 For a new Locale, first create or resume its configured Locale Proposal with
-`POST /locale-proposals` and `{ "localeCode": "pt" }`. Then create the same generic
+`POST /locale-proposals` and `{ "localeCode": "it" }`. Then create the same generic
 proposal with a Locale target:
 
 ```json
 {
-  "clientProposalKey": "pt-checkout-pass-1",
+  "clientProposalKey": "it-checkout-pass-1",
   "target": {
     "kind": "localeProposal",
     "localeProposalId": "k..."
@@ -94,10 +94,9 @@ All proposal endpoints require both `read` and `propose`. Prefer Translation
 Tasks for normal agent work: they resolve the Source basis and preserve candidate
 review feedback. These lower-level endpoints expose the same prepared catalog.
 
-The historical `/locale-proposals/pt` routes remain compatibility aliases.
-Explicitly creating through that old route can establish the former default
-Portuguese configuration (`pt`, `pt-BR`, sibling `intl_pt.arb`) if none exists.
-Generic creation always requires an editor-configured target.
+The historical `/locale-proposals/pt` routes remain compatibility aliases for
+`pt`. Creation requires a configured target through either route; use the generic
+route for new integrations.
 
 #### `POST /locale-proposals`
 

@@ -291,6 +291,7 @@ function ProposalDetailContent() {
 		return (
 			<LocaleProposalWorkbench
 				projectId={projectId}
+				localeCode={detail.proposal.localeProposalTaskScope.localeCode}
 				taskId={detail.proposal._id}
 				initialProposalId={
 					detail.proposal.localeProposalTaskScope.localeProposalId

@@ -41,7 +41,6 @@ import { requireEditor, requireViewer } from "./permissions";
 
 export const PORTUGUESE_LOCALE_CODE = "pt";
 export const PORTUGUESE_LOCALE_LABEL = "Portuguese";
-export const PORTUGUESE_RUNTIME_LOCALE = "pt-BR";
 export const PORTUGUESE_CATALOG_FILE_NAME = "intl_pt.arb";
 
 /** Old Portuguese proposals predate pinned labels and paths. Their evidence remains readable. */
@@ -919,7 +918,7 @@ export const sourceMessageForProposal = internalQuery({
 /** Find the resumable proposal before consulting current Locale setup. Once a
  * proposal exists, its Source Catalog Document must stay immutable evidence. */
 export const currentProposalFor = internalQuery({
-	args: { projectId: v.id("projects"), localeCode: v.optional(v.string()) },
+	args: { projectId: v.id("projects"), localeCode: v.string() },
 	handler: async (ctx, args): Promise<Id<"localeProposals"> | null> => {
 		const project = await projectFor(ctx, args.projectId);
 		if (!project.baselineSnapshotId) {
@@ -935,7 +934,7 @@ export const currentProposalFor = internalQuery({
 				q
 					.eq("projectId", args.projectId)
 					.eq("sourceSnapshotId", baselineSnapshotId)
-					.eq("localeCode", args.localeCode ?? PORTUGUESE_LOCALE_CODE),
+					.eq("localeCode", args.localeCode),
 			)
 			.unique();
 		return proposal?._id ?? null;
@@ -945,7 +944,7 @@ export const currentProposalFor = internalQuery({
 export const begin = internalMutation({
 	args: {
 		projectId: v.id("projects"),
-		localeCode: v.optional(v.string()),
+		localeCode: v.string(),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		sourceSnapshotFileId: v.id("sourceSnapshotFiles"),
 		sourceCatalogPath: v.string(),
@@ -957,22 +956,18 @@ export const begin = internalMutation({
 		const project = await projectFor(ctx, args.projectId);
 		if (project.baselineSnapshotId !== args.sourceSnapshotId)
 			sourceStaleError();
-		const localeCode = args.localeCode ?? PORTUGUESE_LOCALE_CODE;
+		const localeCode = args.localeCode;
 		const configured = await introductionTargetFor(
 			ctx,
 			args.projectId,
 			localeCode,
 		);
-		if (args.localeCode !== undefined && !configured)
+		if (!configured)
 			throw new ConvexError({
 				code: "NOT_FOUND",
 				message: `New Locale ${localeCode} is not configured for this project.`,
 			});
-		const identity = configured ?? {
-			label: PORTUGUESE_LOCALE_LABEL,
-			runtimeLocale: PORTUGUESE_RUNTIME_LOCALE,
-			catalogPath: `${args.sourceCatalogPath.slice(0, args.sourceCatalogPath.lastIndexOf("/") + 1)}${PORTUGUESE_CATALOG_FILE_NAME}`,
-		};
+		const identity = configured;
 		assertIntroductionCatalogPath(identity.catalogPath, args.sourceCatalogPath);
 		const existingLocale = await ctx.db
 			.query("locales")
@@ -1074,7 +1069,7 @@ export async function ensureLocaleProposalForReview(
 	ctx: MutationCtx,
 	projectId: Id<"projects">,
 	userId: string,
-	localeCode?: string,
+	localeCode: string,
 ): Promise<{ proposalId: Id<"localeProposals"> }> {
 	const project = await projectFor(ctx, projectId);
 	if (!project.baselineSnapshotId) {
@@ -1092,7 +1087,7 @@ export async function ensureLocaleProposalForReview(
 					"sourceSnapshotId",
 					project.baselineSnapshotId as Id<"sourceSnapshots">,
 				)
-				.eq("localeCode", localeCode ?? PORTUGUESE_LOCALE_CODE),
+				.eq("localeCode", localeCode),
 		)
 		.unique();
 	if (existing) return { proposalId: existing._id };
@@ -1125,10 +1120,10 @@ export async function ensureLocaleProposalForReview(
 	return { proposalId };
 }
 
-/** Start the first configured Locale Proposal from the human workbench. This
+/** Start the requested configured Locale Proposal from the human workbench. This
  * is deliberately the same pinned-evidence path as the agent adapter. */
 export const ensureForReview = mutation({
-	args: { projectId: v.id("projects"), localeCode: v.optional(v.string()) },
+	args: { projectId: v.id("projects"), localeCode: v.string() },
 	handler: async (
 		ctx,
 		args,
@@ -1160,9 +1155,7 @@ export const ensureForCarryForward = internalMutation({
 			ctx,
 			args.projectId,
 			args.userId,
-			from.localeCode === "pt" && !from.localeLabel
-				? undefined
-				: from.localeCode,
+			from.localeCode,
 		);
 	},
 });
@@ -2037,7 +2030,7 @@ export const artifactFor = internalQuery({
 export async function createOrResumeProposal(
 	ctx: ActionCtx,
 	actor: ProposalActor,
-	localeCode?: string,
+	localeCode: string,
 ): Promise<LocaleProposalSummary> {
 	const existingProposalId: Id<"localeProposals"> | null = await ctx.runQuery(
 		internal.localeProposals.currentProposalFor,

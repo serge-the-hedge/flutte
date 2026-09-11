@@ -189,9 +189,16 @@ describe("Release Records", () => {
 			user,
 			"combined-release-delivery",
 		);
+		await user.mutation(api.localeIntroductionTargets.save, {
+			projectId,
+			localeCode: "pt",
+			label: "Portuguese",
+			catalogPath: "intl_pt.arb",
+			runtimeLocale: "pt-BR",
+		});
 		const { proposalId } = await user.mutation(
 			api.localeProposals.ensureForReview,
-			{ projectId },
+			{ projectId, localeCode: "pt" },
 		);
 		const proposal = await user.query(api.localeProposals.getForReview, {
 			proposalId,

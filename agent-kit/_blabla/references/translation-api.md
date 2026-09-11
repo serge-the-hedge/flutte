@@ -46,8 +46,8 @@ A new-Locale task covers every message in the pinned Source Snapshot:
 
 ```json
 {
-  "clientTaskKey": "portuguese-complete-v1",
-  "target": { "kind": "newLocale", "localeCode": "pt" },
+  "clientTaskKey": "italian-complete-v1",
+  "target": { "kind": "newLocale", "localeCode": "it" },
   "scope": { "kind": "completeCatalog" }
 }
 ```
@@ -67,7 +67,10 @@ Returns the bounded task inbox visible to the current token: project tasks
 created by a human and private tasks created by that token. Optional `status`
 is `open`, `accepted`, or `rejected`. Each row states its task kind, ownership,
 Locale, frozen target count, candidate count, and update time. Use this endpoint
-to discover and resume work instead of guessing task ids or creating duplicates.
+to resume matching work instead of guessing task ids or creating duplicates.
+Its locales describe those tasks only. Discover the project’s current target
+languages from `GET /projects/current`, independently of this inbox; an absent
+task means the assigned scope may need a new task.
 
 ### `GET /translation-tasks/:id`
 
