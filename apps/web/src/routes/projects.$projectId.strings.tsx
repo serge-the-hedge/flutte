@@ -262,6 +262,7 @@ function RepositoryStrings() {
 				}
 			: "skip",
 		overview?.kind === "ready" ? overview.revision : undefined,
+		tagOptions?.revision,
 	);
 	const scopeCounts = useCatalogScopeCounts(
 		overview?.kind === "ready" && locales !== undefined && snapshotIndex.ready

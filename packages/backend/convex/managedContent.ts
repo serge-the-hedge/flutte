@@ -572,7 +572,7 @@ export async function exportManagedSelection(
 		);
 	const names: Record<string, string | null> = Object.create(null);
 	for (const item of items) names[item.messageId] = item.name;
-	const document = {
+	const output = {
 		names,
 		collectionId: input.collectionId,
 		mode: input.mode,
@@ -580,7 +580,22 @@ export async function exportManagedSelection(
 		omitted,
 		evidence,
 	};
-	const text = JSON.stringify(document, null, 2);
+	const text = JSON.stringify(output, null, 2);
+	// Convex object field names are restricted; arbitrary message identities travel as values.
+	const document = {
+		...output,
+		names: Object.entries(names).map(([messageId, name]) => ({
+			messageId,
+			name,
+		})),
+		values: Object.entries(values).map(([messageId, localized]) => ({
+			messageId,
+			values: Object.entries(localized).map(([localeCode, value]) => ({
+				localeCode,
+				value,
+			})),
+		})),
+	};
 	const result = { text, document, omitted, mode: input.mode };
 	if (bytes(result) > MAX_MANAGED_RESPONSE_BYTES)
 		fail("LIMIT_EXCEEDED", "Download exceeds 1 MiB. Select fewer values.");

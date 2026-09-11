@@ -160,6 +160,7 @@ export function ManagedStrings({
 		{
 			...address,
 			cursor: search.cursor,
+			expectedTagRevision: tagOptions?.revision,
 			q: search.q,
 			focusKey: search.cursor ? undefined : search.key,
 			tagIds: search.tags?.map((id) => convexId<"tags">(id)),

@@ -12,9 +12,10 @@ type BrowsePage = FunctionReturnType<typeof api.catalogBrowse.page>;
 export function useCatalogBrowsePage(
 	input: BrowseArgs | "skip",
 	navigationRevision?: number,
+	tagRevision?: number,
 ): BrowsePage | undefined {
 	const argsKey = JSON.stringify(input);
-	const requestKey = JSON.stringify([argsKey, navigationRevision]);
+	const requestKey = JSON.stringify([argsKey, navigationRevision, tagRevision]);
 	const args = useMemo(
 		() => JSON.parse(argsKey) as BrowseArgs | "skip",
 		[argsKey],

@@ -96,8 +96,15 @@ describe("current message tags", () => {
 			...input,
 			mode: "reviewed",
 		});
-		expect(exported.document.values[s.messageId]?.fr).toBe("Construisez");
-		expect(JSON.parse(exported.text)).toEqual(exported.document);
+		expect(exported.document.values).toEqual([
+			{
+				messageId: s.messageId,
+				values: [{ localeCode: "fr", value: "Construisez" }],
+			},
+		]);
+		expect(JSON.parse(exported.text).values[s.messageId].fr).toBe(
+			"Construisez",
+		);
 	});
 
 	test("filters OR tags before hydration, walks empty pages, and rejects changed membership", async () => {

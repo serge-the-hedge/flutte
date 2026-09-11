@@ -15,6 +15,7 @@ function result(
 ): BrowsePage {
 	return {
 		stale: false,
+		tagRevision: 0,
 		nextAfter,
 		nextTargetIndex: nextAfter === null ? null : nextTargetIndex,
 		counts: { waiting: 0, unconfirmedImport: 0, stale: 0, settled: 0 },
@@ -78,12 +79,14 @@ describe("Strings sparse browse pages", () => {
 		q = "first",
 		after,
 		revision,
+		tagRevision,
 		skip = false,
 		localeIds,
 	}: {
 		q?: string;
 		after?: number;
 		revision?: number;
+		tagRevision?: number;
 		skip?: boolean;
 		localeIds?: BrowseArgs["localeIds"];
 	}) {
@@ -94,7 +97,11 @@ describe("Strings sparse browse pages", () => {
 			after,
 			localeIds,
 		};
-		const page = useCatalogBrowsePage(skip ? "skip" : args, revision);
+		const page = useCatalogBrowsePage(
+			skip ? "skip" : args,
+			revision,
+			tagRevision,
+		);
 		return (
 			<output>
 				{page === undefined ? "loading" : (page.keys[0]?.messageId ?? "empty")}{" "}
@@ -108,12 +115,14 @@ describe("Strings sparse browse pages", () => {
 		revision?: number,
 		skip = false,
 		localeIds?: BrowseArgs["localeIds"],
+		tagRevision?: number,
 	) => (
 		<ConvexProvider client={client}>
 			<Harness
 				q={q}
 				after={after}
 				revision={revision}
+				tagRevision={tagRevision}
 				skip={skip}
 				localeIds={localeIds}
 			/>
@@ -217,6 +226,23 @@ describe("Strings sparse browse pages", () => {
 		await dom.render(view("first", undefined, 2));
 		expect(dom.container.textContent).toBe(
 			"earlier-match · logical position start",
+		);
+	});
+
+	test("restarts a sparse tag scan when assignments change without a catalog revision", async () => {
+		responses.set(identity("first", undefined), result(63));
+		responses.set(identity("first", 63), result(null, "later-tagged"));
+		await dom.render(view("first", undefined, 1, false, undefined, 1));
+		expect(dom.container.textContent).toBe(
+			"later-tagged · logical position start",
+		);
+		responses.set(
+			identity("first", undefined),
+			result(null, "newly-tagged-earlier"),
+		);
+		await dom.render(view("first", undefined, 1, false, undefined, 2));
+		expect(dom.container.textContent).toBe(
+			"newly-tagged-earlier · logical position start",
 		);
 	});
 
