@@ -1,5 +1,5 @@
 import { cn } from "@blabla/ui/lib/utils";
-import type { ReactNode } from "react";
+import type { FocusEventHandler, ReactNode } from "react";
 import type { ValueTone } from "@/lib/strings-catalog-presentation";
 
 export const QUIET_CATALOG_FIELD =
@@ -15,13 +15,15 @@ export function CatalogValueRow({
 	localeCode,
 	tone,
 	children,
+	onBlur,
 }: {
 	localeCode: string;
 	tone: ValueTone;
 	children: ReactNode;
+	onBlur?: FocusEventHandler<HTMLDivElement>;
 }) {
 	return (
-		<div className="relative flex items-start gap-2">
+		<div className="relative flex items-start gap-2" onBlurCapture={onBlur}>
 			<span
 				aria-hidden="true"
 				className={cn(

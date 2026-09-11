@@ -94,7 +94,7 @@ advance the Baseline, or establish delivery truth.
 
 | Gesture or route | Visible result | Translator Confirmation |
 |---|---|---|
-| Save a target edit in Strings | Updates the Catalog Workspace | Yes |
+| Save a target edit in Strings (including on blur) | Updates the Catalog Workspace | Yes |
 | Approve an unchanged target | Keeps the value | Yes |
 | Record an Intentional Blank for an empty target | Keeps deliberate empty output and its reason | Deliberate equivalent |
 | Submit an Agent Translation Proposal | Candidate remains inert | No |
