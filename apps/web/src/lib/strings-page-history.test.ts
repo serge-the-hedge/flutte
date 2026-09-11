@@ -21,3 +21,28 @@ test("a language, filter, release or Baseline change starts a separate history",
 		),
 	).toEqual([]);
 });
+
+test("native cursor pages reconcile browser Back and retain an exact-key starting point", () => {
+	const start = { key: "store.subtitle" };
+	const second = { cursor: "native-page-2" };
+	const history = { context: "basic-marketing", pages: [start, second] };
+	expect(
+		previousStringsPages(history, "basic-marketing", {
+			cursor: "native-page-3",
+		}),
+	).toEqual([start, second]);
+	expect(previousStringsPages(history, "basic-marketing", second)).toEqual([
+		start,
+	]);
+	expect(previousStringsPages(history, "basic-marketing", start)).toEqual([]);
+});
+
+test("native cursor history cannot leak across a tag/search or project change", () => {
+	expect(
+		previousStringsPages(
+			{ context: "old", pages: [{}, { cursor: "page-2" }] },
+			"new",
+			{ cursor: "page-3" },
+		),
+	).toEqual([]);
+});

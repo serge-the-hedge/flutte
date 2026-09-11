@@ -2,7 +2,7 @@ import { Button } from "@blabla/ui/components/button";
 import { useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation, useQueries, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronLeft, ChevronRight, Copy, Download } from "lucide-react";
+import { Copy, Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { IconButton } from "@/components/icon-button";
@@ -19,6 +19,10 @@ import type {
 	StringsCatalogKey,
 } from "@/lib/strings-catalog";
 import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
+import {
+	previousStringsPages,
+	type StringsPageHistory,
+} from "@/lib/strings-page-history";
 import type { StringsSearch } from "@/lib/strings-search";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useManagedPage } from "@/lib/use-managed-page";
@@ -31,6 +35,7 @@ import { StringSelectionTools } from "./string-selection-tools";
 import { StringTagFilter, StringTags } from "./string-tags";
 import { StringsCatalogView } from "./strings-catalog-view";
 import { StringsLanguageSelector } from "./strings-language-selector";
+import { StringsPagination } from "./strings-pagination";
 
 type ContextResult = FunctionReturnType<typeof api.managedContent.context>;
 const noop = () => {};
@@ -201,7 +206,22 @@ export function ManagedStrings({
 		"reviewed" | "partial" | "draft"
 	>("reviewed");
 	const [exportNote, setExportNote] = useState("");
-	const [previous, setPrevious] = useState<Array<string | undefined>>([]);
+	const pageContext = JSON.stringify([
+		projectId,
+		collectionId,
+		search.q,
+		search.tags,
+		search.locales,
+		tagOptions?.revision,
+	]);
+	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
+		context: pageContext,
+		pages: [],
+	});
+	const previousPages = previousStringsPages(pageHistory, pageContext, {
+		cursor: search.cursor,
+		key: search.key,
+	});
 	const hasUnsavedForms = composerDirty || formDirty || languageDirty;
 	useCatalogNavigationGuard(
 		hasUnsaved || hasUnsavedForms,
@@ -329,7 +349,7 @@ export function ManagedStrings({
 		return { basis: result.basis };
 	};
 	const changeSearch = (next: StringsSearch) => {
-		setPrevious([]);
+		setPageHistory({ context: pageContext, pages: [] });
 		setSelectedKeys([]);
 		onSearch({
 			...next,
@@ -532,6 +552,7 @@ export function ManagedStrings({
 				/>
 			) : null}
 			<StringsCatalogView
+				hideSearchCount
 				selectedMessageIds={selectedKeys}
 				tagNamesByMessage={tagNamesByMessage}
 				historyProjectId={address.projectId}
@@ -636,31 +657,31 @@ export function ManagedStrings({
 						: undefined
 				}
 			/>
-			<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-				<div className="flex gap-2">
-					<IconButton
-						label="Previous page"
-						icon={ChevronLeft}
-						variant="outline"
-						disabled={!search.cursor}
-						onClick={() => {
-							const cursor = previous.at(-1);
-							setPrevious(previous.slice(0, -1));
-							onSearch({ ...search, cursor });
-						}}
-					/>
-					<IconButton
-						label="Next page"
-						icon={ChevronRight}
-						variant="outline"
-						disabled={!page?.nextCursor}
-						onClick={() => {
-							if (!page?.nextCursor) return;
-							setPrevious([...previous, search.cursor]);
-							onSearch({ ...search, cursor: page.nextCursor });
-						}}
-					/>
-				</div>
+			<StringsPagination
+				count={page?.items.length}
+				hasPrevious={search.cursor !== undefined}
+				hasNext={page?.nextCursor != null}
+				onPrevious={() => {
+					const previous = previousPages.at(-1);
+					setPageHistory({
+						context: pageContext,
+						pages: previousPages.slice(0, -1),
+					});
+					onSearch({ ...search, cursor: previous?.cursor, key: previous?.key });
+				}}
+				onNext={() => {
+					if (!page?.nextCursor) return;
+					setPageHistory({
+						context: pageContext,
+						pages: [
+							...previousPages,
+							{ cursor: search.cursor, key: search.key },
+						],
+					});
+					onSearch({ ...search, cursor: page.nextCursor, key: undefined });
+				}}
+			/>
+			<div className="mt-3 flex flex-wrap items-center justify-end gap-3">
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="text-sm">
 						Export{" "}

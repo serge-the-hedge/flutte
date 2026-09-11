@@ -189,6 +189,7 @@ type CatalogWorkspaceEditorInput = {
 type CatalogControls = {
 	historyProjectId?: string;
 	searchPlaceholder?: string;
+	hideSearchCount?: boolean;
 	/** Only offer Focus when the caller filters the complete result set by scope. */
 	showFocusControls?: boolean;
 	availableLocales?: CatalogLocale[];
@@ -1311,6 +1312,7 @@ function CatalogSearch({
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	navigationState: StringsCatalogNavigationState;
 }) {
+	const controls = useContext(CatalogControlsContext);
 	return (
 		<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 			<div className="relative min-w-0 flex-1">
@@ -1328,8 +1330,7 @@ function CatalogSearch({
 						})
 					}
 					placeholder={
-						useContext(CatalogControlsContext).searchPlaceholder ??
-						"Search keys and translations"
+						controls.searchPlaceholder ?? "Search keys and translations"
 					}
 					aria-label="Search strings"
 					className="pl-8"
@@ -1347,10 +1348,15 @@ function CatalogSearch({
 					<X aria-hidden="true" />
 				</Button>
 			) : null}
-			<p className="shrink-0 text-muted-foreground text-xs" aria-live="polite">
-				{matchingKeyCount} of {keyCount} string
-				{keyCount === 1 ? "" : "s"}
-			</p>
+			{!controls.hideSearchCount ? (
+				<p
+					className="shrink-0 text-muted-foreground text-xs"
+					aria-live="polite"
+				>
+					{matchingKeyCount} of {keyCount} string
+					{keyCount === 1 ? "" : "s"}
+				</p>
+			) : null}
 		</div>
 	);
 }
