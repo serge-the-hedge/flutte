@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
+import 'generated_localization_baseline.dart';
 import 'repository_policy.dart';
 import 'runtime_locale_registration.dart';
 import 'staging_worktree.dart';
@@ -402,12 +403,11 @@ class RepositoryAdapter {
       commit: appliedOnto,
     );
     try {
-      await _runGenerator(staging.root, request.flutter);
-      if ((await _changedPaths(staging.root)).isNotEmpty) {
-        throw RepositoryAdapterException(
-          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this Locale. ${request.flutter.description}',
-        );
-      }
+      final baseline = await GeneratedLocalizationBaseline.prepare(
+        staging: staging,
+        flutter: request.flutter,
+        generate: () => _runGenerator(staging.root, request.flutter),
+      );
 
       await _localeDelivery.apply(staging.root, artifact);
       await _runGenerator(staging.root, request.flutter);
@@ -421,14 +421,8 @@ class RepositoryAdapter {
         changedPaths,
       );
 
-      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
-      await _ensureRelevantPathsAreClean(checkout);
-      await _ensureIndexIsClean(checkout);
-      await staging.ensureCheckoutUnchanged(currentBranch);
-      await _git(checkout, ['switch', '-c', branchName]);
-      await _writeCandidateFiles(checkout, candidateFiles);
-      await _git(checkout, ['add', '--', ...changedPaths]);
-      final stagedPaths = await _gitLines(checkout, [
+      await _git(staging.root, ['add', '--', ...changedPaths]);
+      final stagedPaths = await _gitLines(staging.root, [
         'diff',
         '--cached',
         '--name-only',
@@ -438,20 +432,34 @@ class RepositoryAdapter {
           'The local Git index changed while this Locale was being prepared. No commit was created.',
         );
       }
-      await _git(checkout, [
+      await _git(staging.root, [
         'commit',
         '-m',
         'feat(l10n): add ${artifact.locale.code}\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}',
       ]);
 
+      await staging.verifyCandidate({...baseline.files, ...candidateFiles});
+
+      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
+      await _ensureRelevantPathsAreClean(checkout);
+      await _ensureIndexIsClean(checkout);
+      await staging.ensureCheckoutUnchanged(currentBranch);
+      await staging.publish(branchName);
+
       final pullRequestCommand =
           'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
       request.write('Created local branch $branchName.');
+      if (baseline.files.isNotEmpty) {
+        request.write(
+          'Refreshed ${baseline.files.length} existing generated localization file(s) in a separate preceding commit. Review both commits before pushing.',
+        );
+      }
       request.write('Review it, then run: git push -u origin $branchName');
       request.write(pullRequestCommand);
       return DeliveryResult(
         branchName: branchName,
-        changedPaths: changedPaths,
+        changedPaths: {...baseline.files.keys, ...changedPaths}.toList()
+          ..sort(),
         pullRequestCommand: pullRequestCommand,
       );
     } finally {
@@ -657,17 +665,6 @@ class RepositoryAdapter {
       files[path] = await file.readAsBytes();
     }
     return files;
-  }
-
-  Future<void> _writeCandidateFiles(
-    Directory checkout,
-    Map<String, List<int>> files,
-  ) async {
-    for (final entry in files.entries) {
-      final destination = _file(checkout, entry.key);
-      await destination.parent.create(recursive: true);
-      await destination.writeAsBytes(entry.value, flush: true);
-    }
   }
 
   File _file(Directory root, String relativePath) =>

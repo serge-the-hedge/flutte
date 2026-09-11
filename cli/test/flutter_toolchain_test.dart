@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:blabla_cli/locale_proposal_adapter.dart';
 import 'package:test/test.dart';
@@ -34,29 +35,146 @@ void main() {
         environment: {'FLUTTER_ROOT': fixture.path('from-environment')},
       ).resolve(fixture.checkout, explicitSdk: explicit.path);
 
-      expect(resolved.executable, fixture.path('explicit/bin/flutter'));
+      expect(
+        resolved.executable,
+        await File(fixture.path('explicit/bin/flutter')).resolveSymbolicLinks(),
+      );
       expect(resolved.version, 'Flutter 3.44.6');
       expect(resolved.description, contains('environment.flutter: ^3.44.0'));
     },
   );
 
-  test('uses fvm for a .fvmrc when no SDK directory is available', () async {
+  test('repository SDK wins over FLUTTER_ROOT', () async {
     final fixture = await ToolchainFixture.create();
     addTearDown(fixture.dispose);
-    await File(fixture.path('.fvmrc')).writeAsString('3.44.6\n');
-    final runner = FvmRunner();
+    final local = await fixture.sdk('.fvm/flutter_sdk', 'Flutter 3.44.6');
+    final ambient = await fixture.sdk('ambient', 'Flutter 9.9.9');
+    final resolved = await FlutterToolchainResolver(
+      environment: {'FLUTTER_ROOT': ambient.path},
+    ).resolve(fixture.root);
+    expect(
+      resolved.executable,
+      await File('${local.path}/bin/flutter').resolveSymbolicLinks(),
+    );
+    expect(resolved.source, 'repository FVM');
+  });
+
+  test('resolves FVM to a fixed SDK executable before staging', () async {
+    final fixture = await ToolchainFixture.create();
+    addTearDown(fixture.dispose);
+    await File(fixture.path('.fvmrc')).writeAsString('{"flutter":"3.44.6"}');
+    final sdk = await fixture.sdk('installed-sdk', 'Flutter 3.44.6');
+    final runner = FvmRunner(await sdk.resolveSymbolicLinks());
 
     final resolved = await FlutterToolchainResolver(
       environment: const {},
       runner: runner,
     ).resolve(fixture.checkout);
 
-    expect(resolved.executable, 'fvm');
-    expect(resolved.argumentsPrefix, const ['flutter']);
-    expect(resolved.sdkPath, '/opt/fvm/3.44.6');
+    expect(
+      resolved.executable,
+      '${await sdk.resolveSymbolicLinks()}/bin/flutter',
+    );
+    expect(resolved.argumentsPrefix, isEmpty);
+    expect(resolved.sdkPath, await sdk.resolveSymbolicLinks());
     expect(resolved.version, 'Flutter 3.44.6');
     expect(runner.calls, contains(equals(['fvm', '--version'])));
-    expect(runner.calls, contains(equals(['fvm', 'flutter', '--version'])));
+    expect(
+      runner.calls,
+      contains(
+        equals([
+          '${await sdk.resolveSymbolicLinks()}/bin/flutter',
+          '--version',
+        ]),
+      ),
+    );
+  });
+  test(
+    'missing configured SDK gives setup guidance instead of ambient fallback',
+    () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      await File(fixture.path('.fvmrc')).writeAsString('{"flutter":"3.47.0"}');
+      final ambient = await fixture.sdk('ambient', 'Flutter 3.44.6');
+      await expectLater(
+        FlutterToolchainResolver(
+          environment: {'FLUTTER_ROOT': ambient.path},
+          runner: FvmRunner(fixture.path('missing')),
+        ).resolve(fixture.root),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'guidance',
+            contains('fvm install'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'stale repository SDK link names the pinned version and repair command',
+    () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.sdk('.fvm/flutter_sdk', 'Flutter 3.44.6');
+      await File(fixture.path('.fvmrc')).writeAsString('{"flutter":"3.47.0"}');
+      await expectLater(
+        FlutterToolchainResolver(environment: {}).resolve(fixture.root),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'repair',
+            contains('fvm use 3.47.0'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'inline YAML constraint prevents an incompatible automatic refresh',
+    () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      final sdk = await fixture.sdk('explicit', 'Flutter 3.44.6');
+      await File(
+        fixture.path('pubspec.yaml'),
+      ).writeAsString('environment: {sdk: ^3.12.0, flutter: ^3.47.0}');
+      final resolved = await FlutterToolchainResolver(
+        environment: {},
+      ).resolve(fixture.root, explicitSdk: sdk.path);
+      expect(resolved.projectConstraint, '^3.47.0');
+      expect(resolved.canRefreshGeneratedOutput, isFalse);
+    },
+  );
+
+  test('refresh requires an intended SDK and a compatible known version', () {
+    ResolvedFlutter sdk(String source, String version) => ResolvedFlutter(
+      executable: '/flutter',
+      argumentsPrefix: [],
+      sdkPath: '/',
+      source: source,
+      version: version,
+      projectConstraint: '^3.47.0',
+    );
+    expect(
+      sdk('repository FVM', 'Flutter 3.47.0').canRefreshGeneratedOutput,
+      isTrue,
+    );
+    expect(
+      sdk('--flutter-sdk', 'Flutter 3.47.2').canRefreshGeneratedOutput,
+      isTrue,
+    );
+    expect(
+      sdk('--flutter-sdk', 'Flutter 3.44.6').canRefreshGeneratedOutput,
+      isFalse,
+    );
+    expect(sdk('PATH', 'Flutter 3.47.0').canRefreshGeneratedOutput, isFalse);
+    expect(
+      sdk('repository FVM', 'unavailable').canRefreshGeneratedOutput,
+      isFalse,
+    );
   });
 }
 
@@ -100,6 +218,8 @@ exit 0
 }
 
 class FvmRunner implements CommandRunner {
+  FvmRunner(this.sdkPath);
+  final String sdkPath;
   final List<List<String>> calls = [];
 
   @override
@@ -113,7 +233,8 @@ class FvmRunner implements CommandRunner {
     if (executable == 'fvm' && arguments.join(' ') == '--version') {
       return const CommandResult(exitCode: 0, stdout: '3.2.1\n', stderr: '');
     }
-    if (executable == 'fvm' && arguments.join(' ') == 'flutter --version') {
+    if (executable == '$sdkPath/bin/flutter' &&
+        arguments.join(' ') == '--version') {
       return const CommandResult(
         exitCode: 0,
         stdout: 'Flutter 3.44.6\n',
@@ -121,9 +242,11 @@ class FvmRunner implements CommandRunner {
       );
     }
     if (executable == 'fvm' && arguments.join(' ') == 'api project') {
-      return const CommandResult(
+      return CommandResult(
         exitCode: 0,
-        stdout: '{"project":{"localVersionSymlinkPath":"/opt/fvm/3.44.6"}}',
+        stdout: jsonEncode({
+          'project': {'localVersionSymlinkPath': sdkPath},
+        }),
         stderr: '',
       );
     }

@@ -767,8 +767,9 @@ tree it finds.**
 transaction. Both artifacts must name the same repository, Baseline/Source
 Snapshot, source manifest and integration branch. The combined form creates
 one staging worktree, preflights generation against the untouched tree, then
-regenerates after both catalog operations. It produces one commit carrying both
-provenance identities. The new-Locale-only command remains a compatibility
+regenerates after both catalog operations. It produces one delivery commit carrying both
+provenance identities, optionally preceded by a verified generated-output refresh
+commit on the same review branch. The new-Locale-only command remains a compatibility
 adapter, not a second product workflow.
 
 - **Drift is content, not distance.** The predicate compares the Baseline
@@ -795,12 +796,21 @@ adapter, not a second product workflow.
   intended key/value map or the command aborts without writing. This applies to
   `intl_en.arb` too — rewriting it in canonical sorted order with zero content
   change produces ~1,560 changed generated-Dart lines.
-- **Pre-existing generated-Dart drift stops every delivery.** It regenerates
-  from the untouched tree's ARB *before* applying anything and stops if the
-  output differs from committed `app_localizations*.dart`. Combined delivery
-  then runs generation again after both catalog operations and admits only the
-  generated files corresponding to target catalogs changed by the Release
-  Delta plus the new Locale's declared generated surface.
+- **Pre-existing generated output is assessed before applying the release.**
+  A refresh may change only already-tracked `app_localizations_<locale>.dart`
+  implementations: no shared `app_localizations.dart`, catalogs, additions,
+  deletions, permission changes, or other files. It requires a repository-selected
+  or explicitly selected SDK with a known version satisfying `environment.flutter`
+  when declared, and a second generation run producing identical output. The
+  verified refresh becomes a separate preceding commit on the review branch;
+  candidate verification compares the release against that refreshed baseline.
+  Both commits are created and their final files verified in staging before Git
+  checks out the completed review branch in the original checkout. Commit-hook
+  failures or changes to the verified output stop delivery before that checkout. Unsafe drift
+  stops with the changed paths, SDK selection source, a durable diff under Git's
+  `blabla/diagnostics/` directory, and recovery guidance. Combined delivery admits
+  only the generated files corresponding to target catalogs changed by the
+  Release Delta plus the new Locale's declared generated surface.
 - **A dirty tree blocks narrowly for existing-only work** — only uncommitted
   changes to bound catalogs or generated localization Dart. Combined delivery
   requires the whole checkout to be clean because it introduces a catalog,
@@ -830,15 +840,19 @@ reconciliation about a tree whose pull request may never merge.
 
 ### 9.4 Toolchain
 
-The Flutter SDK is resolved in order — explicit `--flutter-sdk` → `FLUTTER_ROOT`
-→ the repo's `.fvm/flutter_sdk` symlink → `.fvmrc` through `fvm` if installed →
-`flutter` on `PATH` — then checked against `environment.flutter` in
-`pubspec.yaml`, the only pin actually committed. **The version string never
-gates anything.** The pre-flight regeneration *is* the toolchain check: an SDK
-that generates different Dart fails it whatever it calls itself. The abort
-message prints the resolved SDK path and version, because the pre-flight cannot
-distinguish "your SDK is wrong" from "the committed Dart is stale" and a human
-can.
+The Flutter SDK is resolved in order — explicit `--flutter-sdk` → the repo's
+`.fvm/flutter_sdk` → `.fvmrc` through installed FVM → `FLUTTER_ROOT` → `flutter`
+on `PATH`. A configured but unavailable repository SDK stops with setup guidance;
+it never falls back to an ambient SDK. An exact version pinned in `.fvmrc` must
+match the selected repository SDK; a stale link gets an `fvm use <version>` repair
+command. The executable is resolved before staging, including FVM selections,
+so entering a disposable worktree cannot change the SDK.
+
+A clean preflight remains the compatibility check regardless of the project's
+version constraint. Automatic refresh additionally requires a known compatible
+version and an intended (repository or explicit) SDK. Diagnostics distinguish the
+SDK selection source and version from the project's declared constraint; they
+never prescribe committing output from an unexplained SDK mismatch.
 
 `gen-l10n` failure aborts before anything is written. The command computes,
 verifies, then writes.

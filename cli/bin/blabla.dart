@@ -452,10 +452,12 @@ Options:
   --token <token>    Token (or BLABLA_TOKEN); login prefers hidden input
   --profile <name>   Named credentials (or BLABLA_PROFILE), without server/token overrides
   --flutter-sdk <path>
-                     Flutter SDK directory (or FLUTTER_ROOT / .fvm/flutter_sdk
-                     / .fvmrc through fvm / flutter on PATH)
+                     Flutter SDK directory (otherwise repository FVM, then
+                     FLUTTER_ROOT, then flutter on PATH)
 
 `deliver` applies a reviewed existing-locale Release Bundle, runs Flutter
-generation in a disposable worktree, and creates one local review commit. Add
-`--locale-proposal` to include a ready new Locale in that same commit.
+generation in a disposable worktree, and creates a local review branch. Add
+`--locale-proposal` to include a ready new Locale in the delivery commit. A
+verified refresh of existing generated locale files gets a separate preceding
+commit on that branch.
 Commands never push or open a pull request.''';

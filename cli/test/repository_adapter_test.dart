@@ -829,44 +829,255 @@ void main() {
     },
   );
 
-  test('rejects committed generated drift before combined delivery', () async {
-    final fixture = await BrickitFixture.create();
-    addTearDown(fixture.dispose);
-    await fixture.addGermanCatalog();
-    await fixture
-        .file('packages/brickit_generated/lib/l10n/app_localizations_de.dart')
-        .writeAsString('stale generated output');
-    await fixture.git(['add', '.']);
-    await fixture.git(['commit', '-m', 'commit stale generated output']);
-    final summary = await existingLocaleRelease(fixture);
-    final artifact = await combinedPortugueseArtifact(fixture, summary);
-    final head = await fixture.git(['rev-parse', 'HEAD']);
-
-    await expectLater(
-      ReleaseRepositoryAdapter().deliver(
-        ReleaseDeliveryRequest(
-          checkout: fixture.root,
-          recordId: summary.releaseRecord.id,
-          flutter: testFlutter(fixture.flutterExecutable),
-          gateway: StaticReleaseGateway(summary),
-          localeProposal: LocaleProposalDeliveryInput(
-            proposalId: artifact.proposalId,
-            gateway: StaticLocaleProposalGateway(artifact),
-          ),
-          write: (_) {},
-        ),
-      ),
-      throwsA(
-        isA<RepositoryAdapterException>().having(
-          (error) => error.message,
-          'message',
-          contains('already drifted'),
-        ),
-      ),
+  for (final mode in ['existing', 'combined', 'standalone']) {
+    test(
+      'refreshes committed generated output before $mode delivery',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        const generated =
+            'packages/brickit_generated/lib/l10n/app_localizations_de.dart';
+        await fixture.file(generated).writeAsString('stale generated output');
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'commit stale generated output']);
+        final summary = await existingLocaleRelease(fixture);
+        final artifact = await combinedPortugueseArtifact(fixture, summary);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        if (mode == 'existing') {
+          await fixture.file('unrelated.txt').writeAsString('keep staged');
+          await fixture.git(['add', 'unrelated.txt']);
+        }
+        if (mode == 'standalone') {
+          await RepositoryAdapter().deliver(requestFor(fixture, artifact));
+        } else {
+          await ReleaseRepositoryAdapter().deliver(
+            ReleaseDeliveryRequest(
+              checkout: fixture.root,
+              recordId: summary.releaseRecord.id,
+              flutter: testFlutter(fixture.flutterExecutable),
+              gateway: StaticReleaseGateway(summary),
+              localeProposal: mode == 'combined'
+                  ? LocaleProposalDeliveryInput(
+                      proposalId: artifact.proposalId,
+                      gateway: StaticLocaleProposalGateway(artifact),
+                    )
+                  : null,
+              write: (_) {},
+            ),
+          );
+        }
+        expect(await fixture.git(['rev-list', '--count', '$head..HEAD']), '2');
+        expect(
+          await fixture.git(['show', 'HEAD~1:$generated']),
+          '{"@@locale":"de","welcome":"Hallo"}',
+        );
+        expect(
+          await fixture.git([
+            'diff-tree',
+            '--no-commit-id',
+            '--name-only',
+            '-r',
+            'HEAD~1',
+          ]),
+          generated,
+        );
+        expect(
+          await fixture.git(['log', '-1', '--format=%s', 'HEAD~1']),
+          'chore(l10n): refresh generated localization',
+        );
+        expect(
+          await fixture.git(['status', '--porcelain']),
+          mode == 'existing' ? 'A  unrelated.txt' : isEmpty,
+        );
+      },
     );
-    expect(await fixture.git(['rev-parse', 'HEAD']), head);
-    expect(await fixture.git(['branch', '--show-current']), 'develop');
-  });
+  }
+
+  for (final failure in [
+    'interface',
+    'unexpected',
+    'unstable',
+    'sdk',
+    'candidate',
+    'hook',
+    'hook-committed',
+  ]) {
+    test(
+      'keeps checkout untouched on $failure during refresh preparation',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        const generated =
+            'packages/brickit_generated/lib/l10n/app_localizations_de.dart';
+        await fixture.file(generated).writeAsString('stale generated output');
+        final extra = switch (failure) {
+          'interface' =>
+            'echo "// changed interface" >> lib/l10n/app_localizations.dart',
+          'unexpected' => 'echo unexpected > unexpected.txt',
+          'unstable' =>
+            r'''
+mkdir -p .dart_tool
+count=0
+if [ -f .dart_tool/count ]; then count=$(cat .dart_tool/count); fi
+count=$((count + 1))
+echo "$count" > .dart_tool/count
+echo "$count" >> lib/l10n/app_localizations_de.dart
+''',
+          'candidate' =>
+            'if [ -f lib/l10n/intl_pt.arb ]; then echo "candidate failed" >&2; exit 1; fi',
+          _ => '',
+        };
+        final wrapper = fixture.file('tools/flutter-preflight');
+        await wrapper.writeAsString(
+          '#!/bin/sh\nset -eu\n"${fixture.flutterExecutable}" "\$@"\n$extra\n',
+        );
+        final chmod = await Process.run('chmod', ['+x', wrapper.path]);
+        expect(chmod.exitCode, 0);
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'prepare generator failure']);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        final summary = await existingLocaleRelease(fixture);
+        final artifact = await combinedPortugueseArtifact(fixture, summary);
+        if (failure == 'hook' || failure == 'hook-committed') {
+          final hook = fixture.file(
+            '.git/hooks/${failure == 'hook' ? 'post-commit' : 'pre-commit'}',
+          );
+          await hook.writeAsString(
+            failure == 'hook'
+                ? '#!/bin/sh\necho hook-residue > hook-residue.txt\n'
+                : '#!/bin/sh\necho hook-change >> $generated\ngit add -- $generated\n',
+          );
+          expect((await Process.run('chmod', ['+x', hook.path])).exitCode, 0);
+        }
+        final flutter = failure == 'sdk'
+            ? ResolvedFlutter(
+                executable: wrapper.path,
+                argumentsPrefix: [],
+                sdkPath: wrapper.path,
+                version: 'Flutter 3.44.6',
+                source: '--flutter-sdk',
+                projectConstraint: '^3.47.0',
+              )
+            : testFlutter(wrapper.path);
+        String? message;
+        try {
+          await ReleaseRepositoryAdapter().deliver(
+            ReleaseDeliveryRequest(
+              checkout: fixture.root,
+              recordId: summary.releaseRecord.id,
+              flutter: flutter,
+              gateway: StaticReleaseGateway(summary),
+              localeProposal: LocaleProposalDeliveryInput(
+                proposalId: artifact.proposalId,
+                gateway: StaticLocaleProposalGateway(artifact),
+              ),
+              write: (_) {},
+            ),
+          );
+          fail('Delivery should stop');
+        } on RepositoryAdapterException catch (error) {
+          message = error.message;
+        }
+        expect(
+          message,
+          contains(switch (failure) {
+            'interface' || 'unexpected' => 'unexpected surface',
+            'unstable' => 'different output',
+            'sdk' => 'project Flutter constraint',
+            'hook' => 'staging checkout changed',
+            'hook-committed' => 'Git hooks changed',
+            _ => 'candidate failed',
+          }),
+        );
+        if (failure != 'candidate') {
+          final reportPath = RegExp(
+            r'Review the differences: (.+)',
+          ).firstMatch(message)!.group(1)!;
+          final report = await File(reportPath).readAsString();
+          expect(report, contains('diff --git'));
+          expect(report, contains('stale generated output'));
+          expect(message, contains('Next step:'));
+        }
+        expect(await fixture.git(['rev-parse', 'HEAD']), head);
+        expect(await fixture.git(['branch', '--show-current']), 'develop');
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        expect(
+          await fixture.file(generated).readAsString(),
+          'stale generated output',
+        );
+        expect(
+          (await fixture.git([
+            'worktree',
+            'list',
+            '--porcelain',
+          ])).split('\n').where((line) => line.startsWith('worktree ')),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  for (final standalone in [false, true]) {
+    test(
+      'candidate commit rejection preserves checkout and index ($standalone)',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        const generated =
+            'packages/brickit_generated/lib/l10n/app_localizations_de.dart';
+        await fixture.file(generated).writeAsString('stale generated output');
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'stale generation']);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        final summary = await existingLocaleRelease(fixture);
+        final artifact = await combinedPortugueseArtifact(fixture, summary);
+        final hook = fixture.file('.git/hooks/pre-commit');
+        await hook.writeAsString(r'''#!/bin/sh
+case "$(git diff --cached --name-only)" in
+  *.arb*) echo 'candidate commit rejected' >&2; exit 1 ;;
+esac
+''');
+        expect((await Process.run('chmod', ['+x', hook.path])).exitCode, 0);
+        if (!standalone) {
+          await fixture.file('unrelated.txt').writeAsString('keep staged');
+          await fixture.git(['add', 'unrelated.txt']);
+        }
+        await expectLater(
+          standalone
+              ? RepositoryAdapter().deliver(requestFor(fixture, artifact))
+              : ReleaseRepositoryAdapter().deliver(
+                  ReleaseDeliveryRequest(
+                    checkout: fixture.root,
+                    recordId: summary.releaseRecord.id,
+                    flutter: testFlutter(fixture.flutterExecutable),
+                    gateway: StaticReleaseGateway(summary),
+                    write: (_) {},
+                  ),
+                ),
+          throwsA(
+            isA<RepositoryAdapterException>().having(
+              (e) => e.message,
+              'hook failure',
+              contains('candidate commit rejected'),
+            ),
+          ),
+        );
+        expect(await fixture.git(['rev-parse', 'HEAD']), head);
+        expect(await fixture.git(['branch', '--show-current']), 'develop');
+        expect(
+          await fixture.git(['status', '--porcelain']),
+          standalone ? isEmpty : 'A  unrelated.txt',
+        );
+        expect(
+          await fixture.file(generated).readAsString(),
+          'stale generated output',
+        );
+      },
+    );
+  }
 
   test('refuses a tracked symlink before reading a bound catalog', () async {
     final fixture = await BrickitFixture.create();
@@ -1054,7 +1265,8 @@ ResolvedFlutter testFlutter(String executable) => ResolvedFlutter(
   executable: executable,
   argumentsPrefix: const [],
   sdkPath: executable,
-  version: 'test Flutter',
+  version: 'Flutter 3.47.0',
+  source: '--flutter-sdk',
 );
 
 class StaticLocaleProposalGateway implements LocaleProposalGateway {
