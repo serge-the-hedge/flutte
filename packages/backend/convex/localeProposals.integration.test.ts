@@ -470,6 +470,65 @@ describe("Portuguese Locale Proposals through the Agent API", () => {
 		).resolves.toMatchObject({ status: "ready" });
 	});
 
+	test("historical Portuguese continuation retains its delivery identity without recreating locale setup", async () => {
+		const { user, projectId, proposalId, reviewAuthorization } =
+			await authorizedLocaleReviewFixture(t);
+		await t.run((ctx) =>
+			ctx.db.patch(proposalId, {
+				localeLabel: undefined,
+				catalogPath: undefined,
+			}),
+		);
+		await ingestSourceBaseline(user, projectId, {
+			commit: "next",
+			content: JSON.stringify({
+				"@@locale": "en",
+				welcome: "Welcome",
+				extra: "New",
+			}),
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+		});
+		await user.mutation(api.localeIntroductionTargets.remove, {
+			projectId,
+			localeCode: "pt",
+		});
+		const carried = await user.action(
+			api.localeProposals.carryForwardForReview,
+			{ projectId, proposalId },
+		);
+		expect(carried).toMatchObject({
+			carriedValueCount: 1,
+			remainingValueCount: 1,
+		});
+		const continued = await t.run((ctx) =>
+			ctx.db.get(carried.localeProposalId),
+		);
+		expect(continued).toMatchObject({
+			localeCode: "pt",
+			localeLabel: "Portuguese",
+			runtimeLocale: "pt-BR",
+			catalogPath: "intl_pt.arb",
+		});
+		expect(
+			await user.query(api.localeIntroductionTargets.list, { projectId }),
+		).toEqual([]);
+		const page = await user.query(api.localeProposals.getForReview, {
+			proposalId: carried.localeProposalId,
+			focus: "all",
+			limit: 16,
+		});
+		expect(
+			page?.messages.find((message) => message.messageId === "welcome"),
+		).toMatchObject({
+			facts: { state: "reviewed" },
+			value: { value: "Bem-vindo", reviewAuthorization },
+		});
+	});
+
 	test("continuation carries approved agent evidence, skips raw submissions, and keeps its reviewed queue state", async () => {
 		const { user, projectId, proposalId, token, reviewAuthorization } =
 			await authorizedLocaleReviewFixture(t, true);
