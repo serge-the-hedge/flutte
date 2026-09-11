@@ -435,12 +435,19 @@ describe("Catalog editor draft lifecycle", () => {
 			expectedGitValueRevision: 0,
 			expectedWorkspaceRevision: 0,
 		});
+		await act(async () => restored.focus());
+		await type("Saved when closing", restored);
 		await act(async () =>
 			document
 				.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')
 				?.click(),
 		);
 		expect(dialog()).toBeNull();
+		expect(commits).toHaveLength(2);
+		expect(commits[1]?.intent).toEqual({
+			kind: "save",
+			value: "Saved when closing",
+		});
 	});
 
 	test("closing advanced properties respects its guard, and viewers get no editable value", async () => {

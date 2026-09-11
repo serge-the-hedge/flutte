@@ -50,7 +50,14 @@ export function CatalogAdvancedView({
 		<Dialog
 			open
 			onOpenChange={(open) => {
-				if (!open) onClose();
+				if (!open) {
+					// Dismissal can unmount the editor without a browser blur event.
+					// Leave it first so its pending value uses the normal save path.
+					const active = document.activeElement;
+					if (active instanceof HTMLElement && body.current?.contains(active))
+						active.blur();
+					onClose();
+				}
 			}}
 		>
 			<DialogContent
