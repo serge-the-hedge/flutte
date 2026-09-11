@@ -405,7 +405,10 @@ function EditableCatalogValue({
 	);
 
 	const commit = useCallback(
-		async (intent: CatalogWorkspaceCommit["intent"]) => {
+		async (
+			intent: CatalogWorkspaceCommit["intent"],
+			focus: "next" | "preserve" = "next",
+		) => {
 			if (session.getSnapshot().isSaving) return false;
 			if (
 				intent.kind !== "intentionalBlank" &&
@@ -418,7 +421,10 @@ function EditableCatalogValue({
 			const commitDraft =
 				intent.kind === "intentionalBlank" && blankSource
 					? blankSource
-					: refreshCatalogWorkspaceDraft(draft, draftSource);
+					: refreshCatalogWorkspaceDraft(
+							session.getSnapshot().draft,
+							draftSource,
+						);
 			// Moving focus disables this field before the server snapshot returns;
 			// clear the local focus chrome now so the refresh cannot cause a second,
 			// surprising collapse later.
@@ -435,11 +441,13 @@ function EditableCatalogValue({
 				// Start the write before moving focus. The current editor is the only
 				// disabled field; the rest of the catalog remains available while the
 				// mutation makes its round trip.
-				onMoveFocus({
-					messageId,
-					localeId: value.localeId,
-					kind: "next",
-				});
+				if (focus === "next") {
+					onMoveFocus({
+						messageId,
+						localeId: value.localeId,
+						kind: "next",
+					});
+				}
 				const receipt = await request;
 				const nextSource: CatalogWorkspaceDraftSource = {
 					...commitDraft,
@@ -478,25 +486,33 @@ function EditableCatalogValue({
 			onCommitValue,
 			onMoveFocus,
 			draftSource,
-			draft,
 			session,
 			value.localeId,
 		],
 	);
 
-	const save = useCallback(async () => {
-		if (!isDirty) {
-			return;
-		}
-		if (!value.isSource && isEmptyDraft) {
-			session.set(
-				"error",
-				"Choose “deliberately empty” and give a reason to record an Intentional Blank.",
-			);
-			return;
-		}
-		await commit({ kind: "save", value: draft.value });
-	}, [commit, draft.value, isDirty, isEmptyDraft, value.isSource, session]);
+	const save = useCallback(
+		async (focus: "next" | "preserve" = "next") => {
+			// Focus can leave in the same event as Escape or a manual commit. Read
+			// the live session so a discarded or already saving draft is not sent.
+			const current = session.getSnapshot();
+			if (
+				!current.draft.isDirty ||
+				current.isSaving ||
+				current.isRecordingBlank
+			)
+				return;
+			if (!value.isSource && current.draft.value.length === 0) {
+				session.set(
+					"error",
+					"Choose “deliberately empty” and give a reason to record an Intentional Blank.",
+				);
+				return;
+			}
+			await commit({ kind: "save", value: current.draft.value }, focus);
+		},
+		[commit, value.isSource, session],
+	);
 
 	const confirm = useCallback(async () => {
 		await commit({ kind: "confirm" });
@@ -606,7 +622,20 @@ function EditableCatalogValue({
 		value.intentionalBlankReason !== undefined && !isDirty && !isRecordingBlank;
 
 	return (
-		<CatalogValueRow localeCode={value.localeCode} tone={presentation.tone}>
+		<CatalogValueRow
+			localeCode={value.localeCode}
+			tone={presentation.tone}
+			onBlur={(event) => {
+				// A structured message's arms, raw toggle, and actions are one editor.
+				if (
+					event.relatedTarget instanceof Node &&
+					event.currentTarget.contains(event.relatedTarget)
+				)
+					return;
+				setIsFocused(false);
+				void save("preserve");
+			}}
+		>
 			{isSaving ? (
 				<span
 					role="status"
@@ -650,7 +679,6 @@ function EditableCatalogValue({
 							editedHere.current = true;
 							setIsFocused(true);
 						}}
-						onBlur={() => setIsFocused(false)}
 						fieldClassName={QUIET_CATALOG_FIELD}
 						showRawToggle={isFocused || (isDirty && !isSaving)}
 					/>

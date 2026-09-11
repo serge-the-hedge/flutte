@@ -144,6 +144,140 @@ async function commit(input = field()) {
 }
 
 describe("Catalog editor draft lifecycle", () => {
+	test("saves on blur without taking focus from the chosen destination", async () => {
+		const request = Promise.withResolvers<CatalogWorkspaceCommitReceipt>();
+		const saves: CatalogWorkspaceCommit[] = [];
+		await render(
+			props({
+				onCommitValue: (input) => {
+					saves.push(input);
+					return request.promise;
+				},
+			}),
+		);
+		await act(async () => field().focus());
+		await type("Bonjour");
+		const destination = testDom.container.querySelector<HTMLInputElement>(
+			'input[type="search"]',
+		);
+		if (!destination) throw new Error("Missing search");
+		await act(async () => destination.focus());
+		expect(saves).toHaveLength(1);
+		expect(saves[0]?.intent).toEqual({ kind: "save", value: "Bonjour" });
+		expect(document.activeElement === destination).toBe(true);
+		expect(field().disabled).toBe(true);
+		const saved = saves[0];
+		if (!saved) throw new Error("Missing save");
+		await act(async () => request.resolve({ basis: saved.basis }));
+		expect(document.activeElement === destination).toBe(true);
+		expect(field().value).toBe("Bonjour");
+	});
+
+	test("blur keeps rejected and empty drafts recoverable without approving untouched imports", async () => {
+		const saves: CatalogWorkspaceCommit[] = [];
+		const next = props({
+			onCommitValue: async (input) => {
+				saves.push(input);
+				throw new Error("Source changed; reload before saving.");
+			},
+		});
+		const card = next.hydratedCards.get("welcome");
+		if (!card) throw new Error("Missing card");
+		next.hydratedCards = new Map([
+			...next.hydratedCards,
+			[
+				"welcome",
+				{
+					...card,
+					targets: card.targets.map((target) => ({
+						...target,
+						valueState: "unconfirmedImport" as const,
+					})),
+				},
+			],
+		]);
+		await render(next);
+		await act(async () => field().focus());
+		await act(async () => field("other").focus());
+		expect(saves).toHaveLength(0);
+		await act(async () => field().focus());
+		await type("Keep my wording");
+		await act(async () => field("other").focus());
+		expect(saves).toHaveLength(1);
+		expect(field().value).toBe("Keep my wording");
+		expect(testDom.container.textContent).toContain(
+			"Source changed; reload before saving.",
+		);
+		await act(async () => field().focus());
+		await type("");
+		await act(async () => field("other").focus());
+		expect(saves).toHaveLength(1);
+		expect(field().value).toBe("");
+		expect(testDom.container.textContent).toContain(
+			"Choose “deliberately empty”",
+		);
+	});
+
+	test("Escape followed immediately by blur discards; keyboard save followed by blur writes once", async () => {
+		const saves: CatalogWorkspaceCommit[] = [];
+		await render(
+			props({
+				onCommitValue: async (input) => {
+					saves.push(input);
+					return { basis: input.basis };
+				},
+			}),
+		);
+		await act(async () => field().focus());
+		await type("Discard this");
+		await act(async () => {
+			field().dispatchEvent(
+				new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+			);
+			field("other").focus();
+		});
+		expect(saves).toHaveLength(0);
+		expect(field().value).toBe("Bienvenue");
+		await act(async () => field().focus());
+		await type("Save once");
+		await commit();
+		await act(async () => field("other").focus());
+		expect(saves).toHaveLength(1);
+	});
+
+	test("moving inside an ICU editor does not save until the whole value loses focus", async () => {
+		const saves: CatalogWorkspaceCommit[] = [];
+		await render(
+			props({
+				value: "Hello {count, plural, one{brick} other{bricks}}",
+				onCommitValue: async (input) => {
+					saves.push(input);
+					return { basis: input.basis };
+				},
+			}),
+		);
+		await act(async () => field().focus());
+		await type("Welcome ");
+		const rawToggle = [
+			...testDom.container.querySelectorAll<HTMLButtonElement>("button"),
+		].find((button) => button.textContent === "Raw ICU");
+		if (!rawToggle) throw new Error("Missing raw toggle");
+		await act(async () => rawToggle.focus());
+		expect(saves).toHaveLength(0);
+		await act(async () => rawToggle.click());
+		await act(async () => field().focus());
+		expect(field().value).toBe(
+			"Welcome {count, plural, one{brick} other{bricks}}",
+		);
+		expect(saves).toHaveLength(0);
+		await act(async () => field("other").focus());
+		expect(saves).toHaveLength(1);
+		expect(saves[0]?.intent).toEqual({
+			kind: "save",
+			value: "Welcome {count, plural, one{brick} other{bricks}}",
+		});
+	});
+
 	test("controlled selection can exceed the task limit without echoing state changes", async () => {
 		const selections: string[][] = [];
 		function SelectionHarness() {
@@ -281,8 +415,11 @@ describe("Catalog editor draft lifecycle", () => {
 			'textarea[data-workspace-locale-id="fr"]',
 		);
 		if (!target) throw new Error("No French editor");
+		await act(async () => target.focus());
 		await type("A kept draft", target);
 		await chooseLocale("en");
+		expect(commits).toHaveLength(1);
+		expect(commits[0]?.intent).toEqual({ kind: "save", value: "A kept draft" });
 		await chooseLocale("fr");
 		const restored = dialog()?.querySelector<HTMLTextAreaElement>(
 			'textarea[data-workspace-locale-id="fr"]',
@@ -352,7 +489,10 @@ describe("Catalog editor draft lifecycle", () => {
 		next.hydratedCards = new Map([["welcome", { ...card, characterLimit: 3 }]]);
 		await render(next);
 		expect(testDom.container.textContent).toContain("9 / 3 · 6 over limit");
+		await act(async () => field().focus());
 		await type("😀abc");
+		await act(async () => field().blur());
+		expect(saves).toHaveLength(0);
 		await commit();
 		expect(saves).toHaveLength(0);
 		expect(field().value).toBe("😀abc");
@@ -521,7 +661,8 @@ describe("Catalog editor draft lifecycle", () => {
 		expect(testDom.container.textContent).not.toContain("Raw ICU");
 		await render(managedProps(1, true));
 		await render(managedProps(2));
-		await commit();
+		await act(async () => field().focus());
+		await act(async () => field("other").focus());
 		expect(commits[0]).toMatchObject({
 			basis: {
 				kind: "managed",

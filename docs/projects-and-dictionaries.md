@@ -69,6 +69,11 @@ locales; drafts stay attached to their values. Preview spacing never changes sav
 text. Properties, character limits and translation history use the existing edit
 and review rules.
 
+Existing values save when you leave their editor, both inline and in the advanced
+view. Cmd/Ctrl+Enter also saves; Escape discards the edit. Failed or over-limit
+drafts stay available to correct. Untouched imports still need approval, and an
+empty translation still requires an explicit reason.
+
 Tags belong to a project, and each string can have several. Create or assign them
 in Properties, or add/remove them from a selection. Selected tags match **any** of
 them and combine with other filters. **Select all matching** covers every page and
