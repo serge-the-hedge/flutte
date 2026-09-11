@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:pub_semver/pub_semver.dart';
+
 import 'command_runner.dart';
 
-/// The Flutter invocation selected for one delivery. The version and the
-/// project's declared constraint are diagnostic only: reproducible
-/// `gen-l10n` output is the actual compatibility check.
+/// The fixed Flutter invocation selected before entering a staging worktree.
+/// Clean regeneration proves compatibility; automatic maintenance additionally
+/// requires an intended SDK and a version satisfying the project constraint.
 class ResolvedFlutter {
   const ResolvedFlutter({
     required this.executable,
@@ -13,6 +15,7 @@ class ResolvedFlutter {
     required this.sdkPath,
     required this.version,
     this.projectConstraint,
+    this.source = 'unknown',
   });
 
   final String executable;
@@ -20,18 +23,41 @@ class ResolvedFlutter {
   final String sdkPath;
   final String version;
   final String? projectConstraint;
+  final String source;
+
+  /// Ambient SDKs can prove a clean baseline, but cannot authorize a refresh.
+  bool get canRefreshGeneratedOutput => refreshBlockReason == null;
+
+  String? get refreshBlockReason {
+    if (source != '--flutter-sdk' && source != 'repository FVM') {
+      return 'The selected SDK comes from $source. Automatic refresh requires the repository SDK or an explicit --flutter-sdk selection.';
+    }
+    final match = RegExp(r'^Flutter (\S+)').firstMatch(version);
+    if (match == null)
+      return 'The selected Flutter version could not be determined.';
+    try {
+      final selected = Version.parse(match.group(1)!);
+      if (projectConstraint != null &&
+          !VersionConstraint.parse(projectConstraint!).allows(selected)) {
+        return 'Flutter $selected does not satisfy the project Flutter constraint $projectConstraint; its output cannot be committed as an automatic refresh.';
+      }
+    } on FormatException {
+      return 'The Flutter version or project constraint could not be interpreted; automatic refresh needs a known compatible version.';
+    }
+    return null;
+  }
 
   String get description {
     final constraint = projectConstraint == null
         ? ''
-        : '; project environment.flutter: $projectConstraint (informational)';
-    return 'Resolved Flutter SDK: $sdkPath; version: $version$constraint';
+        : '; project environment.flutter: $projectConstraint (required for automatic refresh)';
+    return 'Resolved Flutter SDK: $sdkPath; source: $source; version: $version$constraint';
   }
 }
 
 /// Resolves the repository's Flutter toolchain in the order documented by the
-/// delivery contract. Version text is deliberately never a gate: preflight
-/// regeneration decides whether this SDK is compatible with this checkout.
+/// delivery contract. Repository configuration wins over ambient SDK settings.
+/// Resolve the executable once so staging cannot select another FVM version.
 class FlutterToolchainResolver {
   FlutterToolchainResolver({
     CommandRunner runner = const SystemCommandRunner(),
@@ -50,12 +76,29 @@ class FlutterToolchainResolver {
     final candidate = await _resolveCandidate(checkout, explicitSdk);
     final version = await _version(checkout, candidate);
     final constraint = await _projectFlutterConstraint(checkout);
+    if (candidate.source == 'repository FVM') {
+      final pinned = await _pinnedVersion(checkout);
+      if (pinned != null &&
+          RegExp(r'^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$').hasMatch(pinned)) {
+        final selected = RegExp(
+          r'^Flutter (\S+)',
+        ).firstMatch(version)?.group(1);
+        if (selected != pinned) {
+          throw RepositoryAdapterException(
+            'The repository pins Flutter $pinned in .fvmrc, but its SDK reports $version. '
+            'From ${checkout.path}, run `fvm use $pinned`, then retry the same delivery command. '
+            'No delivery changes were written.',
+          );
+        }
+      }
+    }
     return ResolvedFlutter(
       executable: candidate.executable,
       argumentsPrefix: candidate.argumentsPrefix,
       sdkPath: candidate.sdkPath,
       version: version,
       projectConstraint: constraint,
+      source: candidate.source,
     );
   }
 
@@ -67,11 +110,6 @@ class FlutterToolchainResolver {
       return await _sdkRoot(explicitSdk, '--flutter-sdk', mustExist: true);
     }
 
-    final flutterRoot = _environment['FLUTTER_ROOT'];
-    if (flutterRoot != null && flutterRoot.isNotEmpty) {
-      return await _sdkRoot(flutterRoot, 'FLUTTER_ROOT', mustExist: true);
-    }
-
     final localSdk = Directory(
       '${checkout.path}${Platform.pathSeparator}.fvm${Platform.pathSeparator}flutter_sdk',
     );
@@ -79,22 +117,28 @@ class FlutterToolchainResolver {
       '${localSdk.path}${Platform.pathSeparator}bin${Platform.pathSeparator}flutter',
     );
     if (await localFlutter.exists()) {
-      return ResolvedFlutter(
-        executable: localFlutter.path,
-        argumentsPrefix: const [],
-        sdkPath: localSdk.path,
-        version: 'unavailable',
-      );
+      return _sdkRoot(localSdk.path, 'repository FVM', mustExist: true);
     }
 
     final fvmrc = File('${checkout.path}${Platform.pathSeparator}.fvmrc');
-    if (await fvmrc.exists() && await _fvmIsAvailable(checkout)) {
-      return ResolvedFlutter(
-        executable: 'fvm',
-        argumentsPrefix: const ['flutter'],
-        sdkPath: await _fvmSdkPath(checkout, fvmrc),
-        version: 'unavailable',
+    if (await fvmrc.exists()) {
+      if (await _fvmIsAvailable(checkout)) {
+        final sdkPath = await _fvmSdkPath(checkout);
+        if (sdkPath != null && await File('$sdkPath/bin/flutter').exists()) {
+          return _sdkRoot(sdkPath, 'repository FVM', mustExist: true);
+        }
+      }
+      throw RepositoryAdapterException(
+        'The repository configures Flutter ${await _pinnedVersion(checkout) ?? '(see .fvmrc)'} in ${fvmrc.path}, but its SDK is not available. '
+        'From ${checkout.path}, run `fvm install`, then retry the same delivery command. '
+        'If FVM is not installed, install it or select an installed SDK with --flutter-sdk <path>. '
+        'Blabla did not fall back to a different Flutter SDK.',
       );
+    }
+
+    final flutterRoot = _environment['FLUTTER_ROOT'];
+    if (flutterRoot != null && flutterRoot.isNotEmpty) {
+      return await _sdkRoot(flutterRoot, 'FLUTTER_ROOT', mustExist: true);
     }
 
     final onPath = await _tryRun(checkout, 'which', const ['flutter']);
@@ -102,7 +146,8 @@ class FlutterToolchainResolver {
         ? onPath.stdout.trim().split('\n').first
         : 'flutter on PATH';
     return ResolvedFlutter(
-      executable: 'flutter',
+      executable: path == 'flutter on PATH' ? 'flutter' : path,
+      source: 'PATH',
       argumentsPrefix: const [],
       sdkPath: path,
       version: 'unavailable',
@@ -124,11 +169,26 @@ class FlutterToolchainResolver {
       );
     }
     return ResolvedFlutter(
-      executable: executable.path,
+      executable: await executable.resolveSymbolicLinks(),
       argumentsPrefix: const [],
       sdkPath: sdk.path,
+      source: source,
       version: 'unavailable',
     );
+  }
+
+  Future<String?> _pinnedVersion(Directory checkout) async {
+    final file = File('${checkout.path}/.fvmrc');
+    if (!await file.exists()) return null;
+    try {
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is Map<String, dynamic> && decoded['flutter'] is String) {
+        return decoded['flutter'] as String;
+      }
+    } on FormatException {
+      // FVM setup guidance remains useful when the config needs repair.
+    }
+    return null;
   }
 
   Future<bool> _fvmIsAvailable(Directory checkout) async {
@@ -136,9 +196,9 @@ class FlutterToolchainResolver {
     return result?.exitCode == 0;
   }
 
-  Future<String> _fvmSdkPath(Directory checkout, File fvmrc) async {
+  Future<String?> _fvmSdkPath(Directory checkout) async {
     final result = await _tryRun(checkout, 'fvm', const ['api', 'project']);
-    if (result?.exitCode != 0) return '${fvmrc.path} via fvm';
+    if (result?.exitCode != 0) return null;
     try {
       final decoded = jsonDecode(result!.stdout);
       if (decoded is Map &&
@@ -149,9 +209,9 @@ class FlutterToolchainResolver {
         if (path.isNotEmpty) return path;
       }
     } on FormatException {
-      // FVM still resolves the command; the configuration path remains useful.
+      // An unreadable FVM response must not fall back to an ambient SDK.
     }
-    return '${fvmrc.path} via fvm';
+    return null;
   }
 
   Future<String> _version(Directory checkout, ResolvedFlutter flutter) async {

@@ -159,7 +159,9 @@ ordinary imports, pending First Reviews, and Source Proposals distinct.
 A Release Bundle is immutable evidence from one ready Release Record. The
 Repository Adapter captures the delivery tree, computes and applies the exact
 Release Delta, regenerates Flutter localization output, and creates a local
-review branch. Git review, push, merge, and application release remain developer
+review branch. A reproducible refresh of existing generated locale implementations
+may precede the delivery in a separate commit on that branch; it changes no
+catalog values or review evidence. Git review, push, merge, and application release remain developer
 or application-CI actions.
 
 Returning to previously confirmed target bytes makes the historical affirmation

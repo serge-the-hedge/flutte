@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
+import 'generated_localization_baseline.dart';
 import 'repository_policy.dart';
 import 'runtime_locale_registration.dart';
 import 'staging_worktree.dart';
@@ -402,12 +403,11 @@ class RepositoryAdapter {
       commit: appliedOnto,
     );
     try {
-      await _runGenerator(staging.root, request.flutter);
-      if ((await _changedPaths(staging.root)).isNotEmpty) {
-        throw RepositoryAdapterException(
-          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this Locale. ${request.flutter.description}',
-        );
-      }
+      final baseline = await GeneratedLocalizationBaseline.prepare(
+        staging: staging,
+        flutter: request.flutter,
+        generate: () => _runGenerator(staging.root, request.flutter),
+      );
 
       await _localeDelivery.apply(staging.root, artifact);
       await _runGenerator(staging.root, request.flutter);
@@ -426,6 +426,7 @@ class RepositoryAdapter {
       await _ensureIndexIsClean(checkout);
       await staging.ensureCheckoutUnchanged(currentBranch);
       await _git(checkout, ['switch', '-c', branchName]);
+      await baseline.writeCommit(checkout, request.flutter);
       await _writeCandidateFiles(checkout, candidateFiles);
       await _git(checkout, ['add', '--', ...changedPaths]);
       final stagedPaths = await _gitLines(checkout, [
@@ -447,11 +448,17 @@ class RepositoryAdapter {
       final pullRequestCommand =
           'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
       request.write('Created local branch $branchName.');
+      if (baseline.files.isNotEmpty) {
+        request.write(
+          'Refreshed ${baseline.files.length} existing generated localization file(s) in a separate preceding commit. Review both commits before pushing.',
+        );
+      }
       request.write('Review it, then run: git push -u origin $branchName');
       request.write(pullRequestCommand);
       return DeliveryResult(
         branchName: branchName,
-        changedPaths: changedPaths,
+        changedPaths: {...baseline.files.keys, ...changedPaths}.toList()
+          ..sort(),
         pullRequestCommand: pullRequestCommand,
       );
     } finally {

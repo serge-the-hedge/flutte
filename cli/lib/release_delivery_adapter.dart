@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'command_runner.dart';
 import 'flutter_toolchain.dart';
+import 'generated_localization_baseline.dart';
 import 'locale_proposal_adapter.dart'
     show LocaleProposalArtifact, LocaleProposalGateway, LocaleDelivery;
 import 'staging_worktree.dart';
@@ -242,12 +243,11 @@ class ReleaseRepositoryAdapter {
             ? const {}
             : {_localeDelivery.runtimeConstantsPath},
       );
-      await _runGenerator(staging.root, request.flutter);
-      if ((await _changedPaths(staging.root)).isNotEmpty) {
-        throw RepositoryAdapterException(
-          'Flutter localization output is already drifted in this checkout. Regenerate and commit it before delivering this release. ${request.flutter.description}',
-        );
-      }
+      final baseline = await GeneratedLocalizationBaseline.prepare(
+        staging: staging,
+        flutter: request.flutter,
+        generate: () => _runGenerator(staging.root, request.flutter),
+      );
       final signaturesBefore = await _generatedInterfaceSignatures(
         staging.root,
       );
@@ -324,6 +324,7 @@ class ReleaseRepositoryAdapter {
       await staging.ensureCheckoutUnchanged(currentBranch);
 
       await _git(checkout, ['switch', '-c', branchName]);
+      await baseline.writeCommit(checkout, request.flutter);
       await _writeCandidateFiles(checkout, candidateFiles);
       await _git(checkout, ['add', '--', ...changedPaths]);
       final stagedPaths = await _gitLines(checkout, [
@@ -357,14 +358,18 @@ class ReleaseRepositoryAdapter {
         ...changedPaths,
       ]);
 
-      final body = _pullRequestBody(
-        summary,
-        delivery,
-        appliedOnto,
-        localeArtifact: localeArtifact,
-        localeValueCount: localeValueCount,
-        sourceChanged: sourceChanged,
-      );
+      final body =
+          (baseline.files.isEmpty
+              ? ''
+              : 'Includes a separate preceding refresh commit for ${baseline.files.length} existing generated localization file(s). Review it alongside the release.\n\n') +
+          _pullRequestBody(
+            summary,
+            delivery,
+            appliedOnto,
+            localeArtifact: localeArtifact,
+            localeValueCount: localeValueCount,
+            sourceChanged: sourceChanged,
+          );
       final pullRequestBodyFile = await _writePullRequestBody(
         checkout,
         summary.releaseRecord.id,
@@ -373,6 +378,11 @@ class ReleaseRepositoryAdapter {
       final pullRequestCommand =
           'gh pr create --base ${summary.releaseRecord.integrationBranch} --head $branchName --title "$commitTitle" --body-file ${_shellQuote(pullRequestBodyFile)}';
       request.write('Created local branch $branchName.');
+      if (baseline.files.isNotEmpty) {
+        request.write(
+          'Refreshed ${baseline.files.length} existing generated localization file(s) in a separate preceding commit. Review both commits before pushing.',
+        );
+      }
       request.write(
         'Git distance from the Baseline (baseline-only, checkout-only): $commitDistance.',
       );
@@ -392,7 +402,8 @@ class ReleaseRepositoryAdapter {
       }
       return ReleaseDeliveryResult(
         branchName: branchName,
-        changedPaths: changedPaths,
+        changedPaths: {...baseline.files.keys, ...changedPaths}.toList()
+          ..sort(),
         applied: delivery.applied,
         skipped: delivery.skipped,
         pullRequestBodyFile: pullRequestBodyFile,

@@ -76,11 +76,12 @@ That delta may contain pending Source Proposals and reviewed target values.
 Target drift is replaced with the reviewed value; if checkout Source moved away
 from the Baseline before delivery, the whole conflicting key is skipped and
 reported. The CLI runs Flutter generation in a disposable worktree and creates
-one local `blabla/release-...` review commit.
+a local `blabla/release-...` review branch containing the delivery commit and,
+when needed, a separate preceding generated-output refresh commit.
 For combined delivery it validates that both immutable artifacts share the
 same repository, Baseline/Source Snapshot, and integration branch; applies the
 reviewed Release Delta; and adds the complete configured Catalog Document. Flutter generation
-runs first as a clean-tree drift check and again over the combined candidate.
+runs first to assess the existing generated output and again over the combined candidate.
 Blabla supplies the catalog bytes and provenance; the adapter owns only local
 Git and Flutter toolchain I/O.
 
@@ -167,12 +168,34 @@ dart run bin/blabla.dart deliver \
 ```
 
 Direct credentials are also supported; see [Human Setup](../agent-kit/_blabla/references/api.md#human-setup). Flutter is
-resolved in this order: `--flutter-sdk`, `FLUTTER_ROOT`, the checkout's
-`.fvm/flutter_sdk`, its `.fvmrc` through an installed `fvm`, then `flutter` on
-`PATH`. The root `pubspec.yaml` Flutter constraint is printed as informational
-context, never a version gate: preflight generation is the compatibility check.
-Local SDK paths are resolved absolutely, so `--checkout .` also works when
-generation moves into the disposable worktree.
+resolved in this order: `--flutter-sdk`, the checkout's `.fvm/flutter_sdk`, its
+`.fvmrc` through installed FVM, `FLUTTER_ROOT`, then `flutter` on `PATH`. A configured
+but unavailable repository SDK stops with an `fvm install` instruction instead of
+silently using a different SDK. An exact `.fvmrc` version must match the selected
+repository SDK; a stale SDK link gets an `fvm use <version>` repair command.
+The SDK executable is fixed before entering the disposable worktree.
+
+A clean preflight proves compatibility. If existing generated output needs a
+refresh, delivery handles it automatically when all of these hold:
+
+- The SDK comes from repository configuration or an explicit `--flutter-sdk`.
+- Its known version satisfies the root `pubspec.yaml` Flutter constraint, if declared.
+- Only existing `app_localizations_<locale>.dart` files change; the shared
+  `app_localizations.dart`, catalogs, file set, and permissions remain unchanged.
+- A second generation run produces identical output.
+
+Delivery verifies the full candidate before writing, then creates a separate
+`chore(l10n): refresh generated localization` commit before the delivery commit.
+Review both commits on the same branch. A failed candidate does not leave a
+refresh commit in your checkout. Unrelated staged work remains outside both
+commits for existing-Locale delivery.
+
+If refresh cannot be automated, the command lists the actual changed files,
+explains the blocker, and saves a diff under the checkout's Git directory at
+`blabla/diagnostics/generation-*/baseline.diff`. The printed path remains available
+after temporary-worktree cleanup. Follow the specific SDK or application-change
+guidance, then retry your original command; do not blindly regenerate and commit
+with an unexplained SDK mismatch.
 
 All three HTTP gateways use the same compatibility headers: an unsupported
 protocol blocks the request; a newer minimum CLI version prints one advisory
