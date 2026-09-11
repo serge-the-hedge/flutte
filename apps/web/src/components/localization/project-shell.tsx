@@ -68,7 +68,7 @@ const navGroups: NavGroup[] = [
 				icon: BookOpen,
 			},
 			{
-				label: "API tokens",
+				label: "Agent access",
 				to: "/projects/$projectId/settings/api-tokens",
 				icon: KeyRound,
 			},

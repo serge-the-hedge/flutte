@@ -11,7 +11,7 @@ import {
 	useParams,
 	useRouterState,
 } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import {
 	ArrowUpRight,
 	BookOpen,
@@ -19,7 +19,6 @@ import {
 	Languages,
 	Users,
 } from "lucide-react";
-import { AgentReviewPolicyCard } from "@/components/localization/agent-review-policy-card";
 import {
 	PageHeader,
 	ProjectShell,
@@ -45,8 +44,8 @@ const settingsLinks = [
 	},
 	{
 		to: "/projects/$projectId/settings/api-tokens" as const,
-		title: "API tokens",
-		description: "Agent access and permissions.",
+		title: "Agent access",
+		description: "Review policy and API tokens.",
 		icon: KeyRound,
 	},
 	{
@@ -59,7 +58,6 @@ const settingsLinks = [
 
 function SettingsRoute() {
 	const { projectId } = useParams({ from: "/projects/$projectId/settings" });
-	const setAgentReviewPolicy = useMutation(api.projects.setAgentReviewPolicy);
 	const pathname = useRouterState({
 		select: (state) => state.location.pathname,
 	});
@@ -103,21 +101,6 @@ function SettingsRoute() {
 					</Link>
 				))}
 			</div>
-			{project ? (
-				<div className="mt-4">
-					<AgentReviewPolicyCard
-						key={projectId}
-						enabled={project.agentReviewPolicy?.enabled ?? false}
-						isOwner={project.role === "owner"}
-						onChange={(enabled) =>
-							setAgentReviewPolicy({
-								projectId: convexId<"projects">(projectId),
-								enabled,
-							})
-						}
-					/>
-				</div>
-			) : null}
 		</ProjectShell>
 	);
 }

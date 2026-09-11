@@ -9,5 +9,5 @@ export const Route = createFileRoute(
 
 function PortugueseCompatibilityRoute() {
 	const { projectId } = Route.useParams();
-	return <LocaleProposalWorkbench projectId={projectId} />;
+	return <LocaleProposalWorkbench projectId={projectId} localeCode="pt" />;
 }

@@ -1,6 +1,10 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalQuery, type QueryCtx } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	type QueryCtx,
+} from "./_generated/server";
 import { authenticateAgent } from "./agentApi";
 import {
 	matchedFields as findMatchedFields,
@@ -15,6 +19,7 @@ import {
 } from "./contentCollections";
 import { sha256Hex } from "./lib";
 import {
+	createManagedMessage,
 	exportManagedSelection,
 	managedMessageName,
 	readManagedContext,
@@ -415,5 +420,38 @@ export const download = internalQuery({
 			localeIds: locales.map((l) => l._id),
 			mode: args.mode,
 		});
+	},
+});
+
+/** Source authoring is Basic-only; translated values still go through proposals. */
+export const createString = internalMutation({
+	args: {
+		token: v.string(),
+		sourceValue: v.string(),
+		key: v.optional(v.string()),
+		name: v.optional(v.union(v.string(), v.null())),
+		context: v.optional(v.string()),
+		characterLimit: v.optional(v.number()),
+	},
+	returns: v.object({ key: v.string(), sourceRevision: v.number() }),
+	handler: async (ctx, { token: rawToken, ...input }) => {
+		const token = await authenticateAgent(ctx, rawToken, "strings-write");
+		if (token.projectType !== "basic")
+			fail(
+				"UNSUPPORTED",
+				"Repository project source strings belong in the repository. Add the key there, then sync a snapshot.",
+			);
+		if (!token.managedCollectionId)
+			fail("BAD_STATE", "The Basic project has no content workspace.");
+		const key = await createManagedMessage(
+			ctx,
+			{
+				...input,
+				projectId: token.projectId,
+				collectionId: token.managedCollectionId,
+			},
+			{ kind: "agent", id: token._id },
+		);
+		return { key, sourceRevision: 1 };
 	},
 });

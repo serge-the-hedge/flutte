@@ -136,8 +136,14 @@ export const currentProject = internalQuery({
 				)
 				.map((locale) => locale.code),
 			tokenScopes: token.scopes,
+			agentReview: { enabled: project.agentReviewPolicy?.enabled ?? false },
 			localeIntroductionTargets: introductionTargets,
 			capabilities: {
+				strings: {
+					writeScope: "strings-write",
+					canCreate:
+						project.type === "basic" && token.scopes.includes("strings-write"),
+				},
 				tags: {
 					writeScope: "tags-write",
 					canWrite: token.scopes.includes("tags-write"),

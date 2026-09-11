@@ -11,7 +11,7 @@ need no CLI version headers. Artifact delivery has a separate [protocol floor](a
 
 ## Human Setup
 
-Create a token in **Settings → API tokens** for the assigned project and role.
+Create a token in **Settings → Agent access** for the assigned project and role.
 Copy its one-time-visible value, then save a named local profile with the
 [CLI](https://github.com/serge-the-hedge/flutte/blob/main/cli/README.md#install) (v0.3.0 or newer):
 
@@ -42,6 +42,7 @@ do not grant permissions. Use a separate name for each project and role. Verify
 | Assignment | Scopes |
 | --- | --- |
 | Translation with example lookup | `read`, `search`, `propose` |
+| Basic source authoring | `read`, `strings-write`; add `search`, `propose` for translations |
 | Tag organization | `read`, `search`, `tags-write` |
 | Language setup or editing | `read`, `languages-write`; add `propose` for translation tasks |
 | Dictionary authoring | `read`, `dictionary-write`; add `search` for examples |
@@ -65,7 +66,7 @@ and files are `0600`. They contain the token in plaintext. To remove a local pro
 blabla logout --profile brickit-workspace
 ```
 
-Logout does not revoke the token; revoke it in **Settings → API tokens** to end
+Logout does not revoke the token; revoke it in **Settings → Agent access** to end
 server access.
 
 For direct environment setup, the canonical names are `BLABLA_API_URL` and
@@ -84,6 +85,8 @@ Loopback HTTP is allowed for local testing. Both tools reject redirects.
 - `read`: project metadata, workspace context, and task/proposal reads.
 - `search`: workspace search and work discovery.
 - `propose`: Translation Task and candidate creation; it cannot apply values.
+- `strings-write`: create source strings in Basic projects. It cannot edit existing
+  source text, write repository keys, or save translations.
 - `tags-write`: create project tags and add/remove current-message assignments.
 - `languages-write`: add project languages or edit permitted language metadata.
   Repository additions configure future proposals; they do not bind files or deliver to Git.
@@ -91,7 +94,7 @@ Loopback HTTP is allowed for local testing. Both tools reject redirects.
   revision checks and agent attribution. It does not author Voice Guides or
   grant translation review or release powers.
 - `review`: independent exact candidate acceptance or rejection, subject to human
-  authorization. It cannot coexist with `propose`, `languages-write`, `tags-write`, `dictionary-write`, `export`, or
+  authorization. It cannot coexist with `propose`, `strings-write`, `languages-write`, `tags-write`, `dictionary-write`, `export`, or
   `snapshot-submission` on a token.
 - `export`: immutable Release Bundle delivery through the local Repository
   Adapter; it does not grant a remote Git write.
@@ -109,7 +112,7 @@ See [scan/resume](transport.md#bounded-scans) for bounded terminal execution.
 | [Context](context-api.md) | Project discovery, search, guidance, or work queues |
 | [Tags](tags-api.md) | Tag discovery, assignment, or filtered search |
 | [Languages](languages-api.md) | Adding languages or editing their code/name |
-| [Basic projects](collection-api.md) | Plain-text workspace search/context or downloads |
+| [Basic projects](collection-api.md) | Plain-text source creation, search/context or downloads |
 | [Translation Tasks](translation-api.md) | Task creation, pages, and candidates |
 | [Review](review-api.md) | Exact-revision review reads and decisions |
 | [Dictionary](dictionary-api.md) | Term reads, replacements, or removals |

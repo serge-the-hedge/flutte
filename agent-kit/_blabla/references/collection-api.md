@@ -4,11 +4,45 @@
 
 `GET /projects/current` identifies the token’s project and its `type`: `basic`
 or `repository`. A Basic project owns one plain-text workspace. Its enabled
-languages come from `locales`; source authoring and language setup use the editor.
+languages come from `locales`; source creation uses the endpoint below and
+language setup uses the [Language API](languages-api.md).
 Project-scoped routes below need no collection selector or extra credential.
 Strings have stable `messageId`/`key` identities and a separate nullable `name`.
 Names are editable plain text and need not be unique. Always address reads and
 tasks by the returned identity, never by name; old keys initially serve as names.
+
+## Create strings
+
+`POST /workspace/strings` (`strings-write`) creates one Basic source string:
+
+```json
+{
+  "key": "store.subtitle",
+  "name": "App Store subtitle",
+  "sourceValue": "Build something new",
+  "context": "App Store product page",
+  "characterLimit": 30
+}
+```
+
+Only `sourceValue` is required and must be nonempty. `name` is optional plain text
+(up to 256 characters); `null` leaves the string unnamed. An omitted `key` gets a
+stable generated identity. Prefer an explicit stable key for retries: existing
+keys, including archived ones, return `CONFLICT` (409), never overwrite. After an
+uncertain response, read the exact key before retrying. Names need not be unique;
+a supplied key serves as the name when `name` is omitted.
+
+Returns `{ "key": "store.subtitle", "sourceRevision": 1 }`. Limits: key 1–256
+characters without surrounding whitespace or control characters, source 256 KiB,
+context 8 KiB, total JSON request 1 MiB. Optional `characterLimit` is a positive
+integer and counts Unicode code points; over-limit text returns a clear validation
+error. Creation records the agent token in source history.
+
+Unknown fields are rejected, including `translations`: submit target values via
+[Translation Tasks](translation-api.md), then use a separate authorized reviewer.
+This scope does not approve translations or change existing source text.
+Repository source keys belong in the repository; sync a snapshot after adding them.
+`GET /projects/current` reports `capabilities.strings.canCreate` and `writeScope`.
 
 ## Search
 

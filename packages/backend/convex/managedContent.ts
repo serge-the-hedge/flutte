@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, type Infer, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import {
 	type MutationCtx,
@@ -660,155 +660,168 @@ export const commit = mutation({
 		});
 	},
 });
-export const createMessage = mutation({
-	args: {
-		characterLimit: v.optional(v.number()),
-		...addressFields,
-		key: v.optional(v.string()),
-		name: v.optional(v.union(v.string(), v.null())),
-		sourceValue: v.string(),
-		context: v.optional(v.string()),
-		translations: v.optional(
-			v.array(v.object({ localeId: v.id("locales"), value: v.string() })),
-		),
-	},
-	handler: async (ctx, args) => {
-		const { userId } = await requireEditor(ctx, args.projectId);
-		const collection = await requireManagedCollection(
-			ctx,
-			args.projectId,
-			args.collectionId,
+const createMessageFields = {
+	characterLimit: v.optional(v.number()),
+	...addressFields,
+	key: v.optional(v.string()),
+	name: v.optional(v.union(v.string(), v.null())),
+	sourceValue: v.string(),
+	context: v.optional(v.string()),
+	translations: v.optional(
+		v.array(v.object({ localeId: v.id("locales"), value: v.string() })),
+	),
+};
+
+/** Shared transactional creation; only human creation accepts inline translations. */
+export async function createManagedMessage(
+	ctx: MutationCtx,
+	args: Infer<typeof createMessageValidator>,
+	actor: Actor,
+) {
+	const collection = await requireManagedCollection(
+		ctx,
+		args.projectId,
+		args.collectionId,
+	);
+	const { translations = [], characterLimit, ...sourceInput } = args;
+	if (actor.kind !== "user" && translations.length)
+		fail("FORBIDDEN", "Agent translations must go through proposal review.");
+	validateCharacterLimit(characterLimit);
+	assertCharacterLimit(args.sourceValue, characterLimit);
+	for (const translation of translations)
+		assertCharacterLimit(translation.value, characterLimit);
+	if (
+		translations.length > 128 ||
+		bytes(translations) > MAX_MANAGED_RESPONSE_BYTES
+	)
+		fail(
+			"LIMIT_EXCEEDED",
+			"Add at most 128 translations within 1 MiB with a new string.",
 		);
-		const { translations = [], characterLimit, ...sourceInput } = args;
-		validateCharacterLimit(characterLimit);
-		assertCharacterLimit(args.sourceValue, characterLimit);
-		for (const translation of translations)
-			assertCharacterLimit(translation.value, characterLimit);
-		if (
-			translations.length > 128 ||
-			bytes(translations) > MAX_MANAGED_RESPONSE_BYTES
-		)
-			fail(
-				"LIMIT_EXCEEDED",
-				"Add at most 128 translations within 1 MiB with a new string.",
-			);
-		if (
-			new Set(translations.map((translation) => translation.localeId)).size !==
-			translations.length
-		)
-			fail("VALIDATION", "Choose each translation language once.");
-		for (const translation of translations) {
-			assertText(translation.value);
-			if (translation.value.length === 0)
-				fail(
-					"VALIDATION",
-					"Leave empty translation fields out of the new string.",
-				);
-			await targetMembership(ctx, {
-				projectId: args.projectId,
-				collectionId: args.collectionId,
-				localeId: translation.localeId,
-			});
-		}
-		assertText(args.sourceValue, args.context);
-		if (
-			args.key !== undefined &&
-			(args.key.length === 0 ||
-				args.key.length > 256 ||
-				args.key !== args.key.trim() ||
-				Array.from(args.key).some((character) => character.charCodeAt(0) < 32))
-		)
+	if (
+		new Set(translations.map((translation) => translation.localeId)).size !==
+		translations.length
+	)
+		fail("VALIDATION", "Choose each translation language once.");
+	for (const translation of translations) {
+		assertText(translation.value);
+		if (translation.value.length === 0)
 			fail(
 				"VALIDATION",
-				"Choose a stable key of 1–256 characters without surrounding whitespace or control characters.",
+				"Leave empty translation fields out of the new string.",
 			);
-		const providedKey = args.key;
-		const existing =
-			providedKey === undefined
-				? null
-				: await ctx.db
-						.query("managedMessages")
-						.withIndex("by_collection_key", (q) =>
-							q.eq("collectionId", args.collectionId).eq("key", providedKey),
-						)
-						.unique();
-		if (existing)
-			fail(
-				"CONFLICT",
-				"This key already exists, including archived history. Choose a new key.",
-			);
-		const name =
-			args.name === undefined
-				? args.key === undefined
-					? null
-					: undefined
-				: normalizedName(args.name);
-		const timestamp = Date.now();
-		const sourceFingerprint = await sha256Hex(args.sourceValue);
-		const sourceRevision = 1;
-		const id = await ctx.db.insert("managedMessages", {
-			...sourceInput,
-			key: args.key ?? "",
-			name,
-			sourceRevision,
-			sourceFingerprint,
-			createdAt: timestamp,
-			updatedAt: timestamp,
-		});
-		const key = args.key ?? String(id);
-		if (characterLimit !== undefined)
-			await writeCharacterLimit(
-				ctx,
-				{
-					projectId: args.projectId,
-					collectionId: args.collectionId,
-					messageId: key,
-				},
-				characterLimit,
-				null,
-			);
-		// The generated key becomes visible with its row in the same transaction.
-		if (args.key === undefined) await ctx.db.patch(id, { key });
-		await ctx.db.insert("managedSourceRevisions", {
+		await targetMembership(ctx, {
 			projectId: args.projectId,
 			collectionId: args.collectionId,
-			messageId: key,
-			name: name === undefined ? key : name,
-			sourceValue: args.sourceValue,
-			context: args.context,
-			sourceRevision,
-			sourceFingerprint,
-			actor: { kind: "user", id: userId },
-			createdAt: timestamp,
+			localeId: translation.localeId,
 		});
-		for (const translation of translations) {
-			await writeManagedTarget(
-				ctx,
-				{
-					projectId: args.projectId,
+	}
+	assertText(args.sourceValue, args.context);
+	if (
+		args.key !== undefined &&
+		(args.key.length === 0 ||
+			args.key.length > 256 ||
+			args.key !== args.key.trim() ||
+			Array.from(args.key).some((character) => character.charCodeAt(0) < 32))
+	)
+		fail(
+			"VALIDATION",
+			"Choose a stable key of 1–256 characters without surrounding whitespace or control characters.",
+		);
+	const providedKey = args.key;
+	const existing =
+		providedKey === undefined
+			? null
+			: await ctx.db
+					.query("managedMessages")
+					.withIndex("by_collection_key", (q) =>
+						q.eq("collectionId", args.collectionId).eq("key", providedKey),
+					)
+					.unique();
+	if (existing)
+		fail(
+			"CONFLICT",
+			"This key already exists, including archived history. Choose a new key.",
+		);
+	const name =
+		args.name === undefined
+			? args.key === undefined
+				? null
+				: undefined
+			: normalizedName(args.name);
+	const timestamp = Date.now();
+	const sourceFingerprint = await sha256Hex(args.sourceValue);
+	const sourceRevision = 1;
+	const id = await ctx.db.insert("managedMessages", {
+		...sourceInput,
+		key: args.key ?? "",
+		name,
+		sourceRevision,
+		sourceFingerprint,
+		createdAt: timestamp,
+		updatedAt: timestamp,
+	});
+	const key = args.key ?? String(id);
+	if (characterLimit !== undefined)
+		await writeCharacterLimit(
+			ctx,
+			{
+				projectId: args.projectId,
+				collectionId: args.collectionId,
+				messageId: key,
+			},
+			characterLimit,
+			null,
+		);
+	// The generated key becomes visible with its row in the same transaction.
+	if (args.key === undefined) await ctx.db.patch(id, { key });
+	await ctx.db.insert("managedSourceRevisions", {
+		projectId: args.projectId,
+		collectionId: args.collectionId,
+		messageId: key,
+		name: name === undefined ? key : name,
+		sourceValue: args.sourceValue,
+		context: args.context,
+		sourceRevision,
+		sourceFingerprint,
+		actor,
+		createdAt: timestamp,
+	});
+	for (const translation of translations) {
+		await writeManagedTarget(
+			ctx,
+			{
+				projectId: args.projectId,
+				collectionId: args.collectionId,
+				messageId: key,
+				localeId: translation.localeId,
+				intent: { kind: "save", value: translation.value },
+				actor,
+			},
+			{
+				target: null,
+				value: "",
+				workspaceRevision: 0,
+				sourceFingerprint,
+				basis: {
+					kind: "managed",
 					collectionId: args.collectionId,
-					messageId: key,
-					localeId: translation.localeId,
-					intent: { kind: "save", value: translation.value },
-					actor: { kind: "user", id: userId },
-				},
-				{
-					target: null,
-					value: "",
-					workspaceRevision: 0,
+					sourceRevision,
+					targetRevision: 0,
 					sourceFingerprint,
-					basis: {
-						kind: "managed",
-						collectionId: args.collectionId,
-						sourceRevision,
-						targetRevision: 0,
-						sourceFingerprint,
-						membershipRevision: collection.membershipRevision,
-					},
+					membershipRevision: collection.membershipRevision,
 				},
-			);
-		}
-		return key;
+			},
+		);
+	}
+	return key;
+}
+const createMessageValidator = v.object(createMessageFields);
+export const createMessage = mutation({
+	args: createMessageFields,
+	handler: async (ctx, args) => {
+		const { userId } = await requireEditor(ctx, args.projectId);
+		return createManagedMessage(ctx, args, { kind: "user", id: userId });
 	},
 });
 export const saveSource = mutation({

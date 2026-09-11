@@ -53,6 +53,7 @@ type AgentRateLimitName =
 	| "agentDictionaryWrite"
 	| "agentLanguagesWrite"
 	| "agentTagsWrite"
+	| "agentStringsWrite"
 	| "agentRead"
 	| "agentReview"
 	| "agentSearch"
@@ -124,8 +125,20 @@ function translationWorkReasons(
 	});
 }
 
-async function jsonObject(request: Request): Promise<Record<string, unknown>> {
-	const body: unknown = await request.json();
+async function jsonObject(
+	request: Request,
+	maxBytes?: number,
+): Promise<Record<string, unknown>> {
+	const text = await request.text();
+	if (
+		maxBytes !== undefined &&
+		new TextEncoder().encode(text).byteLength > maxBytes
+	)
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `Request body exceeds ${maxBytes} bytes.`,
+		});
+	const body: unknown = JSON.parse(text);
 	if (!isRecord(body)) throw new Error("Request body must be a JSON object.");
 	return body;
 }
@@ -1414,6 +1427,62 @@ http.route({
 });
 
 http.route({
+	path: "/api/agent/v1/workspace/strings",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			return agentJson(
+				await withAgent(
+					ctx,
+					request,
+					"strings-write",
+					"agentStringsWrite",
+					async (token) => {
+						const body = await jsonObject(request, 1024 * 1024);
+						for (const field of Object.keys(body)) {
+							if (
+								![
+									"sourceValue",
+									"key",
+									"name",
+									"context",
+									"characterLimit",
+								].includes(field)
+							)
+								throw new Error(
+									`Unsupported field: ${field}. Create source text only; submit translations through a translation task.`,
+								);
+						}
+						const name = body.name;
+						if (name !== undefined && name !== null && typeof name !== "string")
+							throw new Error("name must be a string or null.");
+						const characterLimit = body.characterLimit;
+						if (
+							characterLimit !== undefined &&
+							typeof characterLimit !== "number"
+						)
+							throw new Error("characterLimit must be a number.");
+						return ctx.runMutation(internalApi.agentContent.createString, {
+							token,
+							sourceValue: requiredJsonString(body, "sourceValue"),
+							key: body.key === undefined ? undefined : jsonString(body, "key"),
+							name,
+							context:
+								body.context === undefined
+									? undefined
+									: jsonString(body, "context"),
+							characterLimit,
+						});
+					},
+				),
+			);
+		} catch (error) {
+			return routeError(error, { UNSUPPORTED: 400, CONFLICT: 409 });
+		}
+	}),
+});
+
+http.route({
 	path: "/api/agent/v1/tags",
 	method: "GET",
 	handler: httpAction(async (ctx, request) => {
@@ -2401,7 +2470,7 @@ for (const prefix of [
 		handler: httpAction(async (ctx, request) => {
 			try {
 				const localeCode = prefix.endsWith("/pt")
-					? undefined
+					? "pt"
 					: requiredJsonString(await jsonObject(request), "localeCode");
 				return agentJson(
 					await withAgent(

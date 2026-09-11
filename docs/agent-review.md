@@ -8,13 +8,13 @@ review. Translation and review remain separate assignments.
 
 There are two alternatives:
 
-- A project owner enables **Agent review** in project settings. This permits
+- A project owner enables **Agent review** under **Agent access** in the project sidebar. This permits
   independent reviewer credentials to review candidates throughout that project.
 - An editor delegates one exact candidate revision to a named reviewer in the
   review workbench. This works while the project setting is off and does not
   authorize future revisions or other candidates.
 
-Owners create a dedicated **Reviewer** API token in project settings with
+Owners create a dedicated **Reviewer** API token under **Agent access** with
 `read`, `search`, and `review` scopes. Its `review` scope cannot be combined with
 translation, Dictionary authoring, snapshot-submission, or delivery scopes.
 Assign it to a separate agent; keep the translator's credential
