@@ -22,7 +22,7 @@ export function useManagedPage(input: PageArgs, onStaleCursor?: () => void) {
 		() => ({
 			page: {
 				query: api.managedContent.page,
-				args: { ...args, cursor, limit },
+				args: { ...args, ...(cursor === undefined ? {} : { cursor }), limit },
 			},
 		}),
 		[args, cursor, limit],
