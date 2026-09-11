@@ -476,6 +476,7 @@ describe("Basic project workflow", () => {
 					tagRevision: 7,
 				};
 			const ids = (args as { messageIds: string[] }).messageIds;
+			if (ids.length > 1) throw new ConvexError({ code: "LIMIT_EXCEEDED" });
 			const values: Record<string, Record<string, string>> = {};
 			for (const id of ids)
 				values[id] = {
@@ -593,22 +594,7 @@ describe("Basic project workflow", () => {
 			};
 			return {
 				text: JSON.stringify(document),
-				document: {
-					...document,
-					names: Object.entries(document.names).map(([messageId, name]) => ({
-						messageId,
-						name,
-					})),
-					values: Object.entries(document.values).map(
-						([messageId, values]) => ({
-							messageId,
-							values: Object.entries(values).map(([localeCode, value]) => ({
-								localeCode,
-								value,
-							})),
-						}),
-					),
-				},
+				document: { ...document, names: [], values: [] },
 				omitted: [],
 				mode: "reviewed",
 			};
