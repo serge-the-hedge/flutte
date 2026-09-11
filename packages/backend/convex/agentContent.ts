@@ -23,6 +23,7 @@ import {
 	exportManagedSelection,
 	managedMessageName,
 	readManagedContext,
+	readManagedPage,
 	readManagedTarget,
 } from "./managedContent";
 import {
@@ -453,5 +454,29 @@ export const createString = internalMutation({
 			{ kind: "agent", id: token._id },
 		);
 		return { key, sourceRevision: 1 };
+	},
+});
+
+/** Exact source lookup also works before a Basic project has target languages. */
+export const readString = internalQuery({
+	args: { token: v.string(), key: v.string() },
+	handler: async (ctx, args) => {
+		const token = await authenticateAgent(ctx, args.token, "read");
+		if (token.projectType !== "basic")
+			fail(
+				"UNSUPPORTED",
+				"Exact source lookup here is for Basic projects. Use workspace context for repository strings.",
+			);
+		if (!token.managedCollectionId)
+			fail("BAD_STATE", "The Basic project has no content workspace.");
+		if (!args.key || args.key.length > 256)
+			fail("VALIDATION", "Provide one key of 1–256 characters.");
+		const page = await readManagedPage(ctx, {
+			projectId: token.projectId,
+			collectionId: token.managedCollectionId,
+			focusKey: args.key,
+			limit: 1,
+		});
+		return { string: page.items[0] ?? null };
 	},
 });

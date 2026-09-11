@@ -1428,6 +1428,28 @@ http.route({
 
 http.route({
 	path: "/api/agent/v1/workspace/strings",
+	method: "GET",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			return agentJson(
+				await withAgent(ctx, request, "read", "agentRead", async (token) => {
+					const params = new URL(request.url).searchParams;
+					if (params.size !== 1 || !params.has("key"))
+						throw new Error("Provide exactly one key query parameter.");
+					return ctx.runQuery(internalApi.agentContent.readString, {
+						token,
+						key: params.get("key") ?? "",
+					});
+				}),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+
+http.route({
+	path: "/api/agent/v1/workspace/strings",
 	method: "POST",
 	handler: httpAction(async (ctx, request) => {
 		try {
