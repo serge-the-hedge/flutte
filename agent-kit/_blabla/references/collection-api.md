@@ -29,7 +29,7 @@ Only `sourceValue` is required and must be nonempty. `name` is optional plain te
 (up to 256 characters); `null` leaves the string unnamed. An omitted `key` gets a
 stable generated identity. Prefer an explicit stable key for retries: existing
 keys, including archived ones, return `CONFLICT` (409), never overwrite. After an
-uncertain response, read the exact key before retrying. Names need not be unique;
+uncertain response, use the exact source read below before retrying. Names need not be unique;
 a supplied key serves as the name when `name` is omitted.
 
 Returns `{ "key": "store.subtitle", "sourceRevision": 1 }`. Limits: key 1–256
@@ -43,6 +43,15 @@ Unknown fields are rejected, including `translations`: submit target values via
 This scope does not approve translations or change existing source text.
 Repository source keys belong in the repository; sync a snapshot after adding them.
 `GET /projects/current` reports `capabilities.strings.canCreate` and `writeScope`.
+
+## Read a source string
+
+`GET /workspace/strings?key=store.subtitle` (`read`) returns
+`{ "string": { "key": "store.subtitle", "messageId": "store.subtitle", "name": "App Store subtitle", "sourceValue": "Build something new", "sourceRevision": 1, "sourceFingerprint": "...", "context": "App Store product page", "characterLimit": 30 } }`.
+Optional context/limit fields are omitted when unset. This Basic-only lookup needs
+exactly one `key` (1–256 characters) and works with no target languages enabled.
+A missing or archived key returns `{ "string": null }`; archived identities still
+cannot be reused for creation. It reads only the credential's project.
 
 ## Search
 

@@ -115,6 +115,61 @@ describe("agent Basic string creation", () => {
 		});
 	});
 
+	test("reads an exact Basic source without target languages and isolates projects", async () => {
+		const s = await setup();
+		const writer = await s.createToken(["read", "strings-write"]);
+		await s.post(writer.token, {
+			key: "store.subtitle",
+			sourceValue: "Build",
+			name: "Subtitle",
+			context: "Store",
+			characterLimit: 30,
+		});
+		const get = (token: string, query: string) =>
+			s.t.fetch(`/api/agent/v1/workspace/strings${query}`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
+		const source = await get(writer.token, "?key=store.subtitle");
+		expect(source.status).toBe(200);
+		expect(await source.json()).toMatchObject({
+			string: {
+				key: "store.subtitle",
+				messageId: "store.subtitle",
+				name: "Subtitle",
+				sourceValue: "Build",
+				context: "Store",
+				characterLimit: 30,
+				sourceRevision: 1,
+			},
+		});
+		const reader = await s.createToken(["read"]);
+		expect((await get(reader.token, "?key=store.subtitle")).status).toBe(200);
+		expect(await (await get(reader.token, "?key=missing")).json()).toEqual({
+			string: null,
+		});
+		const otherProjectId = await s.owner.mutation(api.projects.create, {
+			name: "Other",
+			type: "basic",
+			sourceLocaleCode: "en",
+		});
+		const other = await s.owner.mutation(api.apiTokens.create, {
+			projectId: otherProjectId,
+			name: "Other reader",
+			scopes: ["read"],
+		});
+		expect(
+			await (await get(other.token, "?key=store.subtitle")).json(),
+		).toEqual({ string: null });
+		for (const query of [
+			"",
+			"?key=",
+			`?key=${"a".repeat(257)}`,
+			"?key=one&key=two",
+			`?key=store.subtitle&projectId=${s.projectId}`,
+		])
+			expect((await get(reader.token, query)).status).toBe(400);
+	});
+
 	test("discovery reflects the human project review setting", async () => {
 		const s = await setup();
 		const token = await s.createToken(["read"]);
