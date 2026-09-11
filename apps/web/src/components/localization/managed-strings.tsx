@@ -20,7 +20,8 @@ import type {
 } from "@/lib/strings-catalog";
 import type { StringsNavigationRead } from "@/lib/strings-catalog-navigation";
 import {
-	previousStringsPages,
+	previousStringsPage,
+	rememberStringsPage,
 	type StringsPageHistory,
 } from "@/lib/strings-page-history";
 import type { StringsSearch } from "@/lib/strings-search";
@@ -216,9 +217,9 @@ export function ManagedStrings({
 	]);
 	const [pageHistory, setPageHistory] = useState<StringsPageHistory>({
 		context: pageContext,
-		pages: [],
+		links: [],
 	});
-	const previousPages = previousStringsPages(pageHistory, pageContext, {
+	const previousPage = previousStringsPage(pageHistory, pageContext, {
 		cursor: search.cursor,
 		key: search.key,
 	});
@@ -349,7 +350,7 @@ export function ManagedStrings({
 		return { basis: result.basis };
 	};
 	const changeSearch = (next: StringsSearch) => {
-		setPageHistory({ context: pageContext, pages: [] });
+		setPageHistory({ context: pageContext, links: [] });
 		setSelectedKeys([]);
 		onSearch({
 			...next,
@@ -552,7 +553,6 @@ export function ManagedStrings({
 				/>
 			) : null}
 			<StringsCatalogView
-				hideSearchCount
 				selectedMessageIds={selectedKeys}
 				tagNamesByMessage={tagNamesByMessage}
 				historyProjectId={address.projectId}
@@ -662,22 +662,19 @@ export function ManagedStrings({
 				hasPrevious={search.cursor !== undefined}
 				hasNext={page?.nextCursor != null}
 				onPrevious={() => {
-					const previous = previousPages.at(-1);
-					setPageHistory({
-						context: pageContext,
-						pages: previousPages.slice(0, -1),
-					});
+					const previous = previousPage;
 					onSearch({ ...search, cursor: previous?.cursor, key: previous?.key });
 				}}
 				onNext={() => {
 					if (!page?.nextCursor) return;
-					setPageHistory({
-						context: pageContext,
-						pages: [
-							...previousPages,
+					setPageHistory((current) =>
+						rememberStringsPage(
+							current,
+							pageContext,
 							{ cursor: search.cursor, key: search.key },
-						],
-					});
+							{ cursor: page.nextCursor ?? undefined },
+						),
+					);
 					onSearch({ ...search, cursor: page.nextCursor, key: undefined });
 				}}
 			/>

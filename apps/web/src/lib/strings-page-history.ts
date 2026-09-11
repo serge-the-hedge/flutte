@@ -5,21 +5,37 @@ export type StringsPagePosition = {
 };
 export type StringsPageHistory = {
 	context: string;
-	pages: StringsPagePosition[];
+	links: { page: StringsPagePosition; previous: StringsPagePosition }[];
 };
+const samePosition = (left: StringsPagePosition, right: StringsPagePosition) =>
+	left.after === right.after &&
+	left.cursor === right.cursor &&
+	left.key === right.key;
 
-/** Browser Back can revisit a position already stored in our local history. */
-export function previousStringsPages(
+/** Browser and in-app navigation share immutable predecessor links. */
+export function previousStringsPage(
 	history: StringsPageHistory,
 	context: string,
 	current: StringsPagePosition,
 ) {
-	if (history.context !== context) return [];
-	const index = history.pages.findIndex(
-		(page) =>
-			page.after === current.after &&
-			page.cursor === current.cursor &&
-			page.key === current.key,
-	);
-	return index < 0 ? history.pages : history.pages.slice(0, index);
+	if (history.context !== context) return undefined;
+	return history.links.find((link) => samePosition(link.page, current))
+		?.previous;
+}
+
+/** Retain visited branches; Previous must never discard their links. */
+export function rememberStringsPage(
+	history: StringsPageHistory,
+	context: string,
+	current: StringsPagePosition,
+	next: StringsPagePosition,
+): StringsPageHistory {
+	const links = history.context === context ? history.links : [];
+	return {
+		context,
+		links: [
+			...links.filter((link) => !samePosition(link.page, next)),
+			{ page: next, previous: current },
+		],
+	};
 }

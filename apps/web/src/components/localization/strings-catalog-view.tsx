@@ -189,7 +189,6 @@ type CatalogWorkspaceEditorInput = {
 type CatalogControls = {
 	historyProjectId?: string;
 	searchPlaceholder?: string;
-	hideSearchCount?: boolean;
 	/** Only offer Focus when the caller filters the complete result set by scope. */
 	showFocusControls?: boolean;
 	availableLocales?: CatalogLocale[];
@@ -1301,14 +1300,10 @@ function CatalogScopeStrip({
 
 function CatalogSearch({
 	query,
-	matchingKeyCount,
-	keyCount,
 	onNavigationChange,
 	navigationState,
 }: {
 	query: string;
-	matchingKeyCount: number;
-	keyCount: number;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	navigationState: StringsCatalogNavigationState;
 }) {
@@ -1347,15 +1342,6 @@ function CatalogSearch({
 					Search: {query}
 					<X aria-hidden="true" />
 				</Button>
-			) : null}
-			{!controls.hideSearchCount ? (
-				<p
-					className="shrink-0 text-muted-foreground text-xs"
-					aria-live="polite"
-				>
-					{matchingKeyCount} of {keyCount} string
-					{keyCount === 1 ? "" : "s"}
-				</p>
 			) : null}
 		</div>
 	);
@@ -1978,7 +1964,6 @@ function StringsCatalogNavigator({
 		[navigation, navigationState.key, navigationState.handoffMessageIds],
 	);
 	const projectionId = navigation.projectionId ?? "";
-	const keyCount = navigation.keyCount ?? matching.matchingDigests.length;
 	const introducedMessageCount = navigation.introducedMessageCount;
 	const [localSelection, setLocalSelection] = useState<Set<string>>(
 		() => new Set(),
@@ -2105,8 +2090,6 @@ function StringsCatalogNavigator({
 			/>
 			<CatalogSearch
 				query={navigationState.query}
-				matchingKeyCount={matching.matchingDigests.length}
-				keyCount={keyCount}
 				navigationState={navigationState}
 				onNavigationChange={onNavigationChange}
 			/>

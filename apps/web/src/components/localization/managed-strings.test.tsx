@@ -8,7 +8,8 @@ import {
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
-import { act } from "react";
+import { act, useState } from "react";
+import type { StringsSearch } from "@/lib/strings-search";
 import { createDomTest } from "@/test/dom";
 import { RepositoryAdvancedValue } from "./advanced-string-values";
 import { ManagedStrings } from "./managed-strings";
@@ -69,10 +70,14 @@ describe("Basic project workflow", () => {
 			],
 		},
 	};
+	const pagesByCursor = new Map<string | undefined, unknown>();
 	const watch = spyOn(client, "watchQuery").mockImplementation(
-		(query, _args) => ({
+		(query, args) => ({
 			onUpdate: () => () => {},
-			localQueryResult: () => results[getFunctionName(query)] as never,
+			localQueryResult: () =>
+				(getFunctionName(query) === "managedContent:page" && pagesByCursor.size
+					? pagesByCursor.get((args as { cursor?: string }).cursor)
+					: results[getFunctionName(query)]) as never,
 			localQueryLogs: () => [],
 			journal: () => undefined,
 		}),
@@ -236,6 +241,63 @@ describe("Basic project workflow", () => {
 			}
 		} finally {
 			delete results["catalogWorkspaceNavigation:window"];
+		}
+	});
+
+	test("Basic Previous retains its destination after browser Back revisits a later page", async () => {
+		let restoreSearch: (search: StringsSearch) => void = () => {};
+		function Workspace() {
+			const [search, setSearch] = useState<StringsSearch>({});
+			restoreSearch = setSearch;
+			return (
+				<ConvexProvider client={client}>
+					<ManagedStrings
+						projectId="project"
+						collectionId="marketing"
+						search={search}
+						onSearch={setSearch}
+					/>
+				</ConvexProvider>
+			);
+		}
+		for (const [cursor, label, nextCursor] of [
+			[undefined, "Page one", "second"],
+			["second", "Page two", "third"],
+			["third", "Page three", null],
+		] as const) {
+			pagesByCursor.set(cursor, {
+				items: [
+					{
+						messageId: "subtitle",
+						key: "subtitle",
+						sourceValue: label,
+						sourceRevision: 1,
+						sourceFingerprint: "source",
+					},
+				],
+				nextCursor,
+			});
+		}
+		try {
+			const root = createRootRoute({ component: Workspace });
+			const router = createRouter({
+				routeTree: root,
+				history: createMemoryHistory({ initialEntries: ["/"] }),
+			});
+			await router.load();
+			await dom.render(<RouterProvider router={router} />);
+			await act(async () => button("Next page").click());
+			expect(dom.container.textContent).toContain("Page two");
+			await act(async () => button("Next page").click());
+			expect(dom.container.textContent).toContain("Page three");
+			await act(async () => button("Previous page").click());
+			expect(dom.container.textContent).toContain("Page two");
+			// Browser Back restores URL search without calling the page buttons.
+			await act(async () => restoreSearch({ cursor: "third" }));
+			await act(async () => button("Previous page").click());
+			expect(dom.container.textContent).toContain("Page two");
+		} finally {
+			pagesByCursor.clear();
 		}
 	});
 
