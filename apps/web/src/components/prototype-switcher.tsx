@@ -3,9 +3,9 @@ import { Button } from "@blabla/ui/components/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 export const prototypeVariants = {
-	A: "Long values only",
-	B: "Reading pane",
-	C: "Compact table",
+	A: "Compact dialog",
+	B: "Side navigation",
+	C: "Properties above",
 } as const;
 export type PrototypeVariant = keyof typeof prototypeVariants;
 const keys = Object.keys(prototypeVariants) as PrototypeVariant[];

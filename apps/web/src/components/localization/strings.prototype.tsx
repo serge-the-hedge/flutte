@@ -1,5 +1,5 @@
-/** THROWAWAY: three Strings layouts on ?variant=A|B|C. Compare long text navigation,
- * overlapping tags and whole-group export. All edits are in memory, never mutations. */
+/** THROWAWAY: three advanced-view layouts on the existing Strings route, ?variant=A|B|C.
+ * Shared properties/locale entry points, compact previews and tags. Memory-only edits. */
 import { Badge } from "@blabla/ui/components/badge";
 import { Button } from "@blabla/ui/components/button";
 import { Input } from "@blabla/ui/components/input";
@@ -12,21 +12,29 @@ import {
 } from "@blabla/ui/components/sheet";
 import { Textarea } from "@blabla/ui/components/textarea";
 import { cn } from "@blabla/ui/lib/utils";
-import { Check, ChevronDown, Download, Maximize2, Tag, X } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import {
+	Check,
+	ChevronDown,
+	Download,
+	Maximize2,
+	SlidersHorizontal,
+	Tag,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import {
 	PrototypeSwitcher,
 	type PrototypeVariant,
 } from "@/components/prototype-switcher";
+import { AdvancedString } from "./strings.prototype-advanced";
 import { exampleStrings, type PrototypeString } from "./strings.prototype-data";
 
 type ViewProps = {
 	rows: PrototypeString[];
 	codes: string[];
 	selected: string[];
-	active: string | null;
+	active: { id: string; panel: string } | null;
 	onSelect: (id: string) => void;
-	onOpen: (id: string | null) => void;
+	onOpen: (active: { id: string; panel: string } | null) => void;
 	onChange: (row: PrototypeString) => void;
 };
 function CheckRow({
@@ -48,166 +56,16 @@ function CheckRow({
 		/>
 	);
 }
-function Tags({
-	row,
-	onChange,
-}: {
-	row: PrototypeString;
-	onChange: (row: PrototypeString) => void;
-}) {
-	const [adding, setAdding] = useState(false);
-	return (
-		<div className="flex flex-wrap items-center gap-1.5">
-			{row.tags.map((tag) => (
-				<Badge key={tag} variant="secondary">
-					{tag}
-					<button
-						type="button"
-						aria-label={`Remove ${tag} tag`}
-						onClick={() =>
-							onChange({ ...row, tags: row.tags.filter((t) => t !== tag) })
-						}
-					>
-						<X className="size-3" />
-					</button>
-				</Badge>
-			))}
-			{adding ? (
-				<Input
-					aria-label="New tag"
-					placeholder="Tag, then Enter"
-					className="h-6 w-36"
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && event.currentTarget.value.trim()) {
-							onChange({
-								...row,
-								tags: [
-									...new Set([...row.tags, event.currentTarget.value.trim()]),
-								],
-							});
-							setAdding(false);
-						}
-					}}
-				/>
-			) : (
-				<Button
-					variant="ghost"
-					size="icon-xs"
-					aria-label="Add tag"
-					onClick={() => setAdding(true)}
-				>
-					<Tag />
-				</Button>
-			)}
-		</div>
-	);
-}
-function TextEditor({
-	row,
-	codes,
-	onChange,
-}: {
-	row: PrototypeString;
-	codes: string[];
-	onChange: (row: PrototypeString) => void;
-}) {
-	const [editing, setEditing] = useState<string | null>(null);
-	const [draft, setDraft] = useState("");
-	return (
-		<div className="flex flex-col divide-y">
-			{row.values
-				.filter((v) => codes.includes(v.code))
-				.map((v, index) => (
-					<section
-						key={v.code}
-						id={`prototype-${row.id}-${v.code}`}
-						className="scroll-mt-36 py-3"
-					>
-						<div className="mb-1.5 flex items-center justify-between text-muted-foreground text-xs">
-							<span>
-								{v.code}
-								{index === 0 && v.code === row.values[0]?.code
-									? " · Source"
-									: ""}
-							</span>
-							<span>
-								{Array.from(
-									editing === v.code ? draft : v.text,
-								).length.toLocaleString()}
-								{row.limit ? ` / ${row.limit.toLocaleString()}` : ""}
-								{v.reviewed ? " · Reviewed" : " · Needs review"}
-							</span>
-						</div>
-						{editing === v.code ? (
-							<div className="flex flex-col gap-2">
-								<Textarea
-									aria-label={`Edit ${v.code}`}
-									value={draft}
-									onChange={(event) => setDraft(event.target.value)}
-									className="max-h-72 min-h-44 resize-y overflow-auto"
-								/>
-								<div className="flex gap-2">
-									<Button
-										size="sm"
-										disabled={
-											!!row.limit && Array.from(draft).length > row.limit
-										}
-										onClick={() => {
-											onChange({
-												...row,
-												values: row.values.map((value) =>
-													value.code === v.code
-														? { ...value, text: draft, reviewed: false }
-														: value,
-												),
-											});
-											setEditing(null);
-										}}
-									>
-										Save
-									</Button>
-									<Button
-										size="sm"
-										variant="ghost"
-										onClick={() => setEditing(null)}
-									>
-										Cancel
-									</Button>
-								</div>
-							</div>
-						) : (
-							<button
-								type="button"
-								className="w-full whitespace-pre-wrap text-left text-sm leading-relaxed hover:bg-muted/40"
-								onClick={() => {
-									setEditing(v.code);
-									setDraft(v.text);
-								}}
-							>
-								{v.text || (
-									<span className="text-muted-foreground">
-										Add translation…
-									</span>
-								)}
-							</button>
-						)}
-					</section>
-				))}
-		</div>
-	);
-}
 function ValueDraft({
 	text,
 	limit,
 	label,
-	focused = false,
 	onSave,
 	onClose,
 }: {
 	text: string;
 	limit?: number;
 	label: string;
-	focused?: boolean;
 	onSave: (text: string) => void;
 	onClose: () => void;
 }) {
@@ -224,10 +82,7 @@ function ValueDraft({
 				ref={input}
 				aria-label={label}
 				value={draft}
-				className={cn(
-					"resize-none text-sm leading-relaxed",
-					focused ? "h-[55svh] min-h-40" : "min-h-20",
-				)}
+				className="min-h-20 resize-none text-sm leading-relaxed"
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
 					if (event.key === "Escape") {
@@ -264,70 +119,20 @@ function ValueDraft({
 		</div>
 	);
 }
-function FocusedValue({
-	row,
-	value,
-	onSave,
-	onClose,
-}: {
-	row: PrototypeString;
-	value: PrototypeString["values"][number];
-	onSave: (text: string) => void;
-	onClose: () => void;
-}) {
-	const dialog = useRef<HTMLDialogElement>(null);
-	const titleId = useId();
-	useEffect(() => {
-		dialog.current?.showModal();
-		dialog.current?.querySelector("textarea")?.focus({ preventScroll: true });
-	}, []);
-	return (
-		<dialog
-			ref={dialog}
-			aria-labelledby={titleId}
-			onCancel={onClose}
-			className="fixed inset-0 m-auto max-h-[90svh] w-[min(48rem,calc(100vw-2rem))] overflow-auto rounded-lg border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/40"
-		>
-			<div className="mb-4 flex items-center gap-3">
-				<h2
-					id={titleId}
-					className="min-w-0 flex-1 truncate font-medium text-sm"
-				>
-					{row.name ? `${row.name} · ` : ""}
-					{value.code}
-				</h2>
-				<Button
-					size="icon-sm"
-					variant="ghost"
-					aria-label="Close editor"
-					onClick={onClose}
-				>
-					<X />
-				</Button>
-			</div>
-			<ValueDraft
-				text={value.text}
-				limit={row.limit}
-				label={`Edit ${value.code}`}
-				focused
-				onSave={onSave}
-				onClose={onClose}
-			/>
-		</dialog>
-	);
-}
 function CompactValue({
 	row,
 	value,
 	onChange,
+	onOpen,
 }: {
 	row: PrototypeString;
 	value: PrototypeString["values"][number];
 	onChange: (row: PrototypeString) => void;
+	onOpen: () => void;
 }) {
-	const preview = useRef<HTMLButtonElement>(null);
+	const preview = useRef<HTMLSpanElement>(null);
 	const [overflow, setOverflow] = useState(false);
-	const [editing, setEditing] = useState<"inline" | "focused" | null>(null);
+	const [editing, setEditing] = useState<"inline" | null>(null);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Changed text can overflow without changing the clamped element height.
 	useEffect(() => {
 		const element = preview.current;
@@ -343,7 +148,7 @@ function CompactValue({
 		setEditing(null);
 		// Wait for the inline preview to mount before restoring keyboard focus.
 		requestAnimationFrame(() =>
-			preview.current?.focus({ preventScroll: true }),
+			preview.current?.closest("button")?.focus({ preventScroll: true }),
 		);
 	};
 	const save = (text: string) => {
@@ -357,7 +162,7 @@ function CompactValue({
 	};
 	return (
 		<div
-			className="grid grid-cols-[56px_minmax(0,1fr)] gap-3 py-2"
+			className="grid grid-cols-[56px_minmax(0,1fr)] gap-3 py-1"
 			data-compact-value={value.code}
 		>
 			<span className="pt-0.5 text-[11px] text-muted-foreground">
@@ -372,249 +177,120 @@ function CompactValue({
 					onClose={close}
 				/>
 			) : (
-				<div className="relative min-w-0 pr-8">
-					<button
+				<button
+					type="button"
+					aria-label={`Edit ${value.code}`}
+					className="group relative w-full min-w-0 rounded-sm py-0.5 pr-7 text-left hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					onClick={() => (overflow ? onOpen() : setEditing("inline"))}
+				>
+					<span
 						ref={preview}
-						type="button"
-						aria-label={`Edit ${value.code}`}
-						className="line-clamp-3 w-full whitespace-pre-wrap text-left text-sm leading-relaxed [overflow-wrap:anywhere] hover:bg-muted/40"
-						onClick={() => setEditing(overflow ? "focused" : "inline")}
+						className="line-clamp-3 whitespace-pre-wrap text-sm leading-5 [overflow-wrap:anywhere]"
 					>
-						{value.text || (
+						{value.text.replace(/\n[\t \r]*\n(?:[\t \r]*\n)*/g, "\n") || (
 							<span className="text-muted-foreground">Add translation…</span>
 						)}
-					</button>
+					</span>
 					{overflow ? (
-						<Button
-							size="icon-xs"
-							variant="ghost"
-							className="absolute top-0 right-0 text-muted-foreground"
-							aria-label={`Expand ${value.code}`}
-							title="Expand text"
-							onClick={() => setEditing("focused")}
-						>
-							<Maximize2 className="size-3.5" />
-						</Button>
+						<Maximize2
+							aria-hidden="true"
+							className="absolute top-1 right-1 size-3.5 text-muted-foreground group-hover:text-foreground group-focus-visible:text-foreground"
+						/>
 					) : null}
-				</div>
+				</button>
 			)}
-			{editing === "focused" ? (
-				<FocusedValue row={row} value={value} onSave={save} onClose={close} />
-			) : null}
 		</div>
 	);
 }
-export function VariantA(p: ViewProps) {
+function StringList(p: ViewProps & { variant: PrototypeVariant }) {
+	const active = p.rows.find((row) => row.id === p.active?.id);
 	return (
-		<div className="divide-y">
-			{p.rows.map((row) => (
-				<article key={row.id} className="py-5">
-					<div className="mb-3 flex items-center gap-3">
-						<CheckRow id={row.id} selected={p.selected} onSelect={p.onSelect} />
-						{row.name ? (
-							<h2 className="font-medium text-sm">{row.name}</h2>
-						) : null}
-						<div className="ml-auto">
-							<Tags row={row} onChange={p.onChange} />
-						</div>
-					</div>
-					{row.values
-						.filter((v) => p.codes.includes(v.code))
-						.map((v) => (
-							<CompactValue
-								key={v.code}
-								row={row}
-								value={v}
-								onChange={p.onChange}
-							/>
-						))}
-				</article>
-			))}
-		</div>
-	);
-}
-export function VariantB(p: ViewProps) {
-	const active =
-		p.rows.find((row) => row.id === p.active) ??
-		p.rows.find((row) => row.values[0] && row.values[0].text.length > 300) ??
-		p.rows[0];
-	return (
-		<div className="grid min-h-0 grid-cols-1 overflow-hidden rounded-md border lg:h-[calc(100svh-380px)] lg:min-h-80 lg:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)]">
-			<div className="max-h-72 overflow-auto border-b lg:max-h-none lg:border-r lg:border-b-0">
+		<>
+			<div
+				className={cn(p.variant === "B" ? "flex flex-col gap-5" : "divide-y")}
+			>
 				{p.rows.map((row) => (
-					<div
+					<article
 						key={row.id}
 						className={cn(
-							"flex items-start gap-3 border-b p-3",
-							active?.id === row.id && "bg-muted",
+							p.variant === "B"
+								? "rounded-md border bg-muted/15 px-4 py-4"
+								: "py-7",
+							p.variant === "C" && "my-3 border-l-2 pl-4",
 						)}
 					>
-						<div className="pt-1">
+						<div className="mb-3 flex items-center gap-3">
 							<CheckRow
 								id={row.id}
 								selected={p.selected}
 								onSelect={p.onSelect}
 							/>
-						</div>
-						<button
-							type="button"
-							className="min-w-0 flex-1 text-left"
-							onClick={() => p.onOpen(row.id)}
-						>
 							{row.name ? (
-								<div className="truncate font-medium text-sm">{row.name}</div>
-							) : null}
-							<p className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-relaxed [overflow-wrap:anywhere]">
-								{row.values[0]?.text}
-							</p>
-							<div className="mt-2 flex flex-wrap gap-1">
-								{row.tags.map((t) => (
-									<Badge key={t} variant="outline">
-										{t}
-									</Badge>
-								))}
-							</div>
-						</button>
-					</div>
-				))}
-			</div>
-			{active ? (
-				<section className="min-w-0 overflow-auto">
-					<div className="sticky top-0 border-b bg-background px-5 py-4">
-						<div className="mb-2 font-medium text-sm">
-							{active.name || active.values[0]?.text.slice(0, 70)}
-						</div>
-						<Tags row={active} onChange={p.onChange} />
-						{active.values.some((v) => v.text.length > 300) ? (
-							<nav
-								aria-label="Jump to language"
-								className="mt-3 flex gap-1 overflow-x-auto"
-							>
-								{p.codes.map((code) => (
-									<Button
-										key={code}
-										variant="ghost"
-										size="xs"
-										className="shrink-0"
-										onClick={() =>
-											document
-												.getElementById(`prototype-${active.id}-${code}`)
-												?.scrollIntoView({ block: "start" })
-										}
-									>
-										{code}
-									</Button>
-								))}
-							</nav>
-						) : null}
-					</div>
-					<div className="px-5 pb-5">
-						<TextEditor
-							key={active.id}
-							row={active}
-							codes={p.codes}
-							onChange={p.onChange}
-						/>
-					</div>
-				</section>
-			) : null}
-		</div>
-	);
-}
-export function VariantC(p: ViewProps) {
-	const active = p.rows.find((row) => row.id === p.active);
-	return (
-		<>
-			<div className="overflow-auto rounded-md border">
-				<table className="w-full border-collapse text-left text-sm">
-					<thead className="bg-muted text-muted-foreground text-xs">
-						<tr>
-							<th className="w-10 p-3">
-								<span className="sr-only">Selection</span>
-							</th>
-							<th className="min-w-56 p-3">String</th>
-							{p.codes.map((code) => (
-								<th key={code} className="min-w-56 p-3 font-normal">
-									{code}
-								</th>
-							))}
-							<th className="min-w-44 p-3 font-normal">Tags</th>
-						</tr>
-					</thead>
-					<tbody>
-						{p.rows.map((row) => (
-							<tr key={row.id} className="border-t hover:bg-muted/40">
-								<td className="p-3">
-									<CheckRow
-										id={row.id}
-										selected={p.selected}
-										onSelect={p.onSelect}
-									/>
-								</td>
-								<td className="p-3">
+								<h2 className="min-w-0 font-medium text-sm">
 									<button
 										type="button"
-										className="max-w-64 truncate text-left font-medium"
-										onClick={() => p.onOpen(row.id)}
+										className="text-left hover:underline"
+										onClick={() =>
+											p.onOpen({ id: row.id, panel: "properties" })
+										}
 									>
-										{row.name || row.values[0]?.text}
+										{row.name}
 									</button>
-								</td>
-								{p.codes.map((code) => (
-									<td key={code} className="p-3">
-										<button
-											type="button"
-											className="line-clamp-2 max-w-72 text-left text-xs leading-relaxed"
-											onClick={() => p.onOpen(row.id)}
-										>
-											{row.values.find((v) => v.code === code)?.text || (
-												<span className="text-muted-foreground">
-													Add translation…
-												</span>
-											)}
-										</button>
-									</td>
+								</h2>
+							) : null}
+							<div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+								{row.tags.map((tag) => (
+									<Badge key={tag} variant="secondary">
+										{tag}
+									</Badge>
 								))}
-								<td className="p-3">
-									<div className="flex flex-wrap gap-1">
-										{row.tags.map((tag) => (
-											<Badge key={tag} variant="outline">
-												{tag}
-											</Badge>
-										))}
-									</div>
-								</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</div>
-			<Sheet
-				open={!!active}
-				onOpenChange={(open) => {
-					if (!open) p.onOpen(null);
-				}}
-			>
-				<SheetContent className="w-full sm:max-w-2xl">
-					<SheetHeader>
-						<SheetTitle>{active?.name || "String"}</SheetTitle>
-						<SheetDescription>All selected languages</SheetDescription>
-					</SheetHeader>
-					{active ? (
-						<div className="overflow-auto px-6 pb-8">
-							<Tags row={active} onChange={p.onChange} />
-							<TextEditor
-								key={active.id}
-								row={active}
-								codes={p.codes}
-								onChange={p.onChange}
-							/>
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									aria-label={`Properties for ${row.name || "string"}`}
+									title="Properties"
+									onClick={() => p.onOpen({ id: row.id, panel: "properties" })}
+								>
+									<SlidersHorizontal />
+								</Button>
+							</div>
 						</div>
-					) : null}
-				</SheetContent>
-			</Sheet>
+						{row.values
+							.filter((v) => p.codes.includes(v.code))
+							.map((v) => (
+								<CompactValue
+									key={v.code}
+									row={row}
+									value={v}
+									onChange={p.onChange}
+									onOpen={() => p.onOpen({ id: row.id, panel: v.code })}
+								/>
+							))}
+					</article>
+				))}
+			</div>
+			{active && p.active ? (
+				<AdvancedString
+					key={active.id}
+					row={active}
+					initialPanel={p.active.panel}
+					variant={p.variant}
+					onChange={p.onChange}
+					onClose={() => p.onOpen(null)}
+					onPanelChange={(panel) => p.onOpen({ id: active.id, panel })}
+				/>
+			) : null}
 		</>
 	);
+}
+export function VariantA(p: ViewProps) {
+	return <StringList {...p} variant="A" />;
+}
+export function VariantB(p: ViewProps) {
+	return <StringList {...p} variant="B" />;
+}
+export function VariantC(p: ViewProps) {
+	return <StringList {...p} variant="C" />;
 }
 export function StringsPrototype({
 	initialRows,
@@ -631,7 +307,7 @@ export function StringsPrototype({
 	const [q, setQ] = useState("");
 	const [tags, setTags] = useState<string[]>([]);
 	const [selected, setSelected] = useState<string[]>([]);
-	const [active, setActive] = useState<string | null>(null);
+	const [active, setActive] = useState<ViewProps["active"]>(null);
 	const [examples, setExamples] = useState(false);
 	const rawRows = examples
 		? [

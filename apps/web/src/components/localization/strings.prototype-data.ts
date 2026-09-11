@@ -4,6 +4,7 @@ export type PrototypeString = {
 	name: string | null;
 	tags: string[];
 	limit?: number;
+	context?: string;
 	values: { code: string; text: string; reviewed: boolean }[];
 };
 const description =
