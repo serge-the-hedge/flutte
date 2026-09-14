@@ -120,9 +120,9 @@ sets in connected projects. Agent workflow and concurrency details live in the
 
 Write each Source term and Locale rendering lowercase unless that term must
 always begin with an uppercase letter in that language. Lowercase Source terms
-match catalog text regardless of capitalization, using the Source Locale's
-casing rules; uppercase-initial Source terms match only their authored
-capitalization.
+match catalog text regardless of capitalization, using Unicode caseless
+matching and the Source Locale's casing rules; uppercase-initial Source terms
+match only their authored capitalization.
 
 ## Existing collections and project terms
 

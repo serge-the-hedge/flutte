@@ -1,4 +1,5 @@
 import { ConvexError, type Infer, v } from "convex/values";
+import { caseFold } from "unicode-case-folding";
 
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -689,48 +690,81 @@ function startsWithUppercaseLetter(value: string): boolean {
 	return first !== first.toLocaleLowerCase();
 }
 
-/** Lowercase Dictionary terms match any capitalization so sentence position
- * does not create duplicate entries. A term beginning with an uppercase letter
- * declares that capitalization significant and therefore matches exactly.
- * Both forms respect literal word boundaries and exclude ICU syntax. */
-function literalContainsTerm(
+function casingLocale(localeCode?: string): string | undefined {
+	if (!localeCode) return undefined;
+	try {
+		return Intl.getCanonicalLocales(localeCode)[0];
+	} catch {
+		// Legacy projects could persist codes from before strict BCP 47 validation.
+		return undefined;
+	}
+}
+
+/** Unicode full case folding provides stable caseless matching. Unicode defines
+ * alternate I mappings for Turkic languages, which need Source Locale context. */
+function foldForMatching(value: string, usesTurkicCasing: boolean): string {
+	const normalized = value.normalize("NFC");
+	const tailored = usesTurkicCasing
+		? normalized.replaceAll("I", "ı").replaceAll("İ", "i")
+		: normalized;
+	return caseFold(tailored).normalize("NFC");
+}
+
+function isAllUppercase(value: string): boolean {
+	let hasCasedLetter = false;
+	for (const character of value) {
+		if (/\p{Ll}/u.test(character)) return false;
+		if (/[\p{Lu}\p{Lt}]/u.test(character)) hasCasedLetter = true;
+	}
+	return hasCasedLetter;
+}
+
+/** Locale uppercasing can be contextual and may remove marks. Preserve only
+ * all-caps words in this comparison view so ordinary accent differences do not
+ * become equal merely because their uppercase forms are equal. */
+function localeUppercaseWords(value: string, localeCode?: string): string {
+	return value
+		.normalize("NFC")
+		.replace(/[\p{L}\p{N}\p{M}_]+/gu, (word) =>
+			isAllUppercase(word)
+				? word.toLocaleUpperCase(localeCode).normalize("NFC")
+				: "\0".repeat(word.length),
+		);
+}
+
+function hasTermBoundaries(
 	literal: string,
 	sourceTerm: string,
-	localeCode?: string,
+	start: number,
+	end: number,
 ): boolean {
-	const caseSensitive = startsWithUppercaseLetter(sourceTerm);
-	const searchedLiteral = caseSensitive
-		? literal
-		: literal.toLocaleLowerCase(localeCode);
-	const searchedTerm = caseSensitive
-		? sourceTerm
-		: sourceTerm.toLocaleLowerCase(localeCode);
-	const termCharacters = Array.from(searchedTerm);
+	const termCharacters = Array.from(sourceTerm);
 	const startsWithWord = joinsSpacedWord(termCharacters[0] ?? "");
 	const endsWithWord = joinsSpacedWord(
 		termCharacters[termCharacters.length - 1] ?? "",
 	);
+	const beforeCharacters = Array.from(
+		literal.slice(Math.max(0, start - 2), start),
+	);
+	const before = beforeCharacters[beforeCharacters.length - 1] ?? "";
+	const after = Array.from(literal.slice(end, end + 2))[0] ?? "";
+	return (
+		(!startsWithWord || !joinsSpacedWord(before)) &&
+		(!endsWithWord || !joinsSpacedWord(after))
+	);
+}
+
+function normalizedLiteralContainsTerm(
+	literal: string,
+	sourceTerm: string,
+): boolean {
 	for (
-		let index = searchedLiteral.indexOf(searchedTerm);
+		let index = literal.indexOf(sourceTerm);
 		index !== -1;
-		index = searchedLiteral.indexOf(searchedTerm, index + 1)
+		index = literal.indexOf(sourceTerm, index + 1)
 	) {
-		const beforeCharacters = Array.from(
-			searchedLiteral.slice(Math.max(0, index - 2), index),
-		);
-		const before = beforeCharacters[beforeCharacters.length - 1] ?? "";
-		const after =
-			Array.from(
-				searchedLiteral.slice(
-					index + searchedTerm.length,
-					index + searchedTerm.length + 2,
-				),
-			)[0] ?? "";
-		if (
-			(!startsWithWord || !joinsSpacedWord(before)) &&
-			(!endsWithWord || !joinsSpacedWord(after))
-		)
-			return true;
+		const end = index + sourceTerm.length;
+		if (hasTermBoundaries(literal, sourceTerm, index, end)) return true;
 	}
 	return false;
 }
@@ -768,22 +802,58 @@ export async function readGuidance(
 	const literalsByText = input.texts.map((text) =>
 		input.syntax === "plain" ? [text] : messageLiteralParts(text),
 	);
+	const localeCode = casingLocale(sourceLocale?.code);
+	const sourceLanguage = localeCode?.split("-")[0];
+	const usesTurkicCasing = sourceLanguage === "tr" || sourceLanguage === "az";
+	const matchLiteralsByText = literalsByText.map((literals) =>
+		literals.map((literal) => ({
+			exact: literal.normalize("NFC"),
+			localeLowercase: literal
+				.normalize("NFC")
+				.toLocaleLowerCase(localeCode)
+				.normalize("NFC"),
+			folded: foldForMatching(literal, usesTurkicCasing),
+			localeUppercaseWords: localeUppercaseWords(literal, localeCode),
+		})),
+	);
 	const localeCodes = new Set(input.localeCodes);
 	const result = {
 		revision: guidance.revision,
 		dictionary: guidance.dictionary,
 		projectGuide: guidance.projectGuide,
 		terms: guidance.terms.flatMap((entry) => {
-			const matchedTextIndexes = literalsByText.flatMap((literals, index) =>
-				literals.some((literal) =>
-					literalContainsTerm(
-						literal,
-						entry.term.sourceTerm,
-						sourceLocale?.code,
-					),
-				)
-					? [index]
-					: [],
+			const caseSensitive = startsWithUppercaseLetter(entry.term.sourceTerm);
+			const exactSourceTerm = entry.term.sourceTerm.normalize("NFC");
+			const foldedSourceTerm = foldForMatching(
+				entry.term.sourceTerm,
+				usesTurkicCasing,
+			);
+			const localeLowercaseSourceTerm = exactSourceTerm
+				.toLocaleLowerCase(localeCode)
+				.normalize("NFC");
+			const localeUppercaseSourceTerm = exactSourceTerm
+				.toLocaleUpperCase(localeCode)
+				.normalize("NFC");
+			const matchedTextIndexes = matchLiteralsByText.flatMap(
+				(literals, index) =>
+					literals.some((literal) =>
+						caseSensitive
+							? normalizedLiteralContainsTerm(literal.exact, exactSourceTerm)
+							: normalizedLiteralContainsTerm(
+									literal.localeLowercase,
+									localeLowercaseSourceTerm,
+								) ||
+								normalizedLiteralContainsTerm(
+									literal.folded,
+									foldedSourceTerm,
+								) ||
+								normalizedLiteralContainsTerm(
+									literal.localeUppercaseWords,
+									localeUppercaseSourceTerm,
+								),
+					)
+						? [index]
+						: [],
 			);
 			if (matchedTextIndexes.length === 0) return [];
 			const term: DictionaryTerm =

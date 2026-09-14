@@ -94,9 +94,9 @@ renderings, author, timestamp, immutable `revisionId`, and `matchedTextIndexes`
 into `texts`. Untranslatable Terms have no renderings. Agent authorship is not
 labelled human review.
 
-A lowercase-initial Source term matches literal message text case-insensitively
-under the Source Locale's casing rules; an uppercase-initial Source term matches
-case-sensitively. In ICU mode matching excludes arguments, selectors, and
+A lowercase-initial Source term uses Unicode caseless matching and the Source
+Locale's casing rules; an uppercase-initial Source term matches case-sensitively.
+In ICU mode matching excludes arguments, selectors, and
 formatter options; plural counts separate literal runs. Word boundaries prevent
 `start` matching `restart`, while unspaced scripts can match within a literal
 segment. There is no fuzzy inference.

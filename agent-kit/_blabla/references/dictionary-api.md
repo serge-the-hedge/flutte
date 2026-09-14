@@ -21,8 +21,8 @@ at most 256 KiB per batch:
 
 Casing carries policy. Write `sourceTerm` and each Locale rendering lowercase
 unless the term must always begin with an uppercase letter in that language.
-Lowercase Source terms match source text case-insensitively under the Source
-Locale's casing rules; uppercase-initial Source terms match case-sensitively.
+Lowercase Source terms use Unicode caseless matching and the Source Locale's
+casing rules; uppercase-initial Source terms match case-sensitively.
 
 ```json
 {
