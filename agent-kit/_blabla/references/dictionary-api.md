@@ -19,6 +19,11 @@ for this project connection. A typed project needs a connected Dictionary first.
 Atomically creates or replaces 1–32 complete terms,
 at most 256 KiB per batch:
 
+Casing carries policy. Write `sourceTerm` and each Locale rendering lowercase
+unless the term must always begin with an uppercase letter in that language.
+Lowercase Source terms match source text case-insensitively under the Source
+Locale's casing rules; uppercase-initial Source terms match case-sensitively.
+
 ```json
 {
   "expectedRevision": 0,
@@ -26,7 +31,7 @@ at most 256 KiB per batch:
   "expectedConnectionRevision": 1,
   "terms": [
     { "kind": "untranslatable", "sourceTerm": "Brickit", "definition": "Product name; preserve spelling." },
-    { "kind": "translated", "sourceTerm": "Build", "definition": "Assemble a model.", "renderings": [{ "localeCode": "de", "value": "Bauen" }] }
+    { "kind": "translated", "sourceTerm": "build", "definition": "Assemble a model.", "renderings": [{ "localeCode": "de", "value": "bauen" }] }
   ]
 }
 ```
@@ -50,7 +55,7 @@ Dictionary identity verifies its current connection and cannot choose another on
 ### `DELETE /dictionary/terms`
 
 Requires `dictionary-write`. Body:
-`{ "expectedRevision": 2, "sourceTerm": "Build" }`.
+`{ "expectedRevision": 2, "sourceTerm": "build" }`.
 Removes the active entry and returns `{ revision, revisionId }`. Earlier
 citations remain readable while their project or Dictionary access still applies. Deleting an already
 absent entry at the current revision is a no-op with a null `revisionId`.

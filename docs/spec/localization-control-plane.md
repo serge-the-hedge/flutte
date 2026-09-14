@@ -670,9 +670,14 @@ automatic term promotion, autocomplete, or release enforcement.
 
 An entry silences an echo only when declared terms account for the value's whole
 translatable content, after setting aside placeholders and punctuation. Terms
-match **case-sensitively**. **It starts empty and nothing is seeded** — the
-eleven all-Locale-identical keys include `Start`, which is plainly untranslated
-in Russian, and auto-seeding would write that bug in as a permanent excuse.
+are stored lowercase in each language unless they must always begin with an
+uppercase letter there. A lowercase Source term matches literal text
+case-insensitively under the Source Locale's casing rules, so sentence position
+does not require a duplicate entry; an uppercase-initial Source term declares
+its capitalization significant and matches case-sensitively. **It starts empty
+and nothing is seeded** — the eleven all-Locale-identical keys include `Start`,
+which is plainly untranslated in Russian, and auto-seeding would write that bug
+in as a permanent excuse.
 
 Editors maintain one general **Voice Guide** for the project and optional
 Locale-specific add-ons. The general guide states the shared audience, tone and

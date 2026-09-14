@@ -18,8 +18,10 @@ permission.
    rendering. Follow continuations to cover an assigned audit.
 3. Use [retrieval](../_blabla/references/retrieval.md) where example lookup is
    authorized (`search` scope). Establish each term's meaning from the assignment
-   and evidence. Frequency alone is not policy. Keep voice-guide editing with
-   the human; the general guide and optional Locale add-ons remain live context.
+   and evidence. Apply the [Dictionary API casing convention](../_blabla/references/dictionary-api.md#post-dictionaryterms)
+   to the Source term and every Locale rendering. Frequency alone is not policy.
+   Keep voice-guide editing with the human; the general guide and optional Locale
+   add-ons remain live context.
 4. [Save a bounded batch](../_blabla/references/dictionary-api.md#post-dictionaryterms) with
    the read `expectedRevision` and, when connected, Dictionary identity and
    connection revision. An existing term is replaced in full: preserve

@@ -303,11 +303,13 @@ function TermEditor({
 							readOnly={term !== null}
 							onChange={(event) => setSourceTerm(event.target.value)}
 						/>
-						{term ? (
-							<FieldDescription>
-								To rename a term, remove it and add the new term.
-							</FieldDescription>
-						) : null}
+						<FieldDescription>
+							Use lowercase unless the term must always begin with a capital
+							letter in the source language.
+							{term
+								? " To rename a term, remove it and add the new term."
+								: null}
+						</FieldDescription>
 					</Field>
 					<Field>
 						<FieldLabel htmlFor="guidance-definition">
@@ -402,8 +404,10 @@ function TermEditor({
 								</Field>
 							) : null}
 							<FieldDescription>
-								Add at least one translation. Switching languages keeps edits;
-								clearing a translation removes it.
+								Use lowercase unless the translation must always begin with a
+								capital letter in that language. Add at least one translation.
+								Switching languages keeps edits; clearing a translation removes
+								it.
 							</FieldDescription>
 						</>
 					) : null}

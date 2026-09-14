@@ -94,10 +94,12 @@ renderings, author, timestamp, immutable `revisionId`, and `matchedTextIndexes`
 into `texts`. Untranslatable Terms have no renderings. Agent authorship is not
 labelled human review.
 
-Matching is case-sensitive within literal message text. In ICU mode it excludes arguments,
-selectors, and formatter options; plural counts separate literal runs. Word
-boundaries prevent `Start` matching `Restart`, while unspaced scripts can match
-within a literal segment. There is no fuzzy inference.
+A lowercase-initial Source term matches literal message text case-insensitively
+under the Source Locale's casing rules; an uppercase-initial Source term matches
+case-sensitively. In ICU mode matching excludes arguments, selectors, and
+formatter options; plural counts separate literal runs. Word boundaries prevent
+`start` matching `restart`, while unspaced scripts can match within a literal
+segment. There is no fuzzy inference.
 
 General-guide examples use `source`/`target` for “Before”/“Preferred wording”;
 Locale examples are bilingual. Limits: 50 texts, 20 canonical Locale codes, and

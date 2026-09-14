@@ -684,26 +684,47 @@ function joinsSpacedWord(character: string): boolean {
 	);
 }
 
-/** Exact case-sensitive terms match literal words or phrases, excluding ICU
- * syntax and substrings within longer words in scripts that separate words. */
-function literalContainsTerm(literal: string, sourceTerm: string): boolean {
-	const termCharacters = Array.from(sourceTerm);
+function startsWithUppercaseLetter(value: string): boolean {
+	const first = Array.from(value)[0] ?? "";
+	return first !== first.toLocaleLowerCase();
+}
+
+/** Lowercase Dictionary terms match any capitalization so sentence position
+ * does not create duplicate entries. A term beginning with an uppercase letter
+ * declares that capitalization significant and therefore matches exactly.
+ * Both forms respect literal word boundaries and exclude ICU syntax. */
+function literalContainsTerm(
+	literal: string,
+	sourceTerm: string,
+	localeCode?: string,
+): boolean {
+	const caseSensitive = startsWithUppercaseLetter(sourceTerm);
+	const searchedLiteral = caseSensitive
+		? literal
+		: literal.toLocaleLowerCase(localeCode);
+	const searchedTerm = caseSensitive
+		? sourceTerm
+		: sourceTerm.toLocaleLowerCase(localeCode);
+	const termCharacters = Array.from(searchedTerm);
 	const startsWithWord = joinsSpacedWord(termCharacters[0] ?? "");
 	const endsWithWord = joinsSpacedWord(
 		termCharacters[termCharacters.length - 1] ?? "",
 	);
 	for (
-		let index = literal.indexOf(sourceTerm);
+		let index = searchedLiteral.indexOf(searchedTerm);
 		index !== -1;
-		index = literal.indexOf(sourceTerm, index + 1)
+		index = searchedLiteral.indexOf(searchedTerm, index + 1)
 	) {
 		const beforeCharacters = Array.from(
-			literal.slice(Math.max(0, index - 2), index),
+			searchedLiteral.slice(Math.max(0, index - 2), index),
 		);
 		const before = beforeCharacters[beforeCharacters.length - 1] ?? "";
 		const after =
 			Array.from(
-				literal.slice(index + sourceTerm.length, index + sourceTerm.length + 2),
+				searchedLiteral.slice(
+					index + searchedTerm.length,
+					index + searchedTerm.length + 2,
+				),
 			)[0] ?? "";
 		if (
 			(!startsWithWord || !joinsSpacedWord(before)) &&
@@ -726,7 +747,7 @@ export async function readGuidance(
 		syntax?: "plain" | "icu";
 	},
 ): Promise<Infer<typeof guidanceContextValidator>> {
-	await assertProjectExists(ctx, projectId);
+	const project = await assertProjectExists(ctx, projectId);
 	requireEnvelope(
 		input.texts.length <= MAX_GUIDANCE_TEXTS,
 		"Guidance supports at most 50 source texts.",
@@ -740,6 +761,9 @@ export async function readGuidance(
 		"Guidance context supports at most 20 Locales per request.",
 	);
 	await validateLocales(ctx, projectId, input.localeCodes);
+	const sourceLocale = project.sourceLocaleId
+		? await ctx.db.get(project.sourceLocaleId)
+		: null;
 	const guidance = await currentGuidance(ctx, projectId);
 	const literalsByText = input.texts.map((text) =>
 		input.syntax === "plain" ? [text] : messageLiteralParts(text),
@@ -752,7 +776,11 @@ export async function readGuidance(
 		terms: guidance.terms.flatMap((entry) => {
 			const matchedTextIndexes = literalsByText.flatMap((literals, index) =>
 				literals.some((literal) =>
-					literalContainsTerm(literal, entry.term.sourceTerm),
+					literalContainsTerm(
+						literal,
+						entry.term.sourceTerm,
+						sourceLocale?.code,
+					),
 				)
 					? [index]
 					: [],
