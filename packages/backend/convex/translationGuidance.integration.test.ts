@@ -30,6 +30,30 @@ async function setup() {
 	return { t, owner, projectId, localeId };
 }
 
+type Setup = Awaited<ReturnType<typeof setup>>;
+
+async function sourceLocale({
+	owner,
+	projectId,
+}: Pick<Setup, "owner" | "projectId">) {
+	const locale = (await owner.query(api.locales.list, { projectId })).find(
+		(candidate) => candidate.isSource,
+	);
+	if (!locale) throw new Error("Expected Source Locale.");
+	return locale;
+}
+
+async function correctSourceLocale(
+	fixture: Pick<Setup, "owner" | "projectId">,
+	code: string,
+) {
+	await fixture.owner.mutation(api.locales.correctSetupBinding, {
+		localeId: (await sourceLocale(fixture))._id,
+		code,
+		catalogPath: `intl_${code.split("-")[0]}.arb`,
+	});
+}
+
 const term = {
 	sourceTerm: "Brickit",
 	definition: "The product name stays unchanged.",
@@ -221,7 +245,7 @@ describe("authored translation guidance", () => {
 		).toEqual({ revision: 0, terms: [], guides: [], projectGuide: null });
 	});
 
-	test("matches case-sensitive literal terms once per batch, excluding ICU syntax", async () => {
+	test("uses dictionary capitalization to match literal terms, excluding ICU syntax", async () => {
 		const { t, owner, projectId } = await setup();
 		await owner.mutation(api.translationGuidance.saveTerm, {
 			projectId,
@@ -232,12 +256,12 @@ describe("authored translation guidance", () => {
 			projectId,
 			expectedRevision: 1,
 			term: {
-				sourceTerm: "Start",
+				sourceTerm: "start",
 				definition: "Begin an activity.",
 				kind: "translated",
 				renderings: [
-					{ localeCode: "de", value: "Starten" },
-					{ localeCode: "pt", value: "Iniciar" },
+					{ localeCode: "de", value: "starten" },
+					{ localeCode: "pt", value: "iniciar" },
 				],
 			},
 		});
@@ -245,7 +269,7 @@ describe("authored translation guidance", () => {
 			readGuidance(ctx, projectId, {
 				texts: [
 					"Start Brickit",
-					"start brickit Restart",
+					"start START brickit Restart",
 					"{Start} {amount, number, Start}",
 					"{count, plural, one{Start now} other{Start again}}",
 					"{Start, select, Start{Done} other{Done}}",
@@ -260,12 +284,159 @@ describe("authored translation guidance", () => {
 			guidance.terms.find((entry) => entry.term.sourceTerm === "Brickit"),
 		).toMatchObject({ matchedTextIndexes: [0] });
 		expect(
-			guidance.terms.find((entry) => entry.term.sourceTerm === "Start"),
+			guidance.terms.find((entry) => entry.term.sourceTerm === "start"),
 		).toMatchObject({
-			term: { renderings: [{ localeCode: "de", value: "Starten" }] },
-			matchedTextIndexes: [0, 3, 5, 6],
+			term: { renderings: [{ localeCode: "de", value: "starten" }] },
+			matchedTextIndexes: [0, 1, 3, 5, 6],
 			authoredBy: { kind: "user" },
 		});
+	});
+
+	test("matches lowercase terms using the Source Locale's casing rules", async () => {
+		const { t, owner, projectId } = await setup();
+		await correctSourceLocale({ owner, projectId }, "tr");
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "işlem",
+				definition: "An operation.",
+				kind: "translated",
+				renderings: [{ localeCode: "de", value: "vorgang" }],
+			},
+		});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["İşlem tamamlandı", "Işlem tamamlandı"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(guidance.terms[0]).toMatchObject({
+			term: { sourceTerm: "işlem" },
+			matchedTextIndexes: [0],
+		});
+	});
+
+	test("matches Unicode folds and expansions without losing word boundaries", async () => {
+		const { t, owner, projectId } = await setup();
+		for (const [expectedRevision, sourceTerm] of ["ſcan", "ﬃle"].entries())
+			await owner.mutation(api.translationGuidance.saveTerm, {
+				projectId,
+				expectedRevision,
+				term: {
+					sourceTerm,
+					definition: "A term used to exercise Unicode casing.",
+					kind: "translated",
+					renderings: [{ localeCode: "de", value: "prüfen" }],
+				},
+			});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["Scan now", "Rescan later", "Ffile", "profile"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(
+			guidance.terms.map((entry) => [
+				entry.term.sourceTerm,
+				entry.matchedTextIndexes,
+			]),
+		).toEqual([
+			["ſcan", [0]],
+			["ﬃle", [2]],
+		]);
+	});
+
+	test("matches lowercase terms whose uppercase form expands", async () => {
+		const { t, owner, projectId } = await setup();
+		await correctSourceLocale({ owner, projectId }, "de-DE");
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "straße",
+				definition: "A road.",
+				kind: "translated",
+				renderings: [{ localeCode: "de", value: "straße" }],
+			},
+		});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["STRASSE GESPERRT", "StraSSe gesperrt"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(guidance.terms[0]).toMatchObject({
+			term: { sourceTerm: "straße" },
+			matchedTextIndexes: [0, 1],
+		});
+	});
+
+	test("matches locale-specific all-caps forms and canonical accents", async () => {
+		const { t, owner, projectId } = await setup();
+		await correctSourceLocale({ owner, projectId }, "el");
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "άδεια",
+				definition: "Permission or a license.",
+				kind: "translated",
+				renderings: [{ localeCode: "de", value: "lizenz" }],
+			},
+		});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["ΑΔΕΙΑ", "Άδεια", "Α\u0301δεια", "αδεια"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(guidance.terms[0]?.matchedTextIndexes).toEqual([0, 1, 2]);
+	});
+
+	test("matches locale-specific title casing that adds combining marks", async () => {
+		const { t, owner, projectId } = await setup();
+		await correctSourceLocale({ owner, projectId }, "lt");
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "i\u0307\u0301rašas",
+				definition: "A record.",
+				kind: "translated",
+				renderings: [{ localeCode: "de", value: "eintrag" }],
+			},
+		});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["Írašas paruoštas", "Irasas paruoštas"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(guidance.terms[0]?.matchedTextIndexes).toEqual([0]);
+	});
+
+	test("falls back safely for a legacy malformed Source Locale code", async () => {
+		const { t, owner, projectId } = await setup();
+		const locale = await sourceLocale({ owner, projectId });
+		await t.run((ctx) => ctx.db.patch(locale._id, { code: "en-FOO" }));
+		await owner.mutation(api.translationGuidance.saveTerm, {
+			projectId,
+			expectedRevision: 0,
+			term: {
+				sourceTerm: "start",
+				definition: "Begin an activity.",
+				kind: "translated",
+				renderings: [{ localeCode: "de", value: "starten" }],
+			},
+		});
+		const guidance = await t.run((ctx) =>
+			readGuidance(ctx, projectId, {
+				texts: ["Start"],
+				localeCodes: ["de"],
+			}),
+		);
+		expect(guidance.terms[0]?.matchedTextIndexes).toEqual([0]);
 	});
 
 	test("retains exact citations after edits and removal, without revisions for unchanged saves", async () => {

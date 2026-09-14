@@ -148,6 +148,12 @@ describe("Translation guidance editing", () => {
 		expect(dom.container.querySelectorAll("textarea").length).toBe(0);
 		expect(dom.container.querySelectorAll("article").length).toBe(1);
 		await click("Edit Build");
+		expect(dom.container.textContent).toContain(
+			"Use lowercase unless the term must always begin with a capital letter",
+		);
+		expect(dom.container.textContent).toContain(
+			"Use lowercase unless the translation must always begin with a capital letter",
+		);
 		expect(dom.container.querySelectorAll('input[id^="term-"]').length).toBe(1);
 		await type("term-de", "Bauwerk");
 		await chooseLocale("term-locale", "pt");

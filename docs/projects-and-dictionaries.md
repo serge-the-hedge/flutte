@@ -118,6 +118,12 @@ Dictionary renderings use canonical language codes independently of the language
 sets in connected projects. Agent workflow and concurrency details live in the
 [portable skills](../agent-kit/README.md).
 
+Write each Source term and Locale rendering lowercase unless that term must
+always begin with an uppercase letter in that language. Lowercase Source terms
+match catalog text regardless of capitalization, using Unicode caseless
+matching and the Source Locale's casing rules; uppercase-initial Source terms
+match only their authored capitalization.
+
 ## Existing collections and project terms
 
 Existing repository projects keep their type and data. Owners can choose
