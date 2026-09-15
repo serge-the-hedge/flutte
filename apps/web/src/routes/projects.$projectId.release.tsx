@@ -18,6 +18,7 @@ import {
 	PageHeader,
 	ProjectShell,
 } from "@/components/localization/project-shell";
+import { ReleaseChanges } from "@/components/localization/release-changes";
 import {
 	PreparingCard,
 	ReleaseDeliveryHandoff,
@@ -119,6 +120,25 @@ function RepositoryReleaseRoute() {
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Release" />
 			{record?.status === "ready" &&
+			release?.kind === "available" &&
+			!release.basisCurrent ? (
+				<div className="flex max-w-3xl flex-wrap items-center gap-3">
+					<p role="status" className="text-muted-foreground text-sm">
+						The workspace changed. This report shows the earlier assessment.
+					</p>
+					{release.canPrepare ? (
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={starting}
+							onClick={start}
+						>
+							Prepare current release
+						</Button>
+					) : null}
+				</div>
+			) : null}
+			{record?.status === "ready" &&
 			introductions &&
 			introductions.length > 0 ? (
 				<div className="flex flex-col gap-2">
@@ -169,13 +189,32 @@ function RepositoryReleaseRoute() {
 				</Empty>
 			) : record?.status === "preparing" ? (
 				<PreparingCard record={record} />
-			) : record?.status === "ready" && release.basisCurrent ? (
+			) : record?.status === "ready" ? (
 				<ReleaseRecordView
 					record={record}
 					history={history?.records}
 					evidence={evidence.results}
 					evidenceStatus={evidence.status}
 					onLoadMoreEvidence={() => evidence.loadMore(50)}
+					changes={
+						<ReleaseChanges
+							key={record.recordId}
+							record={record}
+							projectId={projectId}
+							prepareAction={
+								release.canPrepare && release.basisCurrent ? (
+									<Button
+										size="sm"
+										variant="outline"
+										disabled={starting}
+										onClick={start}
+									>
+										Prepare current release
+									</Button>
+								) : undefined
+							}
+						/>
+					}
 					workAction={
 						<Button
 							nativeButton={false}
@@ -192,20 +231,22 @@ function RepositoryReleaseRoute() {
 						</Button>
 					}
 					releaseAction={
-						readyLocaleProposal === undefined ? (
+						!release.basisCurrent ? null : readyLocaleProposal === undefined ? (
 							<Skeleton className="h-12 w-full max-w-xl" />
 						) : bundle?.status === "ready" ? (
 							<ReleaseDeliveryHandoff
 								recordId={record.recordId}
 								changeKeyCount={bundle.changeKeyCount ?? 0}
-								targetValueCount={record.scopeValueCount}
+								changedValueCount={record.changedValueCount}
 								localeProposal={readyLocaleProposal}
 							/>
 						) : (
 							<div className="flex flex-col gap-3">
 								<ReleaseDeliveryScope
-									changeKeyCount={record.deltaKeyCount}
-									targetValueCount={record.scopeValueCount}
+									changeKeyCount={
+										record.changedKeyCount ?? record.deltaKeyCount
+									}
+									changedValueCount={record.changedValueCount}
 									localeProposal={readyLocaleProposal}
 								/>
 								<div className="flex flex-col items-start gap-1.5">

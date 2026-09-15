@@ -161,6 +161,15 @@ Scope, over only the keys in the Release Record's delta:
 Release records keep existing-Locale changes, complete new-Locale additions,
 ordinary imports, pending First Reviews, and Source Proposals distinct.
 
+The Release report lists actual text changes separately from the keys assessed
+for readiness. Expand a key to compare its saved Source or translations with
+the pinned Git baseline; key search and language filters page through this frozen
+set. The bundle uses the same saved changes. Later workspace edits do not alter
+the comparison and require a new assessment before building. Older reports that
+predate saved comparisons offer a new assessment instead of reconstructing text.
+This is the proposed change against the synced baseline, not the final Release
+Delta against the developer's delivery tree.
+
 A Release Bundle is immutable evidence from one ready Release Record. The
 Repository Adapter captures the delivery tree, computes and applies the exact
 Release Delta, regenerates Flutter localization output, and creates a local

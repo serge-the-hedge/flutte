@@ -34,6 +34,7 @@ async function repositoryRequest(
 async function createCatalog(
 	user: Awaited<ReturnType<typeof authenticatedBackend>>,
 	slug = "primary-project",
+	extraKey = false,
 ) {
 	const projectId = await createProject(user, { slug });
 	const locales = await user.query(api.locales.list, { projectId });
@@ -58,11 +59,19 @@ async function createCatalog(
 		files: [
 			{
 				catalogPath: "en.arb",
-				content: '{"@@locale":"en","greeting":"Hello"}',
+				content: JSON.stringify({
+					"@@locale": "en",
+					greeting: "Hello",
+					...(extraKey ? { farewell: "Bye" } : {}),
+				}),
 			},
 			{
 				catalogPath: "de.arb",
-				content: '{"@@locale":"de","greeting":"Hallo"}',
+				content: JSON.stringify({
+					"@@locale": "de",
+					greeting: "Hallo",
+					...(extraKey ? { farewell: "Tschüss" } : {}),
+				}),
 			},
 		],
 	});
@@ -129,9 +138,9 @@ async function targetTokens(
 	targetId: Id<"locales">,
 ) {
 	const workspace = await readWorkspaceKeyCards(user, projectId);
-	const target = workspace.keys[0]?.values.find(
-		(value) => !value.isSource && value.localeId === targetId,
-	);
+	const target = workspace.keys
+		.find((key) => key.id === "greeting")
+		?.values.find((value) => !value.isSource && value.localeId === targetId);
 	if (!target) throw new Error("Expected the target value.");
 	return target as typeof target & {
 		gitValueFingerprint: string;
@@ -183,6 +192,239 @@ async function prepareAndFinish(
 }
 
 describe("Release Records", () => {
+	test("freezes exact source and target edits, paginates and filters them, and keeps report access project-scoped", async () => {
+		const user = await authenticatedBackend(t, "frozen-changes");
+		const outsider = await authenticatedBackend(t, "unrelated-reader");
+		const { projectId, targetId } = await createCatalog(
+			user,
+			"frozen-changes",
+			true,
+		);
+		const workspace = await readWorkspaceKeyCards(user, projectId);
+		for (const [messageId, isSource, value] of [
+			["greeting", true, "Welcome"],
+			["greeting", false, "Willkommen"],
+			["farewell", false, "Bis bald"],
+		] as const) {
+			const current = workspace.keys
+				.find((key) => key.id === messageId)
+				?.values.find((row) => Boolean(row.isSource) === isSource);
+			if (
+				!current?.localeId ||
+				current.gitValueFingerprint === undefined ||
+				current.gitValueRevision === undefined ||
+				current.workspaceRevision === undefined
+			)
+				throw new Error("Missing edit basis");
+			// Read again after the source edit to use the current source basis.
+			const latest = await readWorkspaceKeyCards(user, projectId);
+			const row = latest.keys
+				.find((key) => key.id === messageId)
+				?.values.find((row) => row.localeId === current.localeId);
+			if (!row) throw new Error("Missing value");
+			await user.mutation(api.catalogWorkspace.commit, {
+				projectId,
+				messageId,
+				localeId: current.localeId,
+				intent: { kind: "save", value },
+				expectedGitValueFingerprint: current.gitValueFingerprint,
+				expectedGitValueRevision: current.gitValueRevision,
+				expectedWorkspaceRevision: current.workspaceRevision,
+				...(isSource
+					? {}
+					: { expectedSourceFingerprint: row.expectedSourceFingerprint }),
+			});
+		}
+		const record = await prepareAndFinish(user, projectId);
+		expect(record).toMatchObject({
+			changedKeyCount: 2,
+			changedValueCount: 3,
+			sourceLocaleCode: "en",
+		});
+		const first = await user.query(api.releaseRecords.changes, {
+			recordId: record.recordId,
+			paginationOpts: { cursor: null, numItems: 1 },
+		});
+		const second = await user.query(api.releaseRecords.changes, {
+			recordId: record.recordId,
+			paginationOpts: { cursor: first.continueCursor, numItems: 1 },
+		});
+		expect(
+			new Set([...first.page, ...second.page].map((key) => key.messageId)),
+		).toEqual(new Set(["greeting", "farewell"]));
+		expect(first.isDone).toBe(false);
+		const filtered = await user.query(api.releaseRecords.changes, {
+			recordId: record.recordId,
+			q: "GREET",
+			localeCode: "en",
+			paginationOpts: { cursor: null, numItems: 10 },
+		});
+		expect(filtered.page).toMatchObject([
+			{
+				messageId: "greeting",
+				sourceChanged: true,
+				changedValueCount: 2,
+				localeCodes: ["de", "en"],
+			},
+		]);
+		const valueArgs = {
+			recordId: record.recordId,
+			messageId: "greeting",
+			paginationOpts: { cursor: null, numItems: 1 },
+		};
+		const beforeEdit = await user.query(
+			api.releaseRecords.changeValues,
+			valueArgs,
+		);
+		expect(beforeEdit.page).toMatchObject([
+			{ localeCode: "de", before: "Hallo", after: "Willkommen" },
+		]);
+		const next = await user.query(api.releaseRecords.changeValues, {
+			...valueArgs,
+			paginationOpts: { cursor: beforeEdit.continueCursor, numItems: 1 },
+		});
+		expect(next.page).toMatchObject([
+			{ localeCode: "en", isSource: true, before: "Hello", after: "Welcome" },
+		]);
+		await save(user, projectId, targetId, "Guten Tag");
+		expect(
+			await user.query(api.releaseRecords.changeValues, valueArgs),
+		).toEqual(beforeEdit);
+		await expect(
+			outsider.query(api.releaseRecords.changes, {
+				recordId: record.recordId,
+				paginationOpts: { cursor: null, numItems: 10 },
+			}),
+		).rejects.toThrow();
+		await expect(
+			outsider.query(api.releaseRecords.changeValues, valueArgs),
+		).rejects.toThrow();
+		await expect(
+			user.query(api.releaseRecords.changes, {
+				recordId: record.recordId,
+				paginationOpts: { cursor: null, numItems: 51 },
+			}),
+		).rejects.toThrow("pagination is invalid");
+	});
+
+	test("keeps missing baseline distinct from a deliberate blank and excludes unchanged scope values", async () => {
+		const user = await authenticatedBackend(t, "missing-change");
+		const { projectId, germanId } = await createThreeLocaleCatalog(user, null);
+		const target = await targetTokens(user, projectId, germanId);
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: germanId,
+			intent: { kind: "intentionalBlank", reason: "No copy in this placement" },
+			expectedGitValueFingerprint: target.gitValueFingerprint,
+			expectedGitValueRevision: target.gitValueRevision,
+			expectedWorkspaceRevision: target.workspaceRevision,
+			expectedSourceFingerprint: target.expectedSourceFingerprint,
+		});
+		const record = await prepareAndFinish(user, projectId);
+		expect(record).toMatchObject({
+			changedKeyCount: 1,
+			changedValueCount: 1,
+			scopeValueCount: 2,
+		});
+		const page = await user.query(api.releaseRecords.changeValues, {
+			recordId: record.recordId,
+			messageId: "greeting",
+			paginationOpts: { cursor: null, numItems: 10 },
+		});
+		expect(page.page).toMatchObject([
+			{ localeCode: "de", before: null, after: "" },
+		]);
+	});
+
+	test("bounds expanded pages even when small edits replace large baseline values", async () => {
+		t = createBackend({ transactionLimits: true });
+		const user = await authenticatedBackend(t, "large-before-values");
+		const projectId = await createProject(user);
+		const [source] = await user.query(api.locales.list, { projectId });
+		if (!source) throw new Error("Missing source");
+		const locales = [{ code: "en", localeId: source._id }];
+		for (const code of ["de", "fr", "es", "it", "pt", "ja", "ko", "ru", "zh"])
+			locales.push({
+				code,
+				localeId: await user.mutation(api.locales.create, { projectId, code }),
+			});
+		for (const locale of locales)
+			await user.action(api.locales.bind, {
+				localeId: locale.localeId,
+				catalogPath: `${locale.code}.arb`,
+			});
+		const baseline = "x".repeat(200_000);
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "large",
+			files: locales.map((locale) => ({
+				catalogPath: `${locale.code}.arb`,
+				content: JSON.stringify({
+					"@@locale": locale.code,
+					greeting: locale.code === "en" ? "Hello" : baseline,
+				}),
+			})),
+		});
+		for (const locale of locales.slice(1))
+			await save(user, projectId, locale.localeId, `Hello in ${locale.code}`);
+		const record = await prepareAndFinish(user, projectId);
+		const first = await user.query(api.releaseRecords.changeValues, {
+			recordId: record.recordId,
+			messageId: "greeting",
+			paginationOpts: { cursor: null, numItems: 50 },
+		});
+		expect(first.page).toHaveLength(8);
+		expect(first.isDone).toBe(false);
+		const second = await user.query(api.releaseRecords.changeValues, {
+			recordId: record.recordId,
+			messageId: "greeting",
+			paginationOpts: { cursor: first.continueCursor, numItems: 50 },
+		});
+		expect(second.page).toHaveLength(1);
+		expect(second.isDone).toBe(true);
+		expect(
+			[...first.page, ...second.page].every(
+				(value) => value.before === baseline,
+			),
+		).toBe(true);
+	});
+
+	test("preserves an existing blank baseline as an empty string", async () => {
+		const user = await authenticatedBackend(t, "blank-before");
+		const { projectId, germanId } = await createThreeLocaleCatalog(user, "");
+		await save(user, projectId, germanId, "Hallo {name}");
+		const record = await prepareAndFinish(user, projectId);
+		const page = await user.query(api.releaseRecords.changeValues, {
+			recordId: record.recordId,
+			messageId: "greeting",
+			paginationOpts: { cursor: null, numItems: 10 },
+		});
+		expect(page.page).toMatchObject([{ before: "", after: "Hallo {name}" }]);
+	});
+
+	test("offers a fresh captured report instead of reusing legacy reports at the same basis", async () => {
+		const user = await authenticatedBackend(t, "legacy-changes");
+		const { projectId } = await createCatalog(user);
+		const old = await prepareAndFinish(user, projectId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(old.recordId, {
+				changedKeyCount: undefined,
+				changedValueCount: undefined,
+			});
+		});
+		await expect(
+			user.query(api.releaseRecords.changes, {
+				recordId: old.recordId,
+				paginationOpts: { cursor: null, numItems: 10 },
+			}),
+		).rejects.toThrow("predates saved string changes");
+		const fresh = await prepareAndFinish(user, projectId);
+		expect(fresh.recordId).not.toBe(old.recordId);
+		expect(fresh).toMatchObject({ changedKeyCount: 0, changedValueCount: 0 });
+	});
+
 	test("offers a ready new-Locale artifact for the same Release Snapshot", async () => {
 		const user = await authenticatedBackend(t, "combined-release-delivery");
 		const { projectId } = await createCatalog(

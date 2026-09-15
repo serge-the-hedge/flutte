@@ -288,6 +288,71 @@ export const bundleChangePage = internalQuery({
 			});
 		}
 		await assertCurrentReadyRecord(ctx, record);
+		if (record.changedKeyCount !== undefined) {
+			const page = await ctx.db
+				.query("releaseChangeKeys")
+				.withIndex("by_recordId_and_catalogIndex", (q) =>
+					q.eq("recordId", record._id),
+				)
+				.paginate({ ...args.paginationOpts, numItems: 1 });
+			const changes: ReleaseBundleArtifact["changes"] = [];
+			for (const key of page.page) {
+				const source = await ctx.db
+					.query("catalogProjectionMessages")
+					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+						q
+							.eq("projectionId", record.projectionId)
+							.eq("messageId", key.messageId)
+							.eq("isSource", true),
+					)
+					.unique();
+				const rows = await ctx.db
+					.query("releaseChangeValues")
+					.withIndex("by_recordId_and_messageId_and_localeCode", (q) =>
+						q.eq("recordId", record._id).eq("messageId", key.messageId),
+					)
+					.take(MAX_PROJECTED_LOCALES + 1);
+				if (
+					!source ||
+					rows.length !== key.changedValueCount ||
+					rows.length > MAX_PROJECTED_LOCALES
+				)
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "Release changes contradict their frozen envelope.",
+					});
+				const values = await Promise.all(
+					rows.map(async (row) => {
+						const baseline = await ctx.db.get(row.baselineRowId);
+						if (
+							!baseline ||
+							baseline.projectionId !== record.projectionId ||
+							baseline.messageId !== row.messageId ||
+							baseline.localeId !== row.localeId
+						)
+							throw new ConvexError({
+								code: "INTEGRITY",
+								message: "Release change lost its immutable baseline value.",
+							});
+						return {
+							localeCode: row.localeCode,
+							catalogPath: baseline.catalogPath,
+							isSource: row.isSource,
+							baselineValue: baseline.value,
+							value: row.after,
+						};
+					}),
+				);
+				values.sort((a, b) => a.catalogPath.localeCompare(b.catalogPath));
+				changes.push({
+					catalogIndex: key.catalogIndex,
+					messageId: key.messageId,
+					baselineSourceValue: source.value,
+					values,
+				});
+			}
+			return { ...page, page: changes };
+		}
 		const page = await ctx.db
 			.query("catalogWorkspaceNavigationRows")
 			.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
