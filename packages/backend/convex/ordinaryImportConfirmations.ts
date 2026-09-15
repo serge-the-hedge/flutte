@@ -211,7 +211,10 @@ export function ordinaryImportConfirmationPlan(input: {
 			counts.alreadyConfirmed++;
 			continue;
 		}
-		if (priorConfirmationIdentities.has(confirmationValueIdentity(candidate))) {
+		if (
+			row.sourceFingerprint !== source.sourceFingerprint &&
+			priorConfirmationIdentities.has(confirmationValueIdentity(candidate))
+		) {
 			counts.stale++;
 			continue;
 		}

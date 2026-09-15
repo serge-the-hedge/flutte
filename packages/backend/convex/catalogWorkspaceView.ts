@@ -451,8 +451,7 @@ export function composeWorkspaceKeyCards(
 					valueFingerprint,
 				}),
 			);
-			const previousSourceFingerprint =
-				previousConfirmation?.sourceFingerprint ?? value.sourceFingerprint;
+			const previousSourceFingerprint = value.sourceFingerprint;
 			const sourceChangeKind =
 				pendingSourceProposalFingerprint === undefined &&
 				previousSourceFingerprint !== decisionSourceFingerprint
@@ -515,11 +514,11 @@ export function valueStateFor(input: {
 		};
 	}
 	if (input.value.length === 0) return { valueState: "waiting" };
-	// Currency does not depend on prior review: an untouched import still
-	// answers the English wording it arrived with.
+	// The active value’s source basis takes precedence over historical reviews
+	// of the same bytes from an earlier import.
 	const previousSourceFingerprint =
-		input.previousConfirmation?.sourceFingerprint ??
-		input.valueSourceFingerprint;
+		input.valueSourceFingerprint ??
+		input.previousConfirmation?.sourceFingerprint;
 	if (
 		input.decision?.kind !== "translatorConfirmation" &&
 		previousSourceFingerprint !== undefined &&

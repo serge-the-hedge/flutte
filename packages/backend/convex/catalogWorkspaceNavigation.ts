@@ -315,6 +315,7 @@ export async function deriveNavigationDigest(input: {
 			// Only a prior confirmation whose Source Contract has since changed:
 			// the summary reads this fact after the exact-content check.
 			confirmedContentPreviously:
+				targetRow.sourceFingerprint !== sourceRow.sourceFingerprint &&
 				!exactGitDecision &&
 				confirmationsByValue.has(
 					JSON.stringify([

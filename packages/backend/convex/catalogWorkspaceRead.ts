@@ -217,9 +217,7 @@ export async function readWorkspaceTargetEvidence(
 		latestDecision?.kind === "translatorConfirmation"
 			? latestDecision
 			: undefined;
-	const previousSourceFingerprint =
-		previousConfirmation?.sourceFingerprint ??
-		effectiveTarget.sourceFingerprint;
+	const previousSourceFingerprint = effectiveTarget.sourceFingerprint;
 	let sourceChangeKind: "cosmetic" | "semantic" | undefined;
 	if (
 		!current.pendingSourceProposal &&
