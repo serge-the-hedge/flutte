@@ -9,6 +9,7 @@ import {
 	normalizedSearch,
 	searchOptions,
 } from "./catalogSearch";
+import { searchSourceText, searchTargetText } from "./catalogSearchText";
 import { readyNavigationStateFor } from "./catalogWorkspaceNavigation";
 import {
 	readWorkspaceTarget as currentWorkspaceTarget,
@@ -44,13 +45,15 @@ const translationWorkReasonValidator = v.union(
 	v.literal("sourceIdentical"),
 	v.literal("sameKeyRepeat"),
 	v.literal("stale"),
+	v.literal("changedInGit"),
 );
 
 export type TranslationWorkReason =
 	| "missing"
 	| "sourceIdentical"
 	| "sameKeyRepeat"
-	| "stale";
+	| "stale"
+	| "changedInGit";
 
 type TranslationWorkCursor = {
 	projectionId: Id<"catalogProjections">;
@@ -78,17 +81,19 @@ const ALL_TRANSLATION_WORK_REASONS = [
 	"sourceIdentical",
 	"sameKeyRepeat",
 	"stale",
+	"changedInGit",
 ] as const satisfies readonly TranslationWorkReason[];
 
 function translationWorkReasons(
 	digest: Doc<"catalogWorkspaceNavigationRows">,
 	target: Doc<"catalogWorkspaceNavigationRows">["targets"][number],
 ): TranslationWorkReason[] {
-	if (target.valueState === "waiting") return ["missing"];
-	if (target.valueState === "stale") return ["stale"];
-	if (target.confirmedGitContent || target.touched) return [];
-
-	const reasons: TranslationWorkReason[] = [];
+	const reasons: TranslationWorkReason[] = target.changedInGitPending
+		? ["changedInGit"]
+		: [];
+	if (target.valueState === "waiting") return [...reasons, "missing"];
+	if (target.valueState === "stale") return [...reasons, "stale"];
+	if (target.confirmedGitContent || target.touched) return reasons;
 	if (
 		!digest.pendingSourceProposal &&
 		target.gitValueFingerprint !== undefined &&
@@ -533,6 +538,15 @@ export const workspaceSearch = internalQuery({
 		for (const [rowIndex, row] of rows.entries()) {
 			if (!row.messageId.startsWith(options.keyPrefix)) continue;
 			if (
+				options.searchIn === "key" &&
+				matchedFields(options, {
+					key: row.messageId,
+					source: "",
+					target: "",
+				}).length === 0
+			)
+				continue;
+			if (
 				!(await matchesMessageTags(
 					ctx,
 					{ projectId: token.projectId, messageId: row.messageId },
@@ -540,10 +554,7 @@ export const workspaceSearch = internalQuery({
 				))
 			)
 				continue;
-			const assignedTags = await readMessageTagIds(ctx, {
-				projectId: token.projectId,
-				messageId: row.messageId,
-			});
+			let sourceText: Awaited<ReturnType<typeof searchSourceText>> | undefined;
 			const start =
 				row.catalogIndex === position.catalogIndex ? position.targetIndex : 0;
 			if (start > row.targets.length)
@@ -551,6 +562,31 @@ export const workspaceSearch = internalQuery({
 					code: "VALIDATION",
 					message: "Invalid search target cursor.",
 				});
+			if (
+				options.searchIn === "source" &&
+				(options.q.length > 0 || options.match === "exact")
+			) {
+				if (hydratedBytes >= MAX_DISCOVERY_READ_BYTES)
+					return finish(continuation(row.catalogIndex, start));
+				sourceText = await searchSourceText(ctx, {
+					projectId: token.projectId,
+					projectionId: projection._id,
+					messageId: row.messageId,
+				});
+				hydratedBytes += sourceText.bytes;
+				if (
+					matchedFields(options, {
+						key: row.messageId,
+						source: sourceText.value,
+						target: "",
+					}).length === 0
+				)
+					continue;
+			}
+			const assignedTags = await readMessageTagIds(ctx, {
+				projectId: token.projectId,
+				messageId: row.messageId,
+			});
 			for (
 				let targetIndex = start;
 				targetIndex < row.targets.length;
@@ -574,6 +610,31 @@ export const workspaceSearch = internalQuery({
 				)
 					return finish(continuation(row.catalogIndex, targetIndex));
 				hydrated++;
+				// Match visible bytes before loading editor contracts and provenance.
+				if (options.q.length > 0 && options.searchIn !== "key") {
+					const address = {
+						projectId: token.projectId,
+						projectionId: projection._id,
+						messageId: row.messageId,
+					};
+					if (options.searchIn !== "target" && sourceText === undefined) {
+						sourceText = await searchSourceText(ctx, address);
+						hydratedBytes += sourceText.bytes;
+					}
+					const targetText =
+						options.searchIn === "source"
+							? undefined
+							: await searchTargetText(ctx, address, target.localeId);
+					hydratedBytes += targetText?.bytes ?? 0;
+					if (
+						matchedFields(options, {
+							key: row.messageId,
+							source: sourceText?.value ?? "",
+							target: targetText?.value ?? "",
+						}).length === 0
+					)
+						continue;
+				}
 				const current = await currentWorkspaceTarget(
 					ctx,
 					token.projectId,

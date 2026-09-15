@@ -57,6 +57,7 @@ async function messageRow(input: {
 }
 
 async function valueHead(input: {
+	sourceValue: string;
 	id: string;
 	messageId: string;
 	localeId: Id<"locales">;
@@ -71,7 +72,7 @@ async function valueHead(input: {
 		localeId: input.localeId,
 		value: input.value,
 		valueFingerprint: await sha256Hex(input.value),
-		sourceFingerprint: "unused",
+		sourceFingerprint: await sha256Hex(input.sourceValue),
 		basisGitValueFingerprint: input.basisGitValueFingerprint,
 		basisGitValueRevision: 0,
 		revision: 1,
@@ -220,6 +221,7 @@ describe("deriveNavigationDigest", () => {
 		expect(digest.source).toEqual({
 			localeId: enId,
 			gitValueFingerprint: await sha256Hex("Hello {name}"),
+			valueFingerprint: await sha256Hex("Hello {name}"),
 		});
 		expect(digest.targets).toEqual([
 			{
@@ -230,6 +232,7 @@ describe("deriveNavigationDigest", () => {
 				confirmedGitContent: false,
 				confirmedContentPreviously: false,
 				firstReviewPending: false,
+				changedInGitPending: false,
 				valueFingerprint: await sha256Hex("Hallo {name}"),
 				gitValueFingerprint: await sha256Hex("Hallo {name}"),
 			},
@@ -245,6 +248,7 @@ describe("deriveNavigationDigest", () => {
 		});
 		const head = await valueHead({
 			id: "h1",
+			sourceValue: "Hello {name}",
 			messageId: "greeting",
 			localeId: deId,
 			value: "Hallo, {name}!",
@@ -436,6 +440,7 @@ describe("deriveNavigationDigest", () => {
 				heads.push(
 					await valueHead({
 						id: "h-touched",
+						sourceValue: entry.sourceValue,
 						messageId: entry.messageId,
 						localeId: deId,
 						value: "Locally edited",

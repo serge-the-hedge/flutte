@@ -70,10 +70,17 @@ describe("Basic project workflow", () => {
 			],
 		},
 	};
+	const revisionUpdates = new Set<() => void>();
 	const pagesByCursor = new Map<string | undefined, unknown>();
 	const watch = spyOn(client, "watchQuery").mockImplementation(
 		(query, args) => ({
-			onUpdate: () => () => {},
+			onUpdate: (callback: () => void) => {
+				if (getFunctionName(query) === "managedContent:revision")
+					revisionUpdates.add(callback);
+				return () => {
+					revisionUpdates.delete(callback);
+				};
+			},
 			localQueryResult: () =>
 				(getFunctionName(query) === "managedContent:page" && pagesByCursor.size
 					? pagesByCursor.get((args as { cursor?: string }).cursor)
@@ -169,6 +176,19 @@ describe("Basic project workflow", () => {
 				'[data-workspace-locale-id="en-id"]',
 			)?.value,
 		).toBe("Build {anything}");
+		const sourceHistory = dialog?.querySelector<HTMLButtonElement>(
+			'[aria-label="History of subtitle in en"]',
+		);
+		if (!sourceHistory) throw new Error("Missing source history");
+		await act(async () => sourceHistory.click());
+		expect(dialog?.textContent).toContain("Source history");
+		expect(
+			watch.mock.calls.some(
+				([query, args]) =>
+					getFunctionName(query) === "translationHistory:list" &&
+					args.localeId === "en-id",
+			),
+		).toBe(true);
 		const picker = dialog?.querySelector<HTMLInputElement>('[role="combobox"]');
 		if (!picker) throw new Error("Missing language picker");
 		await act(async () => {
@@ -241,6 +261,65 @@ describe("Basic project workflow", () => {
 			}
 		} finally {
 			delete results["catalogWorkspaceNavigation:window"];
+		}
+	});
+
+	test("restarts a sparse source search when an earlier string changes", async () => {
+		results["managedContent:revision"] = "revision-1";
+		pagesByCursor.set(undefined, { items: [], nextCursor: "later" });
+		pagesByCursor.set("later", {
+			items: [
+				{
+					messageId: "later",
+					key: "later",
+					sourceValue: "Needle later",
+					sourceRevision: 1,
+					sourceFingerprint: "later",
+				},
+			],
+			nextCursor: null,
+		});
+		const root = createRootRoute({
+			component: () => (
+				<ConvexProvider client={client}>
+					<ManagedStrings
+						projectId="project"
+						collectionId="marketing"
+						search={{ q: "Needle" }}
+						onSearch={() => {}}
+					/>
+				</ConvexProvider>
+			),
+		});
+		const router = createRouter({
+			routeTree: root,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		try {
+			await router.load();
+			await dom.render(<RouterProvider router={router} />);
+			expect(dom.container.textContent).toContain("Needle later");
+			pagesByCursor.set(undefined, {
+				items: [
+					{
+						messageId: "earlier",
+						key: "earlier",
+						sourceValue: "Needle earlier",
+						sourceRevision: 2,
+						sourceFingerprint: "earlier",
+					},
+				],
+				nextCursor: "later",
+			});
+			await act(async () => {
+				results["managedContent:revision"] = "revision-2";
+				for (const callback of revisionUpdates) callback();
+			});
+			expect(dom.container.textContent).toContain("Needle earlier");
+			expect(dom.container.textContent).not.toContain("Needle later");
+		} finally {
+			pagesByCursor.clear();
+			delete results["managedContent:revision"];
 		}
 	});
 

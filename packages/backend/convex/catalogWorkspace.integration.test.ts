@@ -820,6 +820,123 @@ describe("Catalog Workspace", () => {
 		});
 	}, 20_000);
 
+	test("keeps changed Git copy reviewable across later snapshots until confirmed", async () => {
+		const user = await authenticatedBackend(t, "workspace-changed-git-focus");
+		const projectId = await createProject(user);
+		const { targetId } = await bindEnglishAndGerman(user, projectId);
+		await ingestCatalog(user, { projectId, commit: "baseline" });
+		async function focus(
+			scope: "changedInGit" | "introduced" | "stale" | "unconfirmedImport",
+		) {
+			const overview = await user.query(api.catalogBrowse.overview, {
+				projectId,
+			});
+			if (overview.kind !== "ready") throw new Error("Expected ready browse");
+			const page = await user.query(api.catalogBrowse.page, {
+				projectId,
+				projectionId: overview.projectionId,
+				scope,
+			});
+			if (scope === "changedInGit") {
+				const counts = await user.query(api.catalogBrowse.scopeCounts, {
+					projectId,
+					projectionId: overview.projectionId,
+					revision: overview.revision,
+					localeIds: [targetId],
+				});
+				expect(counts.counts.changedInGit).toBe(page.keys.length);
+			}
+			return page;
+		}
+		expect((await focus("changedInGit")).keys).toHaveLength(0);
+		const changed = {
+			english:
+				'{"@@locale":"en","greeting":"Welcome {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
+			german: '{"@@locale":"de","greeting":"Willkommen {name}"}',
+		};
+		await ingestCatalog(user, {
+			projectId,
+			commit: "changed",
+			baselineCommit: "baseline",
+			...changed,
+		});
+		expect(
+			(await focus("changedInGit")).keys.map((key) => key.messageId),
+		).toEqual(["greeting"]);
+		expect((await focus("introduced")).keys).toHaveLength(0);
+		expect((await focus("stale")).keys).toHaveLength(0);
+		expect((await focus("unconfirmedImport")).keys).toHaveLength(1);
+		await ingestCatalog(user, {
+			projectId,
+			commit: "unchanged",
+			baselineCommit: "changed",
+			...changed,
+		});
+		expect((await focus("changedInGit")).keys).toHaveLength(1);
+		const target = await readTarget(user, projectId);
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: targetId,
+			intent: { kind: "confirm" },
+			expectedGitValueFingerprint: target.gitValueFingerprint,
+			expectedGitValueRevision: target.gitValueRevision,
+			expectedWorkspaceRevision: target.workspaceRevision,
+			expectedSourceFingerprint: target.expectedSourceFingerprint,
+		});
+		expect((await focus("changedInGit")).keys).toHaveLength(0);
+	}, 20_000);
+
+	test("shows unchanged unconfirmed translations as stale after English changes", async () => {
+		const user = await authenticatedBackend(
+			t,
+			"workspace-unconfirmed-stale-source",
+		);
+		const projectId = await createProject(user);
+		const { sourceId } = await bindEnglishAndGerman(user, projectId);
+		await ingestCatalog(user, { projectId, commit: "baseline" });
+		await ingestCatalog(user, {
+			projectId,
+			commit: "changed",
+			baselineCommit: "baseline",
+			english:
+				'{"@@locale":"en","greeting":"Welcome {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
+		});
+		expect(await readTarget(user, projectId)).toMatchObject({
+			valueState: "stale",
+		});
+		const overview = await user.query(api.catalogBrowse.overview, {
+			projectId,
+		});
+		if (overview.kind !== "ready") throw new Error("Expected ready browse");
+		const page = await user.query(api.catalogBrowse.page, {
+			projectId,
+			projectionId: overview.projectionId,
+			scope: "stale",
+		});
+		expect(page.keys.map((key) => key.messageId)).toEqual(["greeting"]);
+		expect(overview.ordinaryImports).toMatchObject({ eligible: 0, stale: 1 });
+		const source = await readSource(user, projectId);
+		await user.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "greeting",
+			localeId: sourceId,
+			intent: { kind: "save", value: "Welcome back {name}" },
+			expectedGitValueFingerprint: source.gitValueFingerprint,
+			expectedGitValueRevision: source.gitValueRevision,
+			expectedWorkspaceRevision: source.workspaceRevision,
+		});
+		expect(await readTarget(user, projectId)).toMatchObject({
+			valueState: "stale",
+		});
+		const pending = await user.query(api.catalogBrowse.page, {
+			projectId,
+			projectionId: overview.projectionId,
+			scope: "stale",
+		});
+		expect(pending.keys.map((key) => key.messageId)).toEqual(["greeting"]);
+	}, 20_000);
+
 	test("derives a semantic stale state when the confirmed Source Contract changes", async () => {
 		const user = await authenticatedBackend(t, "workspace-stale-source");
 		const projectId = await createProject(user);

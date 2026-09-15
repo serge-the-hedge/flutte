@@ -25,7 +25,7 @@ async function setup() {
 	});
 	await user.action(api.locales.bind, { localeId, catalogPath: "fr.arb" });
 	let previousCommit: string | undefined;
-	async function ingest(commit: string, value = "Bonjour") {
+	async function ingest(commit: string, value = "Bonjour", source = "Hello") {
 		const result = await user.action(api.snapshots.ingest, {
 			projectId,
 			repository: "repo",
@@ -42,7 +42,7 @@ async function setup() {
 			files: [
 				{
 					catalogPath: "en.arb",
-					content: '{"@@locale":"en","greeting":"Hello"}',
+					content: JSON.stringify({ "@@locale": "en", greeting: source }),
 				},
 				{
 					catalogPath: "fr.arb",
@@ -60,14 +60,16 @@ async function setup() {
 			| { kind: "save"; value: string }
 			| { kind: "confirm" }
 			| { kind: "intentionalBlank"; reason: string },
+		valueLocaleId = localeId,
 	) {
 		const workspace = await readWorkspaceKeyCards(user, projectId);
 		const target = workspace.keys[0]?.values.find(
-			(value) => value.localeId === localeId,
+			(value) => value.localeId === valueLocaleId,
 		);
 		if (!target?.gitValueFingerprint) throw new Error("Missing target");
 		return await user.mutation(api.catalogWorkspace.commit, {
 			...scope,
+			localeId: valueLocaleId,
 			intent,
 			expectedGitValueFingerprint: target.gitValueFingerprint,
 			expectedGitValueRevision: target.gitValueRevision,
@@ -81,6 +83,49 @@ async function setup() {
 }
 
 describe("translation history", () => {
+	test("reads original Git values and preserves each source proposal edit", async () => {
+		const s = await setup();
+		const scope = { ...s.scope, localeId: s.sourceId };
+		const save = (value: string) =>
+			s.commit({ kind: "save", value }, s.sourceId);
+		await save("Welcome");
+		await save("Welcome back");
+		await s.ingest("source-updated", "Bonjour", "Welcome back");
+		await s.ingest("source-quiet", "Bonjour", "Welcome back");
+		const result = await s.user.query(api.translationHistory.list, scope);
+		expect(result.events.map((event) => [event.kind, event.value])).toEqual([
+			["git", "Welcome back"],
+			["proposed", "Welcome back"],
+			["proposed", "Welcome"],
+			["git", "Hello"],
+		]);
+		expect(result.events[0]?.snapshot?.commit).toBe("source-updated");
+	});
+
+	test("keeps a surviving legacy source proposal when it is edited again", async () => {
+		const s = await setup();
+		const scope = { ...s.scope, localeId: s.sourceId };
+		await s.commit({ kind: "save", value: "Welcome" }, s.sourceId);
+		await s.t.run(async (ctx) => {
+			for (const row of await ctx.db
+				.query("catalogWorkspaceValueHistory")
+				.collect())
+				await ctx.db.delete(row._id);
+		});
+		expect(
+			(await s.user.query(api.translationHistory.list, scope)).events[0],
+		).toMatchObject({
+			kind: "proposed",
+			value: "Welcome",
+		});
+		await s.commit({ kind: "save", value: "Welcome back" }, s.sourceId);
+		expect(
+			(await s.user.query(api.translationHistory.list, scope)).events.map(
+				(event) => event.value,
+			),
+		).toEqual(["Welcome back", "Welcome", "Hello"]);
+	});
+
 	test("retains saves, confirmations and intentional blanks independently of Git observations", async () => {
 		const s = await setup();
 		await s.commit({ kind: "confirm" });
@@ -177,12 +222,7 @@ describe("translation history", () => {
 		await expect(s.history("{")).rejects.toThrow(
 			"Invalid translation history cursor",
 		);
-		await expect(
-			s.user.query(api.translationHistory.list, {
-				...s.scope,
-				localeId: s.sourceId,
-			}),
-		).rejects.toThrow("Target language not found");
+
 		const outsider = await authenticatedBackend(s.t, "history-outsider");
 		await expect(
 			outsider.query(api.translationHistory.list, s.scope),
@@ -298,6 +338,27 @@ describe("translation history", () => {
 			messageId,
 			localeId,
 		});
+		const sourceLocale = (
+			await user.query(api.locales.list, { projectId })
+		).find((locale) => locale.isSource);
+		if (!sourceLocale) throw new Error("Missing source");
+		await user.mutation(api.managedContent.saveSource, {
+			projectId,
+			collectionId: project.managedCollectionId,
+			messageId,
+			sourceValue: "Welcome",
+			expectedSourceRevision: 1,
+		});
+		const sourceHistory = await user.query(api.translationHistory.list, {
+			projectId,
+			messageId,
+			localeId: sourceLocale._id,
+		});
+		expect(sourceHistory.events.map((event) => event.value)).toEqual([
+			"Welcome",
+			"Hello",
+		]);
+		expect(sourceHistory.olderManualHistoryUnavailable).toBe(false);
 		expect(history).toMatchObject({
 			events: [{ value: "Bonjour", kind: "saved" }],
 			nextCursor: null,

@@ -49,6 +49,8 @@ limits the audit to confirmed values. Follow the [scan/resume contract](transpor
 through every page, preserving filters; changed filters or stale basis require a
 fresh search. Report unfinished scope when the assignment's budget is exhausted.
 
+For changed developer copy, use `/workspace/work?reason=changedInGit`; it remains
+listed until reviewed, including when Git changed English and translations together.
 For complete repairs, discover `/workspace/work` one Locale at a time and finish
 that initial pass before accepting reviews. Queue matches require inspection,
 not automatic overwrites; use the [translation skill](../../blabla-translate/SKILL.md)

@@ -7,6 +7,7 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { originIndexReadyForProjection } from "./catalogBrowseOrigins";
 import {
 	navigationStateFor,
 	stampNavigationOrigin,
@@ -48,11 +49,12 @@ export const prepare = mutation({
 				message: "The catalog changed. Try this snapshot again.",
 			});
 		const existing = await indexFor(ctx, args.projectId, args.snapshotId);
+		const currentProjection = await ctx.db.get(args.projectionId);
 		if (
-			existing?.projectionId === args.projectionId &&
-			(existing.status === "ready" ||
-				(existing.status === "building" &&
-					existing.updatedAt > Date.now() - 60_000))
+			originIndexReadyForProjection(existing, currentProjection) ||
+			(existing?.projectionId === args.projectionId &&
+				existing.status === "building" &&
+				existing.updatedAt > Date.now() - 60_000)
 		)
 			return null;
 		const { projection } = await acceptedSnapshot(
@@ -115,10 +117,15 @@ export const status = query({
 				code: "VALIDATION",
 				message: "Choose up to 32 snapshots.",
 			});
+		const projection = await ctx.db.get(args.projectionId);
 		const snapshots = await Promise.all(
 			[...new Set(args.snapshotIds)].map(async (snapshotId) => {
 				const index = await indexFor(ctx, args.projectId, snapshotId);
-				if (!index || index.projectionId !== args.projectionId)
+				if (
+					!index ||
+					(index.projectionId !== args.projectionId &&
+						!originIndexReadyForProjection(index, projection))
+				)
 					return {
 						snapshotId,
 						status: "missing" as const,

@@ -69,7 +69,14 @@ const page = (
 	cursor: string | null = null,
 ): Page => ({
 	stale: false,
-	counts: { waiting, introduced, unconfirmedImport: 0, stale: 0, settled: 0 },
+	counts: {
+		waiting,
+		introduced,
+		changedInGit: 0,
+		unconfirmedImport: 0,
+		stale: 0,
+		settled: 0,
+	},
 	cursor,
 });
 
@@ -98,4 +105,17 @@ test("discards incomplete counts when languages or catalog revision change", asy
 	expect(dom.container.textContent).toContain("counting");
 	await act(async () => requests[3]?.resolve(page(3, 0)));
 	expect(dom.container.textContent).toContain("3 waiting, 0 introduced");
+});
+
+test("reuses completed counts when returning to an unchanged selection", async () => {
+	await dom.render(view());
+	await act(async () => requests[0]?.resolve(page(4, 2)));
+	await dom.render(view({ locale: "ja" }));
+	await act(async () => requests[1]?.resolve(page(3, 1)));
+	await dom.render(view());
+	expect(dom.container.textContent).toContain("4 waiting, 2 introduced");
+	expect(query).toHaveBeenCalledTimes(2);
+	await dom.render(view({ revision: 2 }));
+	expect(dom.container.textContent).toContain("counting");
+	expect(query).toHaveBeenCalledTimes(3);
 });

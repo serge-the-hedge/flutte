@@ -8,6 +8,7 @@ import { api, convexId } from "@/lib/convex-api";
 
 const HISTORY_LABELS = {
 	saved: "Saved",
+	proposed: "Source proposed",
 	confirmed: "Confirmed",
 	accepted: "Accepted translation",
 	git: "Synced",
@@ -15,6 +16,7 @@ const HISTORY_LABELS = {
 };
 
 type TranslationAddress = {
+	isSource?: boolean;
 	projectId: string;
 	messageId: string;
 	localeId: string;
@@ -64,7 +66,7 @@ export function TranslationHistoryRow({
 				>
 					<header className="mb-3 flex items-center justify-between gap-3">
 						<h3 className="font-medium text-xs">
-							Translation history
+							{address.isSource ? "Source history" : "Translation history"}
 							<span className="ml-2 font-mono text-muted-foreground">
 								{address.localeCode}
 							</span>

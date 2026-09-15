@@ -4,6 +4,7 @@ import { ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
+import { tokenUsageNeedsRefresh } from "./agentApi";
 import type { TranslationWorkReason } from "./agentRetrieval";
 
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
@@ -115,12 +116,13 @@ function translationWorkReasons(
 			value === "missing" ||
 			value === "sourceIdentical" ||
 			value === "sameKeyRepeat" ||
-			value === "stale"
+			value === "stale" ||
+			value === "changedInGit"
 		) {
 			return value;
 		}
 		throw new Error(
-			"reason must be missing, sourceIdentical, sameKeyRepeat, or stale.",
+			"reason must be missing, sourceIdentical, sameKeyRepeat, stale, or changedInGit.",
 		);
 	});
 }
@@ -561,7 +563,10 @@ async function withAgent<T>(
 		name: rateLimitName,
 		key: auth._id,
 	});
-	await ctx.runMutation(internalApi.agentApi.touchToken, { tokenId: auth._id });
+	if (tokenUsageNeedsRefresh(auth.lastUsedAt))
+		await ctx.runMutation(internalApi.agentApi.touchToken, {
+			tokenId: auth._id,
+		});
 	return {
 		value: await handler(
 			token,
@@ -599,7 +604,10 @@ async function withRepositoryAdapter<T>(
 		name: rateLimitName,
 		key: auth._id,
 	});
-	await ctx.runMutation(internalApi.agentApi.touchToken, { tokenId: auth._id });
+	if (tokenUsageNeedsRefresh(auth.lastUsedAt))
+		await ctx.runMutation(internalApi.agentApi.touchToken, {
+			tokenId: auth._id,
+		});
 	return {
 		value: await handler({ projectId: auth.projectId, tokenId: auth._id }),
 		responseHeaders,

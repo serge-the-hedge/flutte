@@ -17,16 +17,23 @@ import { api, convexId } from "@/lib/convex-api";
 
 const NO_SNAPSHOTS: string[] = [];
 
-export function StringsSnapshotSelector({
-	projectId,
-	value,
-	onChange,
-}: {
+type SnapshotSelectorProps = {
 	projectId: string;
 	value: string[] | "unknown" | undefined;
 	onChange: (ids: string[] | "unknown" | undefined) => void;
-}) {
+};
+
+export function StringsSnapshotSelector(props: SnapshotSelectorProps) {
+	return <SnapshotSelector key={props.projectId} {...props} />;
+}
+
+function SnapshotSelector({
+	projectId,
+	value,
+	onChange,
+}: SnapshotSelectorProps) {
 	const [open, setOpen] = useState(false);
+	const [activated, setActivated] = useState(false);
 	const project = convexId<"projects">(projectId);
 	const ids = Array.isArray(value) ? value : NO_SNAPSHOTS;
 	const unknown = value === "unknown";
@@ -59,9 +66,10 @@ export function StringsSnapshotSelector({
 		if (page instanceof Error) throw page;
 		return page ?? [];
 	});
+	// Keep visited pages live until leaving this project, including while closed.
 	const { results, status, loadMore } = usePaginatedQuery(
 		api.snapshotCatalog.list,
-		open ? { projectId: project } : "skip",
+		activated ? { projectId: project } : "skip",
 		{ initialNumItems: 4 },
 	);
 	// A linked selection can be older than the loaded pages. Keep it visible and removable.
@@ -83,7 +91,13 @@ export function StringsSnapshotSelector({
 				? (single.name ?? new Date(single.createdAt).toLocaleDateString())
 				: `${count} snapshots`;
 	return (
-		<DropdownMenu open={open} onOpenChange={setOpen}>
+		<DropdownMenu
+			open={open}
+			onOpenChange={(nextOpen) => {
+				setOpen(nextOpen);
+				if (nextOpen) setActivated(true);
+			}}
+		>
 			<DropdownMenuTrigger
 				render={<Button variant="outline" />}
 				aria-label={`Introduced in: ${count || unknown ? label : "all snapshots"}`}

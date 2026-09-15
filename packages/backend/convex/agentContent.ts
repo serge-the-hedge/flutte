@@ -285,17 +285,29 @@ export const search = internalQuery({
 				nextCursor: null,
 				consistency: "live" as const,
 			});
+		const exactKey = options.searchIn === "key" && options.match === "exact";
 		const rows = ctx.db
 			.query("managedMessages")
-			.withIndex("by_collection_key", (index) =>
-				index.eq("collectionId", args.collectionId).gte("key", key),
-			);
+			.withIndex("by_collection_key", (index) => {
+				const collection = index.eq("collectionId", args.collectionId);
+				return exactKey
+					? collection.eq("key", options.q)
+					: collection.gte("key", key || options.keyPrefix);
+			});
 		let scans = 0;
 		let readBytes = 0;
 		for await (const source of rows) {
+			if (!source.key.startsWith(options.keyPrefix)) break;
+			if (exactKey && source.key < key) continue;
 			readBytes += encodedSize(source);
 			if (
 				source.archivedAt !== undefined ||
+				((options.searchIn === "key" || options.searchIn === "source") &&
+					findMatchedFields(options, {
+						key: source.key,
+						source: source.sourceValue,
+						target: "",
+					}).length === 0) ||
 				!(await matchesMessageTags(
 					ctx,
 					{

@@ -7,6 +7,7 @@ import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { encodedSize } from "./catalogWorkspaceView";
 import { type Actor, sha256Hex } from "./lib";
 import { requireViewer } from "./permissions";
+import { sourceProposalHeadFor } from "./sourceProposals";
 import { translationHistoryEvent } from "./translationHistoryModel";
 
 // Values can occupy 256 KiB. Keep both streams below the transaction byte limit,
@@ -153,7 +154,24 @@ async function historyRowEvent(
 async function retainedHead(
 	ctx: QueryCtx,
 	scope: Scope,
+	isSource: boolean,
 ): Promise<Event | null> {
+	if (isSource) {
+		const head = await sourceProposalHeadFor(
+			ctx,
+			scope.projectId,
+			scope.messageId,
+		);
+		return head
+			? {
+					id: `retained:${head._id}`,
+					kind: "proposed",
+					value: head.sourceValue,
+					recordedAt: head.updatedAt,
+					actorLabel: await actorLabel(ctx, scope.projectId, head.updatedBy),
+				}
+			: null;
+	}
 	const head = await ctx.db
 		.query("catalogWorkspaceValueHeads")
 		.withIndex("by_project_and_messageId_and_localeId", (q) =>
@@ -210,7 +228,6 @@ async function gitStep(ctx: QueryCtx, scope: Scope, projectionId: string) {
 	// Rebuilds and unchanged snapshots must not invent translation changes.
 	const changed =
 		row &&
-		!row.isSource &&
 		(!previous ||
 			row.value !== previous.value ||
 			row.sourceFingerprint !== previous.sourceFingerprint ||
@@ -246,7 +263,33 @@ async function basicHistory(
 	scope: Scope,
 	collectionId: Id<"contentCollections">,
 	state: Cursor,
+	isSource: boolean,
 ) {
+	if (isSource) {
+		const result = await ctx.db
+			.query("managedSourceRevisions")
+			.withIndex("by_message", (q) =>
+				q.eq("collectionId", collectionId).eq("messageId", scope.messageId),
+			)
+			.order("desc")
+			.paginate({ numItems: PAGE_SIZE, cursor: state.manualCursor });
+		const events: Event[] = await Promise.all(
+			result.page.map(async (row) => ({
+				id: row._id,
+				kind: "saved",
+				value: row.sourceValue,
+				recordedAt: row.createdAt,
+				actorLabel: await actorLabel(ctx, scope.projectId, row.actor),
+			})),
+		);
+		return {
+			events,
+			nextCursor: result.isDone
+				? null
+				: JSON.stringify({ ...state, manualCursor: result.continueCursor }),
+			olderManualHistoryUnavailable: false,
+		};
+	}
 	const result = await ctx.db
 		.query("managedTargetRevisions")
 		.withIndex("by_value", (q) =>
@@ -277,8 +320,8 @@ async function basicHistory(
 	};
 }
 
-/** Read-only history of applied translations. Private candidates never enter
- * this stream. Git evidence is walked along the accepted projection chain,
+/** Read-only source and applied translation history. Private agent candidates
+ * stay outside this stream. Git evidence follows the accepted projection chain,
  * merging with indexed manual events without copying or scanning the catalog. */
 export const list = query({
 	args: {
@@ -298,15 +341,10 @@ export const list = query({
 			ctx.db.get(args.projectId),
 			ctx.db.get(args.localeId),
 		]);
-		if (
-			!project ||
-			!locale ||
-			locale.projectId !== args.projectId ||
-			locale.isSource
-		)
+		if (!project || !locale || locale.projectId !== args.projectId)
 			throw new ConvexError({
 				code: "NOT_FOUND",
-				message: "Target language not found.",
+				message: "Language not found.",
 			});
 		if (args.messageId.length === 0 || args.messageId.length > 4096)
 			throw new ConvexError({
@@ -335,13 +373,19 @@ export const list = query({
 					code: "BAD_STATE",
 					message: "Project content is unavailable.",
 				});
-			return await basicHistory(ctx, args, project.managedCollectionId, state);
+			return await basicHistory(
+				ctx,
+				args,
+				project.managedCollectionId,
+				state,
+				locale.isSource,
+			);
 		}
 		const rows = await manualRows(ctx, args, state);
 		if (rows.length > 0) state.retainedSeen = true;
 		const retained =
 			!state.retainedSeen && rows.length === 0
-				? await retainedHead(ctx, args)
+				? await retainedHead(ctx, args, locale.isSource)
 				: null;
 		let manualIndex = 0;
 		let retainedPending = retained;

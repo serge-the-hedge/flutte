@@ -72,6 +72,48 @@ async function setup() {
 	};
 }
 describe("managed agent retrieval", () => {
+	test("finds exact keys and prefixes without scanning unrelated source rows", async () => {
+		const f = await setup();
+		for (let i = 0; i < 70; i++) await f.create(`early_${i}`, "Other source");
+		await f.create("zz_last", "Find this source");
+		const path = `/collections/${f.collectionId}/search`;
+		for (const query of [
+			"q=zz_last&searchIn=key&match=exact",
+			"keyPrefix=zz_",
+		]) {
+			const response = await f.request(`${path}?${query}`);
+			expect(response.status).toBe(200);
+			const result = await response.json();
+			expect(result.items).toMatchObject([{ messageId: "zz_last" }]);
+			expect(result.nextCursor).toBeNull();
+		}
+		const missing = await (
+			await f.request(`${path}?q=missing&searchIn=key&match=exact`)
+		).json();
+		expect(missing.items).toEqual([]);
+		expect(missing.nextCursor).toBeNull();
+		const de = await f.owner.mutation(api.locales.create, {
+			projectId: f.projectId,
+			code: "de",
+		});
+		await f.owner.mutation(api.contentCollections.setLocales, {
+			projectId: f.projectId,
+			collectionId: f.collectionId,
+			localeIds: [f.localeId, de],
+			expectedMembershipRevision: 1,
+		});
+		const exact = `${path}?q=zz_last&searchIn=key&match=exact&limit=1`;
+		const first = await (await f.request(exact)).json();
+		expect(first.items).toHaveLength(1);
+		expect(first.nextCursor).not.toBeNull();
+		const second = await (
+			await f.request(`${exact}&cursor=${encodeURIComponent(first.nextCursor)}`)
+		).json();
+		expect(second.items).toHaveLength(1);
+		expect(second.items[0].localeCode).not.toBe(first.items[0].localeCode);
+		expect(second.nextCursor).toBeNull();
+	});
+
 	test("returns and searches display names without treating them as stable keys", async () => {
 		const f = await setup();
 		const messageId = await f.owner.mutation(api.managedContent.createMessage, {

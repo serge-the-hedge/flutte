@@ -78,6 +78,52 @@ async function setup(count = 3, padding = 0) {
 }
 
 describe("Agent literal retrieval", () => {
+	test("discovers changed Git copy for agents until its translation is reviewed", async () => {
+		const f = await setup(1);
+		const work = async (reason = "") => {
+			const response = await f.t.fetch(
+				`/api/agent/v1/workspace/work?localeCode=de${reason ? `&reason=${reason}` : ""}`,
+				{
+					headers: { Authorization: `Bearer ${f.token}` },
+				},
+			);
+			expect(response.status).toBe(200);
+			return response.json();
+		};
+		expect((await work()).items).toEqual([]);
+		await f.user.action(api.snapshots.ingest, {
+			projectId: f.projectId,
+			repository: "repo",
+			commit: "changed",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "en.arb",
+					content: '{"@@locale":"en","item_000":"New source"}',
+				},
+				{
+					catalogPath: "de.arb",
+					content: '{"@@locale":"de","item_000":"Neue Übersetzung"}',
+				},
+				{
+					catalogPath: "zh.arb",
+					content: '{"@@locale":"zh","item_000":"新翻译"}',
+				},
+			],
+		});
+		for (const reason of ["", "changedInGit"]) {
+			expect((await work(reason)).items).toMatchObject([
+				{ messageId: "item_000", localeCode: "de", reasons: ["changedInGit"] },
+			]);
+		}
+		await f.save(f.de, "Neue Übersetzung");
+		expect((await work("changedInGit")).items).toEqual([]);
+	});
+
 	test("finds Chinese internal terms and keeps exact keys and phrases precise", async () => {
 		const { request } = await setup();
 		const chinese = await request(
@@ -104,6 +150,19 @@ describe("Agent literal retrieval", () => {
 		expect(
 			await (await request("q=积木&localeCode=de&searchIn=target")).json(),
 		).toMatchObject({ results: [], nextCursor: null });
+	});
+
+	test("rejects nonmatching sources once per key before scanning their target languages", async () => {
+		const { request } = await setup(40);
+		const response = await request("q=Build%20model%2039&searchIn=source");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			results: [
+				{ messageId: "item_039", localeCode: "de" },
+				{ messageId: "item_039", localeCode: "zh" },
+			],
+			nextCursor: null,
+		});
 	});
 
 	test("enumerates past 50 results and exposes empty intermediate windows", async () => {
@@ -241,25 +300,28 @@ test("case-only Source edit invalidates exact search continuation", async () => 
 
 test("continues sparse searches and work queues after the hydration byte budget", async () => {
 	const f = await setup(12, 100_000);
-	let searchCursor: string | null = null;
-	const found: string[] = [];
-	let searchPages = 0;
-	do {
-		const response = await f.request(
-			`q=Entry%2011%3A&localeCode=de&view=compact${searchCursor ? `&cursor=${encodeURIComponent(searchCursor)}` : ""}`,
-		);
-		expect(response.status).toBe(200);
-		const page = (await response.json()) as {
-			results: Array<{ messageId: string }>;
-			nextCursor: string | null;
-		};
-		if (searchPages === 0) expect(page.results).toEqual([]);
-		found.push(...page.results.map((result) => result.messageId));
-		searchCursor = page.nextCursor;
-		expect(++searchPages).toBeLessThan(15);
-	} while (searchCursor);
-	expect(found).toEqual(["item_011"]);
-	expect(searchPages).toBeGreaterThan(1);
+	for (const searchIn of ["all", "source"] as const) {
+		let searchCursor: string | null = null;
+		const found: string[] = [];
+		let searchPages = 0;
+		do {
+			const response = await f.request(
+				`q=Entry%2011%3A&localeCode=de&view=compact&searchIn=${searchIn}${searchCursor ? `&cursor=${encodeURIComponent(searchCursor)}` : ""}`,
+			);
+			expect(response.status).toBe(200);
+			const page = (await response.json()) as {
+				results: Array<{ messageId: string }>;
+				nextCursor: string | null;
+			};
+			if (searchIn === "all" && searchPages === 0)
+				expect(page.results).toEqual([]);
+			found.push(...page.results.map((result) => result.messageId));
+			searchCursor = page.nextCursor;
+			expect(++searchPages).toBeLessThan(15);
+		} while (searchCursor);
+		expect(found).toEqual(["item_011"]);
+		if (searchIn === "all") expect(searchPages).toBeGreaterThan(1);
+	}
 	let workCursor: string | null = null;
 	let workPages = 0;
 	const work: string[] = [];

@@ -17,6 +17,10 @@ import {
 	authorizeProjectIngestion,
 	repositoryAdapterActorValidator,
 } from "./permissions";
+import {
+	appendTranslationHistory,
+	latestTranslationHistory,
+} from "./translationHistoryWrite";
 
 /** A Catalog Workspace read already composes the full 8 MiB working catalog,
  * target heads, and decision evidence. Source Proposal heads stay deliberately
@@ -379,6 +383,7 @@ export async function saveSourceProposal(
 	ctx: MutationCtx,
 	input: {
 		project: Doc<"projects">;
+		localeId: Id<"locales">;
 		messageId: string;
 		sourceValue: string;
 		sourceFingerprint: string;
@@ -398,6 +403,30 @@ export async function saveSourceProposal(
 		sourceProposalStateFor(ctx, input.project._id),
 		sourceProposalHeadFor(ctx, input.project._id, input.messageId),
 	]);
+	const historyScope = {
+		projectId: input.project._id,
+		messageId: input.messageId,
+		localeId: input.localeId,
+	};
+	// Preserve the last pre-history head before another save replaces it.
+	if (previous && !(await latestTranslationHistory(ctx, historyScope))) {
+		await appendTranslationHistory(ctx, {
+			...historyScope,
+			kind: "proposed",
+			value: previous.sourceValue,
+			sourceFingerprint: previous.sourceFingerprint,
+			actor: previous.updatedBy,
+			recordedAt: previous.updatedAt,
+		});
+	}
+	await appendTranslationHistory(ctx, {
+		...historyScope,
+		kind: "proposed",
+		value: input.sourceValue,
+		sourceFingerprint: input.sourceFingerprint,
+		actor: input.actor,
+		recordedAt: nextTimestamp,
+	});
 	const nextRevision = (previous?.revision ?? 0) + 1;
 	const nextHeadFields: Omit<SourceProposalHeadInput, "proposalId"> = {
 		messageId: input.messageId,

@@ -94,7 +94,12 @@ test("focus totals do not depend on the visible page or selected focus", () => {
 		stale: 4,
 		settled: 200,
 	};
-	for (const scope of [undefined, "waiting", "introduced"] as const) {
+	for (const scope of [
+		undefined,
+		"waiting",
+		"introduced",
+		"changedInGit",
+	] as const) {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
@@ -106,6 +111,7 @@ test("focus totals do not depend on the visible page or selected focus", () => {
 					keys: [],
 					valueStateCounts: counts,
 					introducedMessageCount: 7,
+					changedInGitMessageCount: 2,
 				}}
 				hydratedCards={new Map()}
 				onWindowMessageIdsChange={() => {}}
@@ -116,6 +122,9 @@ test("focus totals do not depend on the visible page or selected focus", () => {
 		);
 		expect(markup).toContain(
 			`${scope === "waiting" ? "Clear" : "Show"} Waiting scope (81)`,
+		);
+		expect(markup).toContain(
+			`${scope === "changedInGit" ? "Clear" : "Show"} Changed in Git scope (2)`,
 		);
 	}
 });
@@ -292,7 +301,7 @@ describe("StringsCatalogView", () => {
 		);
 	});
 
-	test("offers history for missing and blank targets without a source history action", () => {
+	test("offers history for source values, missing targets, and intentional blanks", () => {
 		const markup = renderToStaticMarkup(
 			<StringsCatalogView
 				{...navigationProps}
@@ -332,7 +341,7 @@ describe("StringsCatalogView", () => {
 		);
 		expect(markup).toContain('aria-label="History of greeting in fr"');
 		expect(markup).toContain('aria-label="History of greeting in de"');
-		expect(markup).not.toContain('aria-label="History of greeting in en"');
+		expect(markup).toContain('aria-label="History of greeting in en"');
 		expect(markup).not.toContain("Loading history");
 	});
 
@@ -784,7 +793,7 @@ describe("StringsCatalogView", () => {
 		).not.toContain('data-slot="button"');
 		expect(markup).not.toContain("needs a value");
 		expect(markup).not.toContain("⌘↵");
-		expect(markup).not.toContain("waiting");
+		expect(markup).not.toContain("needs a value");
 	});
 
 	test("shows a pointer-accessible approval for an unconfirmed value", () => {

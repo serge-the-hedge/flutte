@@ -873,6 +873,7 @@ async function commitCatalogWorkspaceValue(
 		const sourceFingerprint = await sha256Hex(args.intent.value);
 		const receipt = await saveSourceProposal(ctx, {
 			project,
+			localeId: args.localeId,
 			messageId: args.messageId,
 			sourceValue: args.intent.value,
 			sourceFingerprint,

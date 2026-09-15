@@ -451,14 +451,14 @@ export function composeWorkspaceKeyCards(
 					valueFingerprint,
 				}),
 			);
+			const previousSourceFingerprint =
+				previousConfirmation?.sourceFingerprint ?? value.sourceFingerprint;
 			const sourceChangeKind =
 				pendingSourceProposalFingerprint === undefined &&
-				previousConfirmation !== undefined &&
-				previousConfirmation.sourceFingerprint !== decisionSourceFingerprint
+				previousSourceFingerprint !== decisionSourceFingerprint
 					? sourceChangeKindForConfirmation({
 							messageId: row.messageId,
-							confirmedSourceFingerprint:
-								previousConfirmation.sourceFingerprint,
+							confirmedSourceFingerprint: previousSourceFingerprint,
 							currentSourceFingerprint: decisionSourceFingerprint,
 							sourceChangesByIdentity: evidence.sourceChangesByIdentity,
 						})
@@ -474,6 +474,11 @@ export function composeWorkspaceKeyCards(
 						? previousConfirmation
 						: undefined,
 				currentSourceFingerprint: decisionSourceFingerprint,
+				valueSourceFingerprint:
+					pendingSourceProposalFingerprint === undefined ||
+					value.sourceFingerprint === row.sourceFingerprint
+						? value.sourceFingerprint
+						: undefined,
 				sourceChangeKind,
 			});
 			return {
@@ -496,6 +501,7 @@ export function valueStateFor(input: {
 	decision: CatalogWorkspaceDecisionRecord | undefined;
 	previousConfirmation?: CatalogWorkspaceDecisionRecord;
 	currentSourceFingerprint?: string;
+	valueSourceFingerprint?: string;
 	sourceChangeKind?: CatalogWorkspaceSourceChangeKind;
 }): {
 	valueState: CatalogWorkspaceValueState;
@@ -509,12 +515,16 @@ export function valueStateFor(input: {
 		};
 	}
 	if (input.value.length === 0) return { valueState: "waiting" };
+	// Currency does not depend on prior review: an untouched import still
+	// answers the English wording it arrived with.
+	const previousSourceFingerprint =
+		input.previousConfirmation?.sourceFingerprint ??
+		input.valueSourceFingerprint;
 	if (
 		input.decision?.kind !== "translatorConfirmation" &&
-		input.previousConfirmation !== undefined &&
+		previousSourceFingerprint !== undefined &&
 		input.currentSourceFingerprint !== undefined &&
-		input.previousConfirmation.sourceFingerprint !==
-			input.currentSourceFingerprint
+		previousSourceFingerprint !== input.currentSourceFingerprint
 	) {
 		return {
 			valueState: "stale",

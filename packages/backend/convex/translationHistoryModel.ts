@@ -2,6 +2,7 @@ import { v } from "convex/values";
 
 export const translationHistoryKind = v.union(
 	v.literal("saved"),
+	v.literal("proposed"),
 	v.literal("confirmed"),
 	v.literal("accepted"),
 	v.literal("git"),

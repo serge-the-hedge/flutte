@@ -348,7 +348,9 @@ export default defineSchema({
 		actor,
 		createdAt: v.number(),
 		archivedAt: v.optional(v.number()),
-	}).index("by_message", ["collectionId", "messageId"]),
+	})
+		.index("by_message", ["collectionId", "messageId"])
+		.index("by_collection", ["collectionId"]),
 	managedTargets: defineTable({
 		projectId: v.id("projects"),
 		collectionId: v.id("contentCollections"),
@@ -1171,7 +1173,7 @@ export default defineSchema({
 			"localeId",
 		]),
 
-	// Append-only applied values, separate from mutable workspace heads. Older
+	// Append-only workspace values and source proposals. Older
 	// overwritten manual values cannot be reconstructed from fingerprints.
 	catalogWorkspaceValueHistory: defineTable({
 		projectId: v.id("projects"),
@@ -1179,6 +1181,7 @@ export default defineSchema({
 		localeId: v.id("locales"),
 		kind: v.union(
 			v.literal("saved"),
+			v.literal("proposed"),
 			v.literal("confirmed"),
 			v.literal("accepted"),
 			v.literal("retained"),
@@ -1281,6 +1284,7 @@ export default defineSchema({
 			// classification, falling back to the Source Contract fingerprint for
 			// source rows without Git identity.
 			gitValueFingerprint: v.string(),
+			valueFingerprint: v.optional(v.string()),
 		}),
 		targets: v.array(
 			v.object({
@@ -1300,6 +1304,7 @@ export default defineSchema({
 				// its Source Contract has since changed.
 				confirmedContentPreviously: v.boolean(),
 				firstReviewPending: v.optional(v.boolean()),
+				changedInGitPending: v.optional(v.boolean()),
 				// The visible value identity lets one key detect suspicious repetition
 				// across its own target Locales without comparing unrelated keys.
 				repeatedGitContent: v.optional(v.boolean()),

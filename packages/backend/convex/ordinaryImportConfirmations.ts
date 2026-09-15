@@ -223,6 +223,13 @@ export function ordinaryImportConfirmationPlan(input: {
 			counts.pendingSourceProposal++;
 			continue;
 		}
+		if (
+			row.value.length > 0 &&
+			row.sourceFingerprint !== source.sourceFingerprint
+		) {
+			counts.stale++;
+			continue;
+		}
 		if (introducedMessageIds.has(row.messageId)) {
 			counts.introduced++;
 			continue;

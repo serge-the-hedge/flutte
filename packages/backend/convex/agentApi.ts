@@ -75,10 +75,27 @@ export const cliCompatibility = internalQuery({
 	},
 });
 
+/** Usage display has minute precision; auth/revocation still read every request.
+ * Coalescing avoids invalidating every cached agent read for bookkeeping alone. */
+export function tokenUsageNeedsRefresh(
+	lastUsedAt: number | undefined,
+	now = Date.now(),
+) {
+	return lastUsedAt === undefined || now - lastUsedAt >= 60_000;
+}
+
 export const touchToken = internalMutation({
 	args: { tokenId: v.id("apiTokens") },
 	handler: async (ctx, args) => {
-		await ctx.db.patch(args.tokenId, { lastUsedAt: Date.now() });
+		const token = await ctx.db.get(args.tokenId);
+		const now = Date.now();
+		// Recheck after authentication: concurrent requests can share an old stamp.
+		if (
+			token &&
+			token.revokedAt === undefined &&
+			tokenUsageNeedsRefresh(token.lastUsedAt, now)
+		)
+			await ctx.db.patch(args.tokenId, { lastUsedAt: now });
 		return null;
 	},
 });

@@ -844,8 +844,9 @@ export function CatalogWorkspaceValueField({
 			characterLimit={characterLimit}
 		/>
 	);
-	return historyProjectId && !value.isSource && value.localeId ? (
+	return historyProjectId && value.localeId ? (
 		<TranslationHistoryRow
+			isSource={value.isSource}
 			projectId={historyProjectId}
 			messageId={messageId}
 			messageLabel={messageLabel ?? messageId}
@@ -1091,9 +1092,7 @@ function EmptySearchResult() {
 					<Search aria-hidden="true" />
 				</EmptyMedia>
 				<EmptyTitle>No matching strings</EmptyTitle>
-				<EmptyDescription>
-					Try a name, source text, or translation.
-				</EmptyDescription>
+				<EmptyDescription>Try another search or filter.</EmptyDescription>
 			</EmptyHeader>
 		</Empty>
 	);
@@ -1101,6 +1100,7 @@ function EmptySearchResult() {
 
 const CATALOG_SCOPE_DEFINITIONS = [
 	{ scope: "introduced", label: "New from Git", countKey: "introduced" },
+	{ scope: "changedInGit", label: "Changed in Git", countKey: "changedInGit" },
 	{ scope: "waiting", label: "Waiting", countKey: "waiting" },
 	{
 		scope: "unconfirmedImport",
@@ -1111,7 +1111,12 @@ const CATALOG_SCOPE_DEFINITIONS = [
 ] as const satisfies ReadonlyArray<{
 	scope: CatalogValueScope;
 	label: string;
-	countKey: "introduced" | "waiting" | "unconfirmedImport" | "stale";
+	countKey:
+		| "introduced"
+		| "changedInGit"
+		| "waiting"
+		| "unconfirmedImport"
+		| "stale";
 }>;
 
 function BatchImportConfirmation({
@@ -1215,6 +1220,7 @@ function BatchImportConfirmation({
 function CatalogScopeStrip({
 	counts,
 	introducedMessageCount,
+	changedInGitMessageCount,
 	navigationState,
 	onNavigationChange,
 	ordinaryImports,
@@ -1224,6 +1230,7 @@ function CatalogScopeStrip({
 }: {
 	counts: StringsNavigationRead["valueStateCounts"];
 	introducedMessageCount: number | undefined;
+	changedInGitMessageCount: number | undefined;
 	navigationState: StringsCatalogNavigationState;
 	onNavigationChange: (state: StringsCatalogNavigationState) => void;
 	ordinaryImports?: StringsOrdinaryImportsSummary;
@@ -1260,7 +1267,9 @@ function CatalogScopeStrip({
 				const count =
 					countKey === "introduced"
 						? introducedMessageCount
-						: counts?.[countKey];
+						: countKey === "changedInGit"
+							? changedInGitMessageCount
+							: counts?.[countKey];
 				return (
 					<Button
 						key={scope}
@@ -1269,9 +1278,11 @@ function CatalogScopeStrip({
 						variant={active ? "secondary" : "ghost"}
 						aria-pressed={active}
 						title={
-							countKey === "introduced"
-								? "Keys across the selected languages"
-								: "Values across the selected languages"
+							countKey === "changedInGit"
+								? "Changed Git copy awaiting review in the selected languages"
+								: countKey === "introduced"
+									? "New keys awaiting first review in the selected languages"
+									: "Values across the selected languages"
 						}
 						aria-label={`${active ? "Clear" : "Show"} ${label} scope (${count ?? "counting"})`}
 						onClick={() =>
@@ -1308,6 +1319,35 @@ function CatalogSearch({
 	navigationState: StringsCatalogNavigationState;
 }) {
 	const controls = useContext(CatalogControlsContext);
+	const [draft, setDraft] = useState(query);
+	const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const latest = useRef({ navigationState, onNavigationChange });
+	useLayoutEffect(() => {
+		latest.current = { navigationState, onNavigationChange };
+	}, [navigationState, onNavigationChange]);
+	const cancel = useCallback(() => {
+		clearTimeout(pending.current);
+		pending.current = undefined;
+	}, []);
+	// URL navigation wins over unfinished typing; timers never outlive this view.
+	useLayoutEffect(() => {
+		cancel();
+		setDraft(query);
+	}, [query, cancel]);
+	useEffect(() => cancel, [cancel]);
+	function submit(value: string) {
+		cancel();
+		setDraft(value);
+		const current = latest.current;
+		if (value !== current.navigationState.query)
+			current.onNavigationChange({ ...current.navigationState, query: value });
+	}
+	function change(value: string) {
+		setDraft(value);
+		cancel();
+		if (value === "") submit(value);
+		else pending.current = setTimeout(() => submit(value), 200);
+	}
 	return (
 		<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 			<div className="relative min-w-0 flex-1">
@@ -1317,13 +1357,14 @@ function CatalogSearch({
 				/>
 				<Input
 					type="search"
-					value={query}
-					onChange={(event) =>
-						onNavigationChange({
-							...navigationState,
-							query: event.target.value,
-						})
-					}
+					value={draft}
+					onChange={(event) => change(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+							event.preventDefault();
+							submit(event.currentTarget.value);
+						}
+					}}
 					placeholder={
 						controls.searchPlaceholder ?? "Search keys and translations"
 					}
@@ -1331,15 +1372,15 @@ function CatalogSearch({
 					className="pl-8"
 				/>
 			</div>
-			{query ? (
+			{draft ? (
 				<Button
 					type="button"
 					size="sm"
 					variant="outline"
-					onClick={() => onNavigationChange({ ...navigationState, query: "" })}
-					aria-label={`Clear search: ${query}`}
+					onClick={() => submit("")}
+					aria-label={`Clear search: ${draft}`}
 				>
-					Search: {query}
+					Search: {draft}
 					<X aria-hidden="true" />
 				</Button>
 			) : null}
@@ -1934,10 +1975,7 @@ function StringsCatalogNavigator({
 	onCommitValue,
 	hydratedCards,
 	onWindowMessageIdsChange,
-	ordinaryImports,
-	onStartOrdinaryImportRun,
 	onStartNavigationBackfill,
-	workHandoff,
 	onCreateTranslationTask,
 }: {
 	navigation: StringsNavigationRead;
@@ -1946,13 +1984,7 @@ function StringsCatalogNavigator({
 	onCommitValue?: CommitCatalogValue;
 	hydratedCards: StringsWindowCards;
 	onWindowMessageIdsChange: (messageIds: string[]) => void;
-	ordinaryImports?: StringsOrdinaryImportsSummary;
-	onStartOrdinaryImportRun?: (
-		expectedProjectionId: string,
-		policy: "ordinary-v1",
-	) => void;
 	onStartNavigationBackfill?: () => void;
-	workHandoff?: { keyCount: number; onClear: () => void };
 	onCreateTranslationTask?: CreateTranslationTask;
 }) {
 	const matching = useMemo(
@@ -1964,7 +1996,6 @@ function StringsCatalogNavigator({
 		[navigation, navigationState.key, navigationState.handoffMessageIds],
 	);
 	const projectionId = navigation.projectionId ?? "";
-	const introducedMessageCount = navigation.introducedMessageCount;
 	const [localSelection, setLocalSelection] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -2078,21 +2109,6 @@ function StringsCatalogNavigator({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<CatalogScopeStrip
-				counts={navigation.valueStateCounts}
-				introducedMessageCount={introducedMessageCount}
-				navigationState={navigationState}
-				onNavigationChange={onNavigationChange}
-				ordinaryImports={ordinaryImports}
-				projectionId={projectionId}
-				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
-				workHandoff={workHandoff}
-			/>
-			<CatalogSearch
-				query={navigationState.query}
-				navigationState={navigationState}
-				onNavigationChange={onNavigationChange}
-			/>
 			{selectedMessageIds.size > 0 && onCreateTranslationTask ? (
 				<TranslationTaskSelection
 					selectedMessageIds={[...selectedMessageIds]}
@@ -2155,32 +2171,59 @@ function StringsCatalogContent({
 	workHandoff?: { keyCount: number; onClear: () => void };
 	onCreateTranslationTask?: CreateTranslationTask;
 }) {
-	if (navigation === undefined) return <StringsCatalogLoadingRows rows={1} />;
-	if (navigation.kind === "noBaseline")
+	if (navigation?.kind === "noBaseline")
 		return <NoBaselineCatalog onConnect={onConnectCheckout} />;
-	if (
-		navigation.kind === "ready" &&
+	const empty =
+		navigation?.kind === "ready" &&
 		(navigation.keys?.length ?? 0) === 0 &&
-		(navigation.keyCount ?? 0) === 0
-	) {
-		return emptyContent ?? <EmptyBaselineCatalog />;
-	}
-
+		(navigation.keyCount ?? 0) === 0;
+	const filtered = Boolean(
+		navigationState.query ||
+			navigationState.key ||
+			navigationState.scope ||
+			navigationState.handoffMessageIds?.length,
+	);
 	return (
-		<StringsCatalogNavigator
-			key={navigation.projectionId}
-			navigation={navigation}
-			navigationState={navigationState}
-			onNavigationChange={onNavigationChange}
-			onCommitValue={onCommitValue}
-			hydratedCards={hydratedCards}
-			onWindowMessageIdsChange={onWindowMessageIdsChange}
-			ordinaryImports={ordinaryImports}
-			onStartOrdinaryImportRun={onStartOrdinaryImportRun}
-			onStartNavigationBackfill={onStartNavigationBackfill}
-			workHandoff={workHandoff}
-			onCreateTranslationTask={onCreateTranslationTask}
-		/>
+		<div className="flex flex-col gap-3">
+			<CatalogScopeStrip
+				counts={navigation?.valueStateCounts}
+				introducedMessageCount={navigation?.introducedMessageCount}
+				changedInGitMessageCount={navigation?.changedInGitMessageCount}
+				navigationState={navigationState}
+				onNavigationChange={onNavigationChange}
+				ordinaryImports={ordinaryImports}
+				projectionId={navigation?.projectionId}
+				onStartOrdinaryImportRun={onStartOrdinaryImportRun}
+				workHandoff={workHandoff}
+			/>
+			<CatalogSearch
+				key={navigationState.key}
+				query={navigationState.query}
+				navigationState={navigationState}
+				onNavigationChange={onNavigationChange}
+			/>
+			{navigation === undefined ? (
+				<StringsCatalogLoadingRows rows={1} />
+			) : empty ? (
+				filtered ? (
+					<EmptySearchResult />
+				) : (
+					(emptyContent ?? <EmptyBaselineCatalog />)
+				)
+			) : (
+				<StringsCatalogNavigator
+					key={navigation.projectionId}
+					navigation={navigation}
+					navigationState={navigationState}
+					onNavigationChange={onNavigationChange}
+					onCommitValue={onCommitValue}
+					hydratedCards={hydratedCards}
+					onWindowMessageIdsChange={onWindowMessageIdsChange}
+					onStartNavigationBackfill={onStartNavigationBackfill}
+					onCreateTranslationTask={onCreateTranslationTask}
+				/>
+			)}
+		</div>
 	);
 }
 

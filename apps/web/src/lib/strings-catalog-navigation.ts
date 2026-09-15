@@ -13,7 +13,8 @@ export type CatalogValueScope =
 	| "waiting"
 	| "unconfirmedImport"
 	| "stale"
-	| "introduced";
+	| "introduced"
+	| "changedInGit";
 
 /** An editable target's place in the locally loaded Catalog Workspace. The
  * component owns DOM focus; this module owns the deterministic movement rule. */
@@ -107,6 +108,7 @@ export type StringsNavigationRead = {
 	} | null;
 	/** Catalog-wide totals for the selected languages, independent of the page. */
 	introducedMessageCount?: number;
+	changedInGitMessageCount?: number;
 	valueStateCounts?: {
 		waiting: number;
 		unconfirmedImport: number;

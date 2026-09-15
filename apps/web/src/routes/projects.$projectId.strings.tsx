@@ -67,7 +67,8 @@ function isCatalogValueScope(value: unknown): value is CatalogValueScope {
 		value === "waiting" ||
 		value === "unconfirmedImport" ||
 		value === "stale" ||
-		value === "introduced"
+		value === "introduced" ||
+		value === "changedInGit"
 	);
 }
 
@@ -305,6 +306,7 @@ function RepositoryStrings() {
 						keys: page.keys,
 						valueStateCounts: scopeCounts,
 						introducedMessageCount: scopeCounts?.introduced,
+						changedInGitMessageCount: scopeCounts?.changedInGit,
 					}
 				: undefined
 			: overview;

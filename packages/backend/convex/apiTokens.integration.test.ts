@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import {
 	authenticatedBackend,
@@ -50,6 +50,39 @@ describe("API token compatibility and access", () => {
 
 		await owner.mutation(api.apiTokens.revoke, { tokenId });
 		expect((await currentProject(t, legacyToken)).status).toBe(401);
+	});
+
+	test("coalesces usage bookkeeping while still enforcing revocation immediately", async () => {
+		const clock = vi.spyOn(Date, "now");
+		const now = 1_800_000_000_000;
+		clock.mockReturnValue(now);
+		try {
+			const t = createBackend();
+			const owner = await authenticatedBackend(t, "usage-owner");
+			const projectId = await createProject(owner);
+			const issued = await owner.mutation(api.apiTokens.create, {
+				projectId,
+				name: "Parallel agent",
+				scopes: ["read"],
+			});
+			expect((await currentProject(t, issued.token)).status).toBe(200);
+			const [first] = await owner.query(api.apiTokens.list, { projectId });
+			if (!first) throw new Error("Missing token");
+			clock.mockReturnValue(now + 10_000);
+			expect((await currentProject(t, issued.token)).status).toBe(200);
+			expect(
+				(await owner.query(api.apiTokens.list, { projectId }))[0]?.lastUsedAt,
+			).toBe(first.lastUsedAt);
+			clock.mockReturnValue(now + 61_000);
+			expect((await currentProject(t, issued.token)).status).toBe(200);
+			expect(
+				(await owner.query(api.apiTokens.list, { projectId }))[0]?.lastUsedAt,
+			).toBe(now + 61_000);
+			await owner.mutation(api.apiTokens.revoke, { tokenId: first._id });
+			expect((await currentProject(t, issued.token)).status).toBe(401);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	test("new tokens authenticate, but cannot read an archived project", async () => {
