@@ -30,8 +30,11 @@ export async function matchingRepositoryKeys(
 			break;
 		}
 		onProgress(ids.size);
+		// An exact-key hit precedes the ordinary scan, whose initial cursor is -1.
+		const startsScan = after === undefined && page.nextAfter === -1;
 		if (
 			page.nextAfter !== null &&
+			!startsScan &&
 			(page.nextAfter < (after ?? -1) ||
 				(page.nextAfter === (after ?? -1) &&
 					(page.nextTargetIndex ?? 0) <= (scanTargetIndex ?? 0)))

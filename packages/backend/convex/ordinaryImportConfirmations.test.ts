@@ -46,7 +46,15 @@ describe("ordinary import confirmation policy", () => {
 		] as const;
 		const rows = messages.flatMap(([messageId, source, target]) => [
 			row({ messageId, isSource: true, value: source }),
-			row({ messageId, isSource: false, value: target }),
+			row({
+				messageId,
+				isSource: false,
+				value: target,
+				sourceFingerprint:
+					messageId === "stale"
+						? "stale-previous-source"
+						: `${messageId}-source`,
+			}),
 		]);
 		const plan = ordinaryImportConfirmationPlan({
 			rows,

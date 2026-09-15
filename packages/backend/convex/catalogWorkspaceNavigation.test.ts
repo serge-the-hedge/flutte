@@ -131,6 +131,7 @@ async function proposalHead(input: {
 }
 
 async function keyRows(input: {
+	targetSourceValue?: string;
 	messageId: string;
 	catalogIndex: number;
 	sourceValue: string;
@@ -151,7 +152,7 @@ async function keyRows(input: {
 			isSource: false,
 			value: input.targetValue,
 			catalogIndex: input.catalogIndex,
-			sourceValue: input.sourceValue,
+			sourceValue: input.targetSourceValue ?? input.sourceValue,
 			gitValueFingerprint: await sha256Hex(input.targetValue),
 		}),
 	];
@@ -294,6 +295,7 @@ describe("deriveNavigationDigest", () => {
 			messageId: "greeting",
 			catalogIndex: 0,
 			sourceValue: "Hello there {name}",
+			targetSourceValue: "Hello {name}",
 			targetValue: "Hallo {name}",
 		});
 		const record = await decision({
@@ -431,6 +433,8 @@ describe("deriveNavigationDigest", () => {
 				messageId: entry.messageId,
 				catalogIndex: index,
 				sourceValue: entry.sourceValue,
+				targetSourceValue:
+					entry.messageId === "stale_key" ? "Old wording" : entry.sourceValue,
 				targetValue: entry.targetValue,
 			});
 			allRows.push(...rows);
