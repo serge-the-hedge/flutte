@@ -32,7 +32,10 @@ function page(messageId: string, nextAfter: number | null): Page {
 				messageId,
 				catalogIndex: 1,
 				searchCorpus: [],
-				source: { localeId: convexId<"locales">("en") },
+				source: {
+					localeId: convexId<"locales">("en"),
+					gitValueFingerprint: "source",
+				},
 				pendingSourceProposal: false,
 				introductionReviewPending: 0,
 				targets: [],
