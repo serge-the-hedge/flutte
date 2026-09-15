@@ -413,6 +413,7 @@ describe("current message tags", () => {
 					stale: 0,
 					settled: 0,
 					introduced: 0,
+					changedInGit: 0,
 				},
 			});
 			await expect(
