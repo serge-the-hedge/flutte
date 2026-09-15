@@ -45,11 +45,11 @@ export type EvidenceStatus =
 
 export function ReleaseDeliveryScope({
 	changeKeyCount,
-	targetValueCount,
+	changedValueCount,
 	localeProposal,
 }: {
 	changeKeyCount: number;
-	targetValueCount: number;
+	changedValueCount?: number;
 	localeProposal: ReadyLocaleProposal | null;
 }) {
 	return (
@@ -63,9 +63,10 @@ export function ReleaseDeliveryScope({
 				<p className="font-medium text-sm">Existing languages</p>
 				<p className="mt-0.5 text-muted-foreground text-xs tabular-nums">
 					{NUMBER_FORMAT.format(changeKeyCount)} changed key
-					{changeKeyCount === 1 ? "" : "s"} ·{" "}
-					{NUMBER_FORMAT.format(targetValueCount)} target value
-					{targetValueCount === 1 ? "" : "s"}
+					{changeKeyCount === 1 ? "" : "s"}
+					{changedValueCount === undefined
+						? null
+						: ` · ${NUMBER_FORMAT.format(changedValueCount)} ${changedValueCount === 1 ? "value" : "values"}`}
 				</p>
 			</div>
 			{localeProposal ? (
@@ -141,8 +142,8 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 				{record.commit.slice(0, 12)}
 			</span>
 			<span>
-				{NUMBER_FORMAT.format(record.deltaKeyCount)} changed key
-				{record.deltaKeyCount === 1 ? "" : "s"} ·{" "}
+				{NUMBER_FORMAT.format(record.deltaKeyCount)} key
+				{record.deltaKeyCount === 1 ? "" : "s"} assessed ·{" "}
 				{NUMBER_FORMAT.format(record.scopeValueCount)} target values
 			</span>
 		</div>
@@ -152,12 +153,12 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 export function ReleaseDeliveryHandoff({
 	recordId,
 	changeKeyCount,
-	targetValueCount,
+	changedValueCount,
 	localeProposal,
 }: {
 	recordId: ReleaseSummary["recordId"];
 	changeKeyCount: number;
-	targetValueCount: number;
+	changedValueCount?: number;
 	localeProposal: ReadyLocaleProposal | null;
 }) {
 	if (changeKeyCount === 0 && !localeProposal) {
@@ -175,7 +176,7 @@ export function ReleaseDeliveryHandoff({
 		<div className="flex flex-col gap-3">
 			<ReleaseDeliveryScope
 				changeKeyCount={changeKeyCount}
-				targetValueCount={targetValueCount}
+				changedValueCount={changedValueCount}
 				localeProposal={localeProposal}
 			/>
 			<p className="text-muted-foreground text-xs">
@@ -277,6 +278,7 @@ export function ReleaseRecordView({
 	onLoadMoreEvidence,
 	workAction,
 	releaseAction,
+	changes,
 }: {
 	record: ReleaseSummary;
 	history: ReleaseSummary[] | undefined;
@@ -285,6 +287,7 @@ export function ReleaseRecordView({
 	onLoadMoreEvidence: () => void;
 	workAction?: ReactNode;
 	releaseAction?: ReactNode;
+	changes?: ReactNode;
 }) {
 	const presentation = releasePresentationFor(record.posture);
 	const hasEvidence =
@@ -338,15 +341,15 @@ export function ReleaseRecordView({
 				</CardContent>
 			</Card>
 
+			{changes}
+
 			<Card size="sm" className="max-w-3xl">
 				<CardContent className="flex flex-col gap-2">
-					<span className="font-medium text-sm">
-						{presentation.needsWork ? "Release scope" : "Release contents"}
-					</span>
+					<span className="font-medium text-sm">Assessment scope</span>
 					<p className="text-muted-foreground text-xs">
 						{NUMBER_FORMAT.format(record.scopeValueCount)} target{" "}
-						{presentation.needsWork ? "slots" : "values"} across{" "}
-						{NUMBER_FORMAT.format(record.deltaKeyCount)} changed keys.
+						{presentation.needsWork ? "slots" : "values"} checked across{" "}
+						{NUMBER_FORMAT.format(record.deltaKeyCount)} keys.
 					</p>
 					<ul className="flex flex-col gap-1 text-muted-foreground text-xs">
 						<li>

@@ -49,6 +49,9 @@ export const releaseSummaryValidator = v.object({
 	posture: v.union(releasePostureValidator, v.null()),
 	progress: v.object({ cursor: v.number(), expectedKeyCount: v.number() }),
 	...releaseAssessmentFields,
+	sourceLocaleCode: v.optional(v.string()),
+	changedKeyCount: v.optional(v.number()),
+	changedValueCount: v.optional(v.number()),
 	failure: v.union(releaseFailureValidator, v.null()),
 	createdAt: v.number(),
 	completedAt: v.union(v.number(), v.null()),
@@ -215,6 +218,9 @@ export function releaseSummary(
 	const working = preparation ?? record;
 	return {
 		recordId: record._id,
+		...(record.sourceLocaleCode === undefined
+			? {}
+			: { sourceLocaleCode: record.sourceLocaleCode }),
 		projectionId: record.projectionId,
 		snapshotId: record.snapshotId,
 		commit: record.commit,
@@ -228,6 +234,12 @@ export function releaseSummary(
 			expectedKeyCount: record.expectedKeyCount,
 		},
 		...releaseAssessmentFrom(working),
+		...(working.changedKeyCount === undefined
+			? {}
+			: {
+					changedKeyCount: working.changedKeyCount,
+					changedValueCount: working.changedValueCount,
+				}),
 		failure: record.failure ?? null,
 		createdAt: record.createdAt,
 		completedAt: record.completedAt ?? null,

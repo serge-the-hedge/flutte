@@ -75,7 +75,7 @@ describe("Release Record UI", () => {
 		const markup = renderToStaticMarkup(
 			<ReleaseDeliveryScope
 				changeKeyCount={72}
-				targetValueCount={380}
+				changedValueCount={380}
 				localeProposal={{
 					proposalId: convexId<"localeProposals">("portuguese-proposal"),
 					localeCode: "pt",
@@ -85,7 +85,7 @@ describe("Release Record UI", () => {
 			/>,
 		);
 
-		expect(markup).toContain("72 changed keys · 380 target values");
+		expect(markup).toContain("72 changed keys · 380 values");
 		expect(markup).toContain("pt · new language");
 		expect(markup).toContain("1,549 catalog values");
 		expect(markup).not.toContain("deliver --release");
@@ -96,7 +96,7 @@ describe("Release Record UI", () => {
 			<ReleaseDeliveryHandoff
 				recordId={convexId<"releaseRecords">("release-record")}
 				changeKeyCount={72}
-				targetValueCount={380}
+				changedValueCount={380}
 				localeProposal={{
 					proposalId: convexId<"localeProposals">("portuguese-proposal"),
 					localeCode: "pt",
@@ -106,7 +106,7 @@ describe("Release Record UI", () => {
 			/>,
 		);
 
-		expect(markup).toContain("72 changed keys · 380 target values");
+		expect(markup).toContain("72 changed keys · 380 values");
 		expect(markup).toContain("1,549 catalog values");
 		expect(markup).toContain(
 			"deliver --release release-record --locale-proposal portuguese-proposal",
@@ -119,7 +119,7 @@ describe("Release Record UI", () => {
 			<ReleaseDeliveryHandoff
 				recordId={convexId<"releaseRecords">("release-record")}
 				changeKeyCount={0}
-				targetValueCount={0}
+				changedValueCount={0}
 				localeProposal={{
 					proposalId: convexId<"localeProposals">("portuguese-proposal"),
 					localeCode: "pt",
@@ -140,7 +140,7 @@ describe("Release Record UI", () => {
 			<ReleaseDeliveryHandoff
 				recordId={convexId<"releaseRecords">("release-record")}
 				changeKeyCount={3}
-				targetValueCount={12}
+				changedValueCount={12}
 				localeProposal={null}
 			/>,
 		);

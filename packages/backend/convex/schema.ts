@@ -1635,6 +1635,9 @@ export default defineSchema({
 		),
 		posture: v.optional(releasePosture),
 		...releaseAssessmentFields,
+		sourceLocaleCode: v.optional(v.string()),
+		changedKeyCount: v.optional(v.number()),
+		changedValueCount: v.optional(v.number()),
 		startedBy: actor,
 		failure: v.optional(
 			v.object({
@@ -1661,6 +1664,8 @@ export default defineSchema({
 		recordId: v.id("releaseRecords"),
 		cursor: v.number(),
 		...releaseAssessmentFields,
+		changedKeyCount: v.optional(v.number()),
+		changedValueCount: v.optional(v.number()),
 		terminal: v.optional(
 			v.union(
 				v.object({
@@ -1681,6 +1686,31 @@ export default defineSchema({
 		stepPending: v.boolean(),
 		updatedAt: v.number(),
 	}).index("by_recordId", ["recordId"]),
+
+	// Exact workspace edits captured with the assessment. Baseline rows belong
+	// to retained immutable projections; only proposed bytes need a new copy.
+	releaseChangeKeys: defineTable({
+		recordId: v.id("releaseRecords"),
+		catalogIndex: v.number(),
+		messageId: v.string(),
+		changedValueCount: v.number(),
+		sourceChanged: v.boolean(),
+		localeCodes: v.array(v.string()),
+	}).index("by_recordId_and_catalogIndex", ["recordId", "catalogIndex"]),
+
+	releaseChangeValues: defineTable({
+		recordId: v.id("releaseRecords"),
+		messageId: v.string(),
+		baselineRowId: v.id("catalogProjectionMessages"),
+		localeId: v.id("locales"),
+		localeCode: v.string(),
+		isSource: v.boolean(),
+		after: v.string(),
+	}).index("by_recordId_and_messageId_and_localeCode", [
+		"recordId",
+		"messageId",
+		"localeCode",
+	]),
 
 	releaseFindings: defineTable({
 		projectId: v.id("projects"),

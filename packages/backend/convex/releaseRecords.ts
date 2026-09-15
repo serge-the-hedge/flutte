@@ -117,24 +117,55 @@ async function processTerminalCleanup(
 ) {
 	const terminal = preparation.terminal;
 	if (!terminal) return null;
-	const [findings, evidence, handoffKeys] = await Promise.all([
-		ctx.db
-			.query("releaseFindings")
-			.withIndex("by_record", (q) => q.eq("recordId", record._id))
-			.take(MAX_RELEASE_ROWS_PER_STEP),
-		ctx.db
-			.query("releaseEvidence")
-			.withIndex("by_record", (q) => q.eq("recordId", record._id))
-			.take(MAX_RELEASE_ROWS_PER_STEP),
-		ctx.db
-			.query("releaseWorkHandoffKeys")
-			.withIndex("by_handoff", (q) => q.eq("handoffId", record.handoffId))
-			.take(MAX_RELEASE_ROWS_PER_STEP),
-	]);
-	for (const row of [...findings, ...evidence, ...handoffKeys]) {
+	const [findings, evidence, handoffKeys, changeKeys, changeValues] =
+		await Promise.all([
+			ctx.db
+				.query("releaseFindings")
+				.withIndex("by_record", (q) => q.eq("recordId", record._id))
+				.take(MAX_RELEASE_ROWS_PER_STEP),
+			ctx.db
+				.query("releaseEvidence")
+				.withIndex("by_record", (q) => q.eq("recordId", record._id))
+				.take(MAX_RELEASE_ROWS_PER_STEP),
+			ctx.db
+				.query("releaseWorkHandoffKeys")
+				.withIndex("by_handoff", (q) => q.eq("handoffId", record.handoffId))
+				.take(MAX_RELEASE_ROWS_PER_STEP),
+			ctx.db
+				.query("releaseChangeKeys")
+				.withIndex("by_recordId_and_catalogIndex", (q) =>
+					q.eq("recordId", record._id),
+				)
+				.take(MAX_RELEASE_ROWS_PER_STEP),
+			ctx.db
+				.query("releaseChangeValues")
+				.withIndex("by_recordId_and_messageId_and_localeCode", (q) =>
+					q.eq("recordId", record._id),
+				)
+				.paginate({
+					cursor: null,
+					numItems: MAX_RELEASE_ROWS_PER_STEP,
+					maximumBytesRead: 512 * 1024,
+				})
+				.then((page) => page.page),
+		]);
+	for (const row of [
+		...findings,
+		...evidence,
+		...handoffKeys,
+		...changeKeys,
+		...changeValues,
+	]) {
 		await ctx.db.delete(row._id);
 	}
-	if (findings.length + evidence.length + handoffKeys.length > 0) {
+	if (
+		findings.length +
+			evidence.length +
+			handoffKeys.length +
+			changeKeys.length +
+			changeValues.length >
+		0
+	) {
 		const updatedAt = now();
 		await ctx.db.patch(preparation._id, { stepPending: true, updatedAt });
 		await ctx.scheduler.runAfter(0, internal.releaseRecords.processStep, {
@@ -223,7 +254,10 @@ export const prepare = mutation({
 			.order("desc")
 			.take(1);
 		const reusable = sameBasis[0];
-		if (reusable?.status === "ready") {
+		if (
+			reusable?.status === "ready" &&
+			reusable.changedKeyCount !== undefined
+		) {
 			return releaseSummary(reusable);
 		}
 		if (reusable?.status === "preparing") {
@@ -268,7 +302,15 @@ export const prepare = mutation({
 			byteLength: 0,
 		});
 		const createdAt = now();
-		const emptyAssessment = emptyReleaseAssessment();
+		const emptyAssessment = {
+			...emptyReleaseAssessment(),
+			changedKeyCount: 0,
+			changedValueCount: 0,
+		};
+		const project = await ctx.db.get(args.projectId);
+		const sourceLocale = project?.sourceLocaleId
+			? await ctx.db.get(project.sourceLocaleId)
+			: null;
 		const recordId = await ctx.db.insert("releaseRecords", {
 			projectId: args.projectId,
 			projectionId: projection._id,
@@ -279,6 +321,7 @@ export const prepare = mutation({
 			handoffId,
 			status: "preparing",
 			...emptyAssessment,
+			...(sourceLocale ? { sourceLocaleCode: sourceLocale.code } : {}),
 			startedBy: { kind: "user", id: userId },
 			createdAt,
 		});
@@ -442,7 +485,21 @@ async function classifyTarget(
 		targetValueFingerprint: input.target.valueFingerprint,
 		sourceValueFingerprint,
 	});
-	return { findings, evidence };
+	return {
+		findings,
+		evidence,
+		change:
+			currentHead &&
+			(currentHead.value !== targetRow.value || targetRow.materialized)
+				? {
+						baselineRowId: targetRow._id,
+						localeId: targetRow.localeId,
+						localeCode: targetRow.localeCode,
+						isSource: false,
+						after: currentHead.value,
+					}
+				: null,
+	};
 }
 
 export const processStep = internalMutation({
@@ -509,7 +566,15 @@ export const processStep = internalMutation({
 			if (rows.length === 0) {
 				const completedAt = now();
 				const posture = releasePostureFor(preparation);
-				const assessment = releaseAssessmentFrom(preparation);
+				const assessment = {
+					...releaseAssessmentFrom(preparation),
+					...(preparation.changedKeyCount === undefined
+						? {}
+						: {
+								changedKeyCount: preparation.changedKeyCount,
+								changedValueCount: preparation.changedValueCount,
+							}),
+				};
 				await ctx.db.patch(record.handoffId, { status: "published" });
 				await ctx.db.delete(preparation._id);
 				await ctx.db.patch(record._id, {
@@ -527,6 +592,8 @@ export const processStep = internalMutation({
 				});
 			}
 			let deltaKeyCount = preparation.deltaKeyCount;
+			let changedKeyCount = preparation.changedKeyCount ?? 0;
+			let changedValueCount = preparation.changedValueCount ?? 0;
 			let scopeValueCount = preparation.scopeValueCount;
 			let blockedCount = preparation.blockedCount;
 			let needsDecisionCount = preparation.needsDecisionCount;
@@ -586,6 +653,26 @@ export const processStep = internalMutation({
 						message: "A Release Scope key exceeds the Locale envelope.",
 					});
 				}
+				const changes: Array<
+					Pick<
+						Doc<"releaseChangeValues">,
+						"baselineRowId" | "localeId" | "localeCode" | "isSource" | "after"
+					>
+				> = [];
+				const source = catalogRows.find((row) => row.isSource);
+				if (
+					source &&
+					sourceProposal &&
+					sourceProposal.sourceValue !== source.value
+				) {
+					changes.push({
+						baselineRowId: source._id,
+						localeId: source.localeId,
+						localeCode: source.localeCode,
+						isSource: true,
+						after: sourceProposal.sourceValue,
+					});
+				}
 				let keyHasFinding = false;
 				for (const target of digest.targets) {
 					const summary =
@@ -602,6 +689,7 @@ export const processStep = internalMutation({
 						),
 						sourceProposal,
 					});
+					if (result.change) changes.push(result.change);
 					const contribution = releaseTargetContribution({
 						findings: result.findings,
 						evidence: result.evidence,
@@ -654,6 +742,24 @@ export const processStep = internalMutation({
 					}
 					localeSummaries.set(target.localeId, summary);
 				}
+				if (record.changedKeyCount !== undefined && changes.length > 0) {
+					await ctx.db.insert("releaseChangeKeys", {
+						recordId: record._id,
+						catalogIndex: digest.catalogIndex,
+						messageId: digest.messageId,
+						changedValueCount: changes.length,
+						sourceChanged: changes.some((change) => change.isSource),
+						localeCodes: changes.map((change) => change.localeCode).sort(),
+					});
+					for (const change of changes)
+						await ctx.db.insert("releaseChangeValues", {
+							recordId: record._id,
+							messageId: digest.messageId,
+							...change,
+						});
+					changedKeyCount++;
+					changedValueCount += changes.length;
+				}
 				if (keyHasFinding) {
 					const key = {
 						projectId: record.projectId,
@@ -680,16 +786,21 @@ export const processStep = internalMutation({
 				break;
 			}
 			const updatedAt = now();
-			const assessment = releaseAssessmentFrom({
-				deltaKeyCount,
-				scopeValueCount,
-				blockedCount,
-				needsDecisionCount,
-				intentionalBlankCount,
-				sourceIdenticalCount,
-				unconfirmedImportCount,
-				localeSummaries: sortedLocaleSummaries(localeSummaries),
-			});
+			const assessment = {
+				...releaseAssessmentFrom({
+					deltaKeyCount,
+					scopeValueCount,
+					blockedCount,
+					needsDecisionCount,
+					intentionalBlankCount,
+					sourceIdenticalCount,
+					unconfirmedImportCount,
+					localeSummaries: sortedLocaleSummaries(localeSummaries),
+				}),
+				...(record.changedKeyCount === undefined
+					? {}
+					: { changedKeyCount, changedValueCount }),
+			};
 			await ctx.db.patch(record.handoffId, {
 				keyCount: handoffKeyCount,
 				byteLength: handoffByteLength,
@@ -1048,6 +1159,178 @@ export const handoff = query({
 				catalogIndex,
 				messageId,
 			})),
+		};
+	},
+});
+
+async function requireCapturedChanges(
+	ctx: QueryCtx,
+	recordId: Id<"releaseRecords">,
+) {
+	const record = await ctx.db.get(recordId);
+	if (!record)
+		throw new ConvexError({
+			code: "NOT_FOUND",
+			message: "Release report not found.",
+		});
+	await requireViewer(ctx, record.projectId);
+	assertPublishedEvidence(record);
+	if (record.changedKeyCount === undefined)
+		throw new ConvexError({
+			code: "INCOMPLETE",
+			message:
+				"This report predates saved string changes. Prepare a new release report to inspect its changes.",
+		});
+	return record;
+}
+
+function assertChangePageSize(size: number) {
+	if (
+		!Number.isSafeInteger(size) ||
+		size < 1 ||
+		size > MAX_RELEASE_DETAIL_PAGE
+	) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Release changes pagination is invalid.",
+		});
+	}
+}
+
+/** Compact frozen keys first; exact value bytes are loaded only on expansion.
+ * Filters can produce sparse pages, so callers continue until isDone. */
+export const changes = query({
+	args: {
+		recordId: v.id("releaseRecords"),
+		paginationOpts: paginationOptsValidator,
+		q: v.optional(v.string()),
+		localeCode: v.optional(v.string()),
+	},
+	returns: v.object({
+		page: v.array(
+			v.object({
+				_id: v.id("releaseChangeKeys"),
+				messageId: v.string(),
+				catalogIndex: v.number(),
+				changedValueCount: v.number(),
+				sourceChanged: v.boolean(),
+				localeCodes: v.array(v.string()),
+			}),
+		),
+		continueCursor: v.string(),
+		isDone: v.boolean(),
+	}),
+	handler: async (ctx, args) => {
+		await requireCapturedChanges(ctx, args.recordId);
+		assertChangePageSize(args.paginationOpts.numItems);
+		if ((args.q?.length ?? 0) > 512 || (args.localeCode?.length ?? 0) > 80)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "Release changes filter is too long.",
+			});
+		const queryText = args.q?.trim().toLowerCase();
+		const page = await ctx.db
+			.query("releaseChangeKeys")
+			.withIndex("by_recordId_and_catalogIndex", (q) =>
+				q.eq("recordId", args.recordId),
+			)
+			.paginate({ ...args.paginationOpts, maximumBytesRead: 256 * 1024 });
+		return {
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			page: page.page
+				.filter(
+					(row) =>
+						(!queryText || row.messageId.toLowerCase().includes(queryText)) &&
+						(!args.localeCode || row.localeCodes.includes(args.localeCode)),
+				)
+				.map(
+					({
+						_id,
+						messageId,
+						catalogIndex,
+						changedValueCount,
+						sourceChanged,
+						localeCodes,
+					}) => ({
+						_id,
+						messageId,
+						catalogIndex,
+						changedValueCount,
+						sourceChanged,
+						localeCodes,
+					}),
+				),
+		};
+	},
+});
+
+export const changeValues = query({
+	args: {
+		recordId: v.id("releaseRecords"),
+		messageId: v.string(),
+		paginationOpts: paginationOptsValidator,
+		localeCode: v.optional(v.string()),
+	},
+	returns: v.object({
+		page: v.array(
+			v.object({
+				_id: v.id("releaseChangeValues"),
+				localeId: v.id("locales"),
+				localeCode: v.string(),
+				isSource: v.boolean(),
+				before: v.union(v.string(), v.null()),
+				after: v.string(),
+			}),
+		),
+		continueCursor: v.string(),
+		isDone: v.boolean(),
+	}),
+	handler: async (ctx, args) => {
+		const record = await requireCapturedChanges(ctx, args.recordId);
+		assertChangePageSize(args.paginationOpts.numItems);
+		const page = await ctx.db
+			.query("releaseChangeValues")
+			.withIndex("by_recordId_and_messageId_and_localeCode", (q) => {
+				const key = q
+					.eq("recordId", args.recordId)
+					.eq("messageId", args.messageId);
+				return args.localeCode === undefined
+					? key
+					: key.eq("localeCode", args.localeCode);
+			})
+			.paginate({
+				...args.paginationOpts,
+				numItems: Math.min(args.paginationOpts.numItems, 8),
+				maximumBytesRead: 512 * 1024,
+			});
+		const values = await Promise.all(
+			page.page.map(async (row) => {
+				const baseline = await ctx.db.get(row.baselineRowId);
+				if (
+					!baseline ||
+					baseline.projectionId !== record.projectionId ||
+					baseline.messageId !== row.messageId ||
+					baseline.localeId !== row.localeId
+				)
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "Release change lost its immutable baseline value.",
+					});
+				return {
+					_id: row._id,
+					localeId: row.localeId,
+					localeCode: row.localeCode,
+					isSource: row.isSource,
+					before: baseline.materialized ? null : baseline.value,
+					after: row.after,
+				};
+			}),
+		);
+		return {
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			page: values,
 		};
 	},
 });
