@@ -9,14 +9,34 @@ type CatalogIdentity = {
 };
 type Origin = Id<"catalogProjections"> | undefined;
 
-/** A prepared cohort belongs to one navigation generation. Never substitute an
- * empty result while its historical membership is still being reconstructed. */
+/** New navigation generations inherit the immutable origin registry. Reuse a
+ * finished index only when it completed before staging that projection began;
+ * preparation overlapping staging may still need to stamp missing rows. */
+export function originIndexReadyForProjection(
+	index: Doc<"snapshotOriginIndexes"> | null,
+	projection: Pick<
+		Doc<"catalogProjections">,
+		"_id" | "createdAt" | "projectId" | "status"
+	> | null,
+) {
+	return Boolean(
+		index?.status === "ready" &&
+			projection?.status === "published" &&
+			projection.projectId === index.projectId &&
+			(index.projectionId === projection._id ||
+				index.updatedAt < projection.createdAt),
+	);
+}
+
+/** Never substitute an empty result while historical membership is still being
+ * reconstructed. Completed origins survive subsequent catalog publications. */
 export async function preparedOrigins(
 	ctx: QueryCtx,
 	args: CatalogIdentity & {
 		introducedSnapshotIds?: Id<"sourceSnapshots">[];
 		introducedOriginUnknown?: boolean;
 	},
+	projection: Doc<"catalogProjections">,
 ): Promise<Origin[] | null> {
 	const selected = args.introducedSnapshotIds ?? [];
 	if (args.introducedOriginUnknown && selected.length)
@@ -39,7 +59,7 @@ export async function preparedOrigins(
 				q.eq("projectId", args.projectId).eq("snapshotId", snapshotId),
 			)
 			.unique();
-		if (state?.status !== "ready" || state.projectionId !== args.projectionId)
+		if (!state || !originIndexReadyForProjection(state, projection))
 			throw new ConvexError({
 				code: "FILTER_NOT_READY",
 				message:
@@ -78,6 +98,14 @@ export async function originPageBatch(
 	origins: Origin[],
 	after: number,
 ) {
+	// A single selected snapshot needs no merge: native pagination fetches the
+	// bounded cohort in one database call rather than one iterator call per key.
+	if (origins.length === 1)
+		return originRows(ctx, args, origins[0], after).paginate({
+			cursor: null,
+			numItems: 64,
+			maximumBytesRead: 512 * 1024,
+		});
 	const streams = origins.map((origin) =>
 		originRows(ctx, args, origin, after)[Symbol.asyncIterator](),
 	);

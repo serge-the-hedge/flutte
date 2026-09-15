@@ -16,7 +16,7 @@ when a product decision changes.
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
 | Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
-| Snapshot filtering and translation history | Named, date-ordered introduction picker; inline applied-value history; automatic, bounded indexing of older introduction links |
+| Snapshot filtering and value history | Named, date-ordered introduction picker; source and target history; bounded, reusable introduction indexes; Changed in Git review focus |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
 | Project types and shared Dictionaries | Basic/Repository projects with stable navigation, shared terminology, plain-text authoring and downloads; existing collection promotion preserves history. See [Projects and Dictionaries](../projects-and-dictionaries.md) |
 

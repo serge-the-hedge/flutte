@@ -40,9 +40,11 @@ test("browses selected language pages and searches beyond an empty scanned page"
 				...Object.fromEntries(
 					Array.from({ length: 80 }, (_, index) => [
 						`message${index}`,
-						code === "ja" && index === 79
-							? "見つける"
-							: `${code} value ${index}`,
+						code === "ja" && index === 2
+							? "See message79 for more"
+							: code === "ja" && index === 79
+								? "見つける"
+								: `${code} value ${index}`,
 					]),
 				),
 			}),
@@ -103,6 +105,7 @@ test("browses selected language pages and searches beyond an empty scanned page"
 			stale: 0,
 			settled: 0,
 			introduced: 0,
+			changedInGit: 0,
 		});
 		const first = await owner.query(api.catalogBrowse.page, args);
 		expect(first.keys).toHaveLength(32);
@@ -117,6 +120,26 @@ test("browses selected language pages and searches beyond an empty scanned page"
 			after: first.nextAfter ?? -1,
 		});
 		expect(second.keys[0]?.messageId).toBe("message32");
+		// Known identifiers must be immediately usable, even at the end of a catalog.
+		const exact = await owner.query(api.catalogBrowse.page, {
+			...args,
+			q: "message79",
+		});
+		expect(exact.keys.map((key) => key.messageId)).toEqual(["message79"]);
+		expect(exact.nextAfter).toBe(-1);
+		const otherMatches = await owner.query(api.catalogBrowse.page, {
+			...args,
+			q: "message79",
+			after: exact.nextAfter ?? undefined,
+		});
+		expect(otherMatches.keys.map((key) => key.messageId)).toEqual(["message2"]);
+		const lastMatches = await owner.query(api.catalogBrowse.page, {
+			...args,
+			q: "message79",
+			after: otherMatches.nextAfter ?? undefined,
+		});
+		expect(lastMatches.keys).toEqual([]);
+		expect(lastMatches.nextAfter).toBeNull();
 		const emptySearch = await owner.query(api.catalogBrowse.page, {
 			...args,
 			q: "見つける",
@@ -155,6 +178,36 @@ test("browses selected language pages and searches beyond an empty scanned page"
 		});
 		expect(sourceMatch.keys.map((key) => key.messageId)).toEqual(["message79"]);
 		expect(sourceMatch.keys[0]?.targets).toEqual([]);
+		const target = cards[0]?.values.find((value) => !value.isSource);
+		if (!target?.gitValueFingerprint)
+			throw new Error("Missing editable target");
+		await owner.mutation(api.catalogWorkspace.commit, {
+			projectId,
+			messageId: "message79",
+			localeId: ja,
+			intent: { kind: "save", value: "新しい検索語" },
+			expectedGitValueFingerprint: target.gitValueFingerprint,
+			expectedGitValueRevision: target.gitValueRevision,
+			expectedWorkspaceRevision: target.workspaceRevision,
+			expectedSourceFingerprint: target.expectedSourceFingerprint,
+		});
+		for (const [q, expected] of [
+			["見つける", []],
+			["検索語", ["message79"]],
+		] as const) {
+			const found: string[] = [];
+			let after: number | undefined;
+			do {
+				const page = await owner.query(api.catalogBrowse.page, {
+					...args,
+					q,
+					after,
+				});
+				found.push(...page.keys.map((key) => key.messageId));
+				after = page.nextAfter ?? undefined;
+			} while (after !== undefined);
+			expect(found).toEqual(expected);
+		}
 		const unbound = await owner.mutation(api.locales.create, {
 			projectId,
 			code: "it",
@@ -277,10 +330,10 @@ test("searches any selected language and resumes a large key without dropping or
 					"@@locale": code,
 					z_first:
 						code === "en"
-							? "Source"
+							? "Source ".repeat(32_000)
 							: code === "zh"
 								? "needle"
-								: `${code} ${"x".repeat(100_000)}`,
+								: `${code} ${"x".repeat(240_000)}`,
 					a_second: code === "zh" ? "needle too" : `${code} other`,
 				}),
 			})),

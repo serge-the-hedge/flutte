@@ -57,7 +57,7 @@ test("prepared snapshot cohorts skip unrelated keys and merge in current catalog
 		return result.snapshotId;
 	}
 	const original = Array.from({ length: 80 }, (_, index) => `original${index}`);
-	await ingest("first", original);
+	const first = await ingest("first", original);
 	const second = await ingest(
 		"second",
 		[...original, "lateA", "lateB"],
@@ -82,7 +82,7 @@ test("prepared snapshot cohorts skip unrelated keys and merge in current catalog
 		}),
 	).rejects.toThrow("Snapshot filtering is still being prepared");
 	// This fixture exercises the read plan independently of the preparation job.
-	for (const snapshotId of [second, third])
+	for (const snapshotId of [first, second, third])
 		await t.run(async (ctx) => {
 			const origin = await ctx.db
 				.query("catalogProjections")
@@ -107,6 +107,22 @@ test("prepared snapshot cohorts skip unrelated keys and merge in current catalog
 				updatedAt: Date.now(),
 			});
 		});
+	const firstPage = await owner.query(api.catalogBrowse.page, {
+		...args,
+		introducedSnapshotIds: [first],
+	});
+	const pagedKeys = firstPage.keys.map((key) => key.messageId);
+	let nextAfter = firstPage.nextAfter;
+	while (nextAfter !== null) {
+		const nextPage = await owner.query(api.catalogBrowse.page, {
+			...args,
+			introducedSnapshotIds: [first],
+			after: nextAfter,
+		});
+		pagedKeys.push(...nextPage.keys.map((key) => key.messageId));
+		nextAfter = nextPage.nextAfter;
+	}
+	expect(pagedKeys).toEqual(original);
 	const sparse = await owner.query(api.catalogBrowse.page, {
 		...args,
 		introducedSnapshotIds: [third],

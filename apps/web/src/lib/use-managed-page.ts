@@ -8,10 +8,15 @@ type PageArgs = Omit<FunctionArgs<typeof api.managedContent.page>, "limit">;
 type Page = FunctionReturnType<typeof api.managedContent.page>;
 
 /** Empty native scans stay private to a logical page; oversized reads retry with fewer rows. */
-export function useManagedPage(input: PageArgs, onStaleCursor?: () => void) {
-	const key = JSON.stringify(input);
+export function useManagedPage(
+	input: PageArgs,
+	onStaleCursor?: () => void,
+	sourceRevision?: string | null,
+) {
+	const argsKey = JSON.stringify(input);
+	const key = JSON.stringify([argsKey, sourceRevision]);
 	const scope = JSON.stringify([input.projectId, input.collectionId]);
-	const args = useMemo(() => JSON.parse(key) as PageArgs, [key]);
+	const args = useMemo(() => JSON.parse(argsKey) as PageArgs, [argsKey]);
 	const [size, setSize] = useState({ scope, limit: 16 });
 	const limit = size.scope === scope ? size.limit : 16;
 	const [scan, setScan] = useState<{ key: string; cursor: string } | null>(

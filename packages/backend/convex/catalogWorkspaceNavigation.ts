@@ -110,6 +110,8 @@ export type CatalogWorkspaceNavigationTargetDigest = {
 	gitValueFingerprint?: string;
 	/** This Locale is still inside the key's post-bootstrap First Review. */
 	firstReviewPending: boolean;
+	/** Existing Git copy has changed and still needs a target decision. */
+	changedInGitPending?: boolean;
 };
 
 export type CatalogWorkspaceNavigationDigest = {
@@ -126,6 +128,8 @@ export type CatalogWorkspaceNavigationDigest = {
 	source: {
 		localeId: Id<"locales">;
 		gitValueFingerprint: string;
+		/** Visible source identity, including a pending proposal. */
+		valueFingerprint?: string;
 	};
 	targets: CatalogWorkspaceNavigationTargetDigest[];
 };
@@ -280,6 +284,11 @@ export async function deriveNavigationDigest(input: {
 			decision,
 			previousConfirmation,
 			currentSourceFingerprint: decisionSourceFingerprint,
+			valueSourceFingerprint:
+				pendingSourceProposalFingerprint === undefined ||
+				effective.sourceFingerprint === targetRow.sourceFingerprint
+					? effective.sourceFingerprint
+					: undefined,
 		});
 		const exactGitDecision =
 			targetRow.gitValueFingerprint !== undefined &&
@@ -320,6 +329,10 @@ export async function deriveNavigationDigest(input: {
 				? {}
 				: { gitValueFingerprint: targetRow.gitValueFingerprint }),
 			firstReviewPending: pendingIntroductionLocales.has(targetRow.localeId),
+			changedInGitPending:
+				((sourceRow.gitValueRevision ?? 0) > 0 ||
+					(targetRow.gitValueRevision ?? 0) > 0) &&
+				valueState.valueState !== "settled",
 		});
 		if (!input.compactSearchCorpus) searchCorpus.add(foldCase(effective.value));
 	}
@@ -338,6 +351,8 @@ export async function deriveNavigationDigest(input: {
 		source: {
 			localeId: sourceRow.localeId,
 			gitValueFingerprint: gitSourceValueFingerprint,
+			valueFingerprint:
+				pendingSourceProposalFingerprint ?? gitSourceValueFingerprint,
 		},
 		targets,
 	};
@@ -357,7 +372,7 @@ const ORDINARY_IMPORT_COUNT_FIELDS = [
 ] as const satisfies readonly (keyof OrdinaryImportConfirmationCounts)[];
 
 /** Bump when the meaning of persisted ordinary-import categories changes. */
-export const ORDINARY_IMPORT_POLICY_VERSION = 3;
+export const ORDINARY_IMPORT_POLICY_VERSION = 4;
 
 export function backfillStepIsPending(
 	state: Pick<
@@ -451,6 +466,10 @@ export function ordinaryImportCountsForDigest(
 		}
 		if (digest.pendingSourceProposal) {
 			counts.pendingSourceProposal++;
+			continue;
+		}
+		if (target.valueState === "stale") {
+			counts.stale++;
 			continue;
 		}
 		if (digest.introductionReviewPending > 0) {
@@ -768,6 +787,7 @@ function navigationRowMatchesDigest(
 			JSON.stringify(digest.searchCorpus) &&
 		current.source.localeId === digest.source.localeId &&
 		current.source.gitValueFingerprint === digest.source.gitValueFingerprint &&
+		current.source.valueFingerprint === digest.source.valueFingerprint &&
 		current.targets.length === digest.targets.length &&
 		current.targets.every((target, index) => {
 			const next = digest.targets[index];
@@ -780,6 +800,7 @@ function navigationRowMatchesDigest(
 				target.confirmedGitContent === next.confirmedGitContent &&
 				target.confirmedContentPreviously === next.confirmedContentPreviously &&
 				target.firstReviewPending === next.firstReviewPending &&
+				target.changedInGitPending === next.changedInGitPending &&
 				target.repeatedGitContent === next.repeatedGitContent &&
 				target.valueFingerprint === next.valueFingerprint &&
 				target.gitValueFingerprint === next.gitValueFingerprint
@@ -2235,6 +2256,7 @@ const navigationTargetDigestValidator = v.object({
 	confirmedGitContent: v.boolean(),
 	confirmedContentPreviously: v.boolean(),
 	firstReviewPending: v.boolean(),
+	changedInGitPending: v.optional(v.boolean()),
 	repeatedGitContent: v.optional(v.boolean()),
 	gitValueFingerprint: v.optional(v.string()),
 });
@@ -2249,6 +2271,7 @@ const navigationDigestValidator = v.object({
 	source: v.object({
 		localeId: v.id("locales"),
 		gitValueFingerprint: v.string(),
+		valueFingerprint: v.optional(v.string()),
 	}),
 	targets: v.array(navigationTargetDigestValidator),
 });

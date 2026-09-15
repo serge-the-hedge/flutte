@@ -50,11 +50,12 @@ describe("inline translation history", () => {
 		watch.mockRestore();
 		await client.close();
 	});
-	async function render() {
+	async function render(isSource = false) {
 		await dom.render(
 			<ConvexProvider client={client}>
 				<TranslationHistoryRow
 					projectId="project"
+					isSource={isSource}
 					messageId="greeting"
 					messageLabel="greeting"
 					localeId="fr-id"
@@ -106,6 +107,18 @@ describe("inline translation history", () => {
 		expect(document.activeElement).toBe(button(label));
 		expect(dom.container.querySelector("textarea")).toBe(editor);
 	});
+	test("opens source history through the same on-demand panel", async () => {
+		await render(true);
+		expect(watch).not.toHaveBeenCalled();
+		await click("History of greeting in fr");
+		expect(dom.container.textContent).toContain("Source history");
+		expect(dom.container.textContent).not.toContain("Translation history");
+		expect(watch.mock.calls.at(-1)?.[1]).toMatchObject({
+			messageId: "greeting",
+			localeId: "fr-id",
+		});
+	});
+
 	test("copies the retained bytes, including an intentional blank", async () => {
 		const previousClipboard = Object.getOwnPropertyDescriptor(
 			navigator,

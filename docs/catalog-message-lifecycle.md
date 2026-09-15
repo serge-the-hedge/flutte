@@ -119,13 +119,18 @@ permission, concurrency, and evidence contract.
 | Contract invalid | **Blocked** | Repair the value or Source Contract |
 | No target content and no Intentional Blank | **Waiting** | Write a value or record a reasoned blank |
 | Current non-empty content lacks exact confirmation | **Unconfirmed Import** | Approve unchanged or edit and save |
-| Confirmed content answers older semantic source | **Source changed** | Confirm it remains correct or edit and save |
-| Confirmed content answers older cosmetic source | Quiet source-change mark | Optional review |
+| Content answers older semantic source | **Source changed** | Confirm it remains correct or edit and save |
+| Content answers older cosmetic source | Quiet source-change mark | Optional review |
 | Exact current confirmation or valid Intentional Blank | Settled and silent | None |
 | A frozen-scope Locale still lacks First Review | **New from Git** on the key | Complete deliberate First Review |
 
 **New from Git** is key-level provenance layered over ordinary per-value states;
 it never replaces Waiting, Unconfirmed Import, or Stale Translation.
+**Changed in Git** includes existing keys whose Source or target changed in Git
+and whose selected targets still need review. It survives unrelated snapshots
+and clears when the applicable values settle. A simultaneous Source/target import
+can be current but unconfirmed: it belongs here and in Unconfirmed, not Source
+changed. Source currency does not require a previous confirmation.
 
 Identical text on unrelated keys is ordinary reuse. Identical target text across
 different Locales of one key remains suspicious and is excluded from ordinary
@@ -204,18 +209,36 @@ restoration preserve it. Optional snapshot names are editable labels, not part
 of Snapshot Identity, and snapshot choices remain ordered by ingestion date.
 
 Selecting an older snapshot automatically prepares its filter index in bounded
-batches, with progress and retry on failure. Only immutable catalog and archive
+batches, with progress and retry on failure. Completed indexes carry forward to
+later projections; preparation overlapping staging may require a bounded rebuild. Only immutable catalog and archive
 evidence can establish origins. This disposable index changes no values,
 confirmations, or First Review scope. Missing evidence leaves the origin unknown;
 **Introduction unavailable** shows keys whose origin is not yet established.
 
-Per-target history is read-only and loads on demand. Repository history merges
-append-only applied workspace decisions with changed values observed along the
-accepted projection chain. Basic projects reuse their immutable target
-revisions. Private candidates stay in their translation task until accepted.
+Source and target history are read-only and load on demand. Repository history
+merges saved Source Proposals and applied target decisions with changed values
+observed along the accepted projection chain. Source Proposals are labelled as
+proposals, not Git observations. Basic projects reuse immutable source and target
+revisions. Private translation candidates stay in their task until accepted.
 Git observations do not prove application release. Surviving older workspace
-heads are retained before replacement; overwritten edits that predate history
-recording remain unavailable and are labelled as such.
+heads are retained before replacement; overwritten edits and Source Proposal
+drafts that predate history recording remain unavailable and are labelled as such.
+
+Strings search preserves literal, case-insensitive matching, including unspaced
+scripts. Repository search covers keys, effective Source, and selected targets;
+Basic search covers names, identifiers, and Source (as its placeholder states).
+A complete repository identifier returns its indexed exact match first; Next
+continues other literal matches without repeating it. General text discovery is
+bounded and may require several scans. It reads visible text before full editing
+context. Search input waits briefly for a typing pause; Enter and clearing apply
+immediately.
+
+Repeated repository searches retain only bounded scan positions, keyed by catalog
+and tag revisions and all filters. Returned values remain live subscriptions.
+Completed focus counts use the same revision boundaries. Source Proposal edits
+advance the catalog revision; Basic source revisions restart sparse searches.
+Changing filters resets paging, while snapshot choices remain subscribed after
+the picker first opens. No persistent browser copy of the catalog is required.
 
 ## Compatibility note
 

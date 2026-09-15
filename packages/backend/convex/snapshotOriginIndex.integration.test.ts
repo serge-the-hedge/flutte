@@ -139,6 +139,7 @@ test("automatic origins survive edits and generation replacement without alterin
 		origins.find(([messageId]) => messageId === "existing")?.[1],
 	);
 
+	const completedIndex = await t.run(async (ctx) => ctx.db.get(original._id));
 	await ingest("third", ["existing", "added"], "later");
 	const next = await owner.query(api.catalogBrowse.overview, { projectId });
 	if (next.kind !== "ready") throw new Error("No catalog");
@@ -150,7 +151,13 @@ test("automatic origins survive edits and generation replacement without alterin
 				snapshotIds: [initial],
 			})
 		).ready,
-	).toBe(false);
+	).toBe(true);
+	const inheritedPage = await owner.query(api.catalogBrowse.page, {
+		projectId,
+		projectionId: next.projectionId,
+		introducedSnapshotIds: [initial],
+	});
+	expect(inheritedPage.keys.map((key) => key.messageId)).toEqual(["existing"]);
 	await owner.mutation(api.snapshotOriginIndex.prepare, {
 		projectId,
 		projectionId: next.projectionId,
@@ -160,15 +167,9 @@ test("automatic origins survive edits and generation replacement without alterin
 		indexId: original._id,
 		jobId: original.jobId,
 	});
-	expect(
-		(
-			await owner.query(api.snapshotOriginIndex.status, {
-				projectId,
-				projectionId: next.projectionId,
-				snapshotIds: [initial],
-			})
-		).ready,
-	).toBe(false);
+	expect(await t.run(async (ctx) => ctx.db.get(original._id))).toEqual(
+		completedIndex,
+	);
 	await t.finishAllScheduledFunctions(vi.runAllTimers);
 	const rows = await t.run(async (ctx) =>
 		ctx.db
@@ -188,6 +189,65 @@ test("automatic origins survive edits and generation replacement without alterin
 			})
 		).ready,
 	).toBe(true);
+});
+
+test("origin preparation overlapping projection staging must finish for that generation", async () => {
+	const { t, owner, projectId, ingest } = await setup();
+	const snapshotId = await ingest("first", ["existing"]);
+	const first = await owner.query(api.catalogBrowse.overview, { projectId });
+	if (first.kind !== "ready") throw new Error("No catalog");
+	await owner.mutation(api.snapshotOriginIndex.prepare, {
+		projectId,
+		projectionId: first.projectionId,
+		snapshotId,
+	});
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
+	await ingest("second", ["existing"], "first");
+	const second = await owner.query(api.catalogBrowse.overview, { projectId });
+	if (second.kind !== "ready") throw new Error("No catalog");
+	await t.run(async (ctx) => {
+		const index = await ctx.db.query("snapshotOriginIndexes").first();
+		if (!index) throw new Error("No origin index");
+		// Model a generation whose rows were staged before preparation completed.
+		await ctx.db.patch(second.projectionId, { createdAt: index.updatedAt });
+		const row = await ctx.db
+			.query("catalogWorkspaceNavigationRows")
+			.withIndex("by_project_and_projection_and_messageId", (q) =>
+				q
+					.eq("projectId", projectId)
+					.eq("projectionId", second.projectionId)
+					.eq("messageId", "existing"),
+			)
+			.unique();
+		if (!row) throw new Error("No navigation row");
+		await ctx.db.patch(row._id, { firstSeenProjectionId: undefined });
+	});
+	const selection = {
+		projectId,
+		projectionId: second.projectionId,
+		introducedSnapshotIds: [snapshotId],
+	};
+	expect(
+		await owner.query(api.snapshotOriginIndex.status, {
+			projectId,
+			projectionId: second.projectionId,
+			snapshotIds: [snapshotId],
+		}),
+	).toMatchObject({ ready: false });
+	await expect(owner.query(api.catalogBrowse.page, selection)).rejects.toThrow(
+		"Snapshot filtering is still being prepared",
+	);
+	await owner.mutation(api.snapshotOriginIndex.prepare, {
+		projectId,
+		projectionId: second.projectionId,
+		snapshotId,
+	});
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
+	expect(
+		(await owner.query(api.catalogBrowse.page, selection)).keys.map(
+			(key) => key.messageId,
+		),
+	).toEqual(["existing"]);
 });
 
 test("small legacy catalogs prepare in bounded 128-key batches", async () => {

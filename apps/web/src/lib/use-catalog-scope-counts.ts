@@ -18,6 +18,7 @@ export function useCatalogScopeCounts(
 ): Counts | undefined {
 	const convex = useConvex();
 	const requestKey = JSON.stringify(input);
+	const [completed] = useState(() => new Map<string, Counts>());
 	const [result, setResult] = useState<{
 		requestKey: string;
 		counts?: Counts;
@@ -25,7 +26,7 @@ export function useCatalogScopeCounts(
 	}>();
 	useEffect(() => {
 		const args = JSON.parse(requestKey) as CountArgs | "skip";
-		if (args === "skip") return;
+		if (args === "skip" || completed.has(requestKey)) return;
 		let cancelled = false;
 		async function scan(args: CountArgs) {
 			const totals: Counts = {
@@ -34,6 +35,7 @@ export function useCatalogScopeCounts(
 				stale: 0,
 				settled: 0,
 				introduced: 0,
+				changedInGit: 0,
 			};
 			let cursor: string | undefined;
 			do {
@@ -48,7 +50,14 @@ export function useCatalogScopeCounts(
 					throw new Error("Catalog counts did not advance their scan cursor.");
 				cursor = page.cursor ?? undefined;
 			} while (cursor !== undefined);
-			if (!cancelled) setResult({ requestKey, counts: totals });
+			if (!cancelled) {
+				completed.set(requestKey, totals);
+				if (completed.size > 16) {
+					const oldest = completed.keys().next().value;
+					if (oldest !== undefined) completed.delete(oldest);
+				}
+				setResult({ requestKey, counts: totals });
+			}
 		}
 		void scan(args).catch((error) => {
 			if (!cancelled) setResult({ requestKey, error });
@@ -56,7 +65,9 @@ export function useCatalogScopeCounts(
 		return () => {
 			cancelled = true;
 		};
-	}, [convex, requestKey]);
+	}, [convex, completed, requestKey]);
+	const cached = completed.get(requestKey);
+	if (cached) return cached;
 	if (result?.requestKey !== requestKey) return undefined;
 	if (result.error) throw result.error;
 	return result.counts;

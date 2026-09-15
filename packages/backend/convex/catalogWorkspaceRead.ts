@@ -217,10 +217,13 @@ export async function readWorkspaceTargetEvidence(
 		latestDecision?.kind === "translatorConfirmation"
 			? latestDecision
 			: undefined;
+	const previousSourceFingerprint =
+		previousConfirmation?.sourceFingerprint ??
+		effectiveTarget.sourceFingerprint;
 	let sourceChangeKind: "cosmetic" | "semantic" | undefined;
 	if (
-		previousConfirmation &&
-		previousConfirmation.sourceFingerprint !== decisionSourceFingerprint
+		!current.pendingSourceProposal &&
+		previousSourceFingerprint !== decisionSourceFingerprint
 	) {
 		const changes = await ctx.db
 			.query("catalogProjectionGitChanges")
@@ -233,7 +236,7 @@ export async function readWorkspaceTargetEvidence(
 			.take(2);
 		sourceChangeKind = sourceChangeKindForConfirmation({
 			messageId: target.messageId,
-			confirmedSourceFingerprint: previousConfirmation.sourceFingerprint,
+			confirmedSourceFingerprint: previousSourceFingerprint,
 			currentSourceFingerprint: decisionSourceFingerprint,
 			sourceChangesByIdentity: sourceChangeMap(changes),
 		});
@@ -270,6 +273,11 @@ export async function readWorkspaceTargetEvidence(
 			decision,
 			previousConfirmation,
 			currentSourceFingerprint: decisionSourceFingerprint,
+			valueSourceFingerprint:
+				!current.pendingSourceProposal ||
+				effectiveTarget.sourceFingerprint === target.sourceFingerprint
+					? effectiveTarget.sourceFingerprint
+					: undefined,
 			sourceChangeKind,
 		}),
 		confirmation: decision

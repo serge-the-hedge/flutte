@@ -429,24 +429,23 @@ export async function readManagedPage(
 		)
 		.order("asc")
 		.paginate({ cursor, numItems: limit, maximumRowsRead: 16 });
-	const tagMatches = new Set<string>();
-	for (const source of page.page)
+	const matching = [];
+	for (const source of page.page) {
+		if (
+			source.archivedAt !== undefined ||
+			(q.length > 0 &&
+				!source.key.toLowerCase().includes(q) &&
+				!(managedMessageName(source)?.toLowerCase().includes(q) ?? false) &&
+				!source.sourceValue.toLowerCase().includes(q))
+		)
+			continue;
 		if (
 			await matchesMessageTags(ctx, { ...input, messageId: source.key }, tags)
 		)
-			tagMatches.add(source.key);
+			matching.push(source);
+	}
 	const items = await Promise.all(
-		page.page
-			.filter(
-				(row) =>
-					row.archivedAt === undefined &&
-					tagMatches.has(row.key) &&
-					(q.length === 0 ||
-						row.key.toLowerCase().includes(q) ||
-						(managedMessageName(row)?.toLowerCase().includes(q) ?? false) ||
-						row.sourceValue.toLowerCase().includes(q)),
-			)
-			.map((source) => sourceEntry(ctx, source)),
+		matching.map((source) => sourceEntry(ctx, source)),
 	);
 	const result = {
 		items,
@@ -603,6 +602,23 @@ export async function exportManagedSelection(
 		fail("LIMIT_EXCEEDED", "Download exceeds 1 MiB. Select fewer values.");
 	return result;
 }
+/** A lightweight source/name/archive change signal for filtered browse scans. */
+export const revision = query({
+	args: addressFields,
+	returns: v.union(v.id("managedSourceRevisions"), v.null()),
+	handler: async (ctx, args) => {
+		await requireViewer(ctx, args.projectId);
+		await requireManagedCollection(ctx, args.projectId, args.collectionId);
+		const latest = await ctx.db
+			.query("managedSourceRevisions")
+			.withIndex("by_collection", (index) =>
+				index.eq("collectionId", args.collectionId),
+			)
+			.order("desc")
+			.first();
+		return latest?._id ?? null;
+	},
+});
 export const page = query({
 	args: {
 		...addressFields,

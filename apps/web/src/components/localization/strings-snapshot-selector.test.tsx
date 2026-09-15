@@ -22,9 +22,15 @@ describe("snapshot selection", () => {
 	const newer = snapshot("newer", 1788940800000, "New onboarding");
 	const older = snapshot("older", 1788854400000);
 	const linked = snapshot("linked", 1788768000000, "Old selected snapshot");
+	const listeners = new Set<() => void>();
 	const watch = spyOn(client, "watchQuery").mockImplementation(
 		(query, args) => ({
-			onUpdate: () => () => {},
+			onUpdate: (callback) => {
+				listeners.add(callback);
+				return () => {
+					listeners.delete(callback);
+				};
+			},
 			localQueryResult: () =>
 				(getFunctionName(query) === "snapshotCatalog:getSelected"
 					? [newer, older, linked].filter((s) =>
@@ -40,7 +46,10 @@ describe("snapshot selection", () => {
 			journal: () => undefined,
 		}),
 	);
-	beforeEach(() => watch.mockClear());
+	beforeEach(() => {
+		watch.mockClear();
+		older.name = null;
+	});
 	afterAll(async () => {
 		watch.mockRestore();
 		await client.close();
@@ -101,6 +110,59 @@ describe("snapshot selection", () => {
 		);
 		await clickText("All snapshots");
 		expect(dom.container.querySelector("output")?.textContent).toBe('"all"');
+	});
+	test("keeps loaded older snapshots live after closing and reopening", async () => {
+		await render();
+		await open();
+		await clickText("Older snapshots");
+		await open();
+		expect(listeners.size).toBeGreaterThan(0);
+		await act(async () => {
+			older.name = "Renamed older snapshot";
+			for (const listener of listeners) listener();
+		});
+		watch.mockClear();
+		await open();
+		expect(
+			[...document.querySelectorAll('[role="menuitemcheckbox"]')].some((row) =>
+				row.textContent?.includes("Renamed older snapshot"),
+			),
+		).toBe(true);
+		expect(
+			watch.mock.calls.filter(
+				([query]) => getFunctionName(query) === "snapshotCatalog:list",
+			),
+		).toHaveLength(0);
+	});
+	test("does not activate a new project's snapshot list until opened", async () => {
+		const view = (projectId: string) => (
+			<ConvexProvider client={client}>
+				<StringsSnapshotSelector
+					projectId={projectId}
+					value={undefined}
+					onChange={() => {}}
+				/>
+			</ConvexProvider>
+		);
+		await dom.render(view("first-project"));
+		await open();
+		await clickText("Older snapshots");
+		watch.mockClear();
+		await dom.render(view("second-project"));
+		expect(watch).not.toHaveBeenCalled();
+		expect(
+			dom.container.querySelector("button")?.getAttribute("aria-expanded"),
+		).toBe("false");
+		await open();
+		expect(
+			watch.mock.calls
+				.filter(([query]) => getFunctionName(query) === "snapshotCatalog:list")
+				.every(
+					([, args]) =>
+						args.projectId === "second-project" &&
+						args.paginationOpts.cursor === null,
+				),
+		).toBe(true);
 	});
 	test("resolves and removes a linked selection outside the loaded pages", async () => {
 		await render(["linked"]);

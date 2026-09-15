@@ -206,6 +206,21 @@ describe("Strings sparse browse pages", () => {
 			"returned-filter · logical position start",
 		);
 	});
+	test("revisits a resolved search without repeating its empty scans", async () => {
+		responses.set(identity("first", undefined), result(63));
+		responses.set(identity("first", 63), result(null, "known-match"));
+		responses.set(identity("second", undefined), result(null, "other-match"));
+		await dom.render(view("first", undefined, 1));
+		await dom.render(view("second", undefined, 1));
+		requests.length = 0;
+		await dom.render(view("first", undefined, 1));
+		expect(dom.container.textContent).toBe(
+			"known-match · logical position start",
+		);
+		expect(requests).not.toContainEqual({ q: "first", after: undefined });
+		expect(requests).toContainEqual({ q: "first", after: 63 });
+	});
+
 	test("settles on an exhausted empty result", async () => {
 		responses.set(identity("first", undefined), result(63));
 		responses.set(identity("first", 63), result(null));

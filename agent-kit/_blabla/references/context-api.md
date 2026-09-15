@@ -120,9 +120,10 @@ optional `localeCode`, optional `q`, and repeated `reason` values:
 - `sourceIdentical`: untouched imported target equals Source, with no pending
   Source Proposal;
 - `sameKeyRepeat`: two targets of the same key have equal untouched imports;
-- `stale`: a previously confirmed value's Source Contract changed.
+- `stale`: the target answers an older Source Contract;
+- `changedInGit`: changed Git source or target copy still needs review.
 
-Omitting `reason` includes all four. Items carry exact Source/target text and all
+Omitting `reason` includes all reasons. Items carry exact Source/target text and all
 applicable reasons. `q` checks the key, effective Source, and returned target,
 respecting `localeCode`; archived Locales are excluded. Reads use bounded
 Navigation ranges and at most 64 targets/2 MiB. Baseline changes invalidate the

@@ -162,6 +162,7 @@ export function ManagedStrings({
 	const tagOptions = useQuery(api.messageTags.list, {
 		projectId: address.projectId,
 	});
+	const sourceRevision = useQuery(api.managedContent.revision, address);
 	const page = useManagedPage(
 		{
 			...address,
@@ -172,6 +173,7 @@ export function ManagedStrings({
 			tagIds: search.tags?.map((id) => convexId<"tags">(id)),
 		},
 		() => onSearch({ ...search, cursor: undefined }),
+		sourceRevision,
 	);
 	const tagMembership = useQuery(
 		api.messageTags.forMessages,

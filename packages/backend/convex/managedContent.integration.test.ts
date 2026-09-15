@@ -53,6 +53,46 @@ async function setup() {
 }
 
 describe("managed content", () => {
+	test("reports source changes for browse freshness without invalidating on target edits", async () => {
+		const s = await setup();
+		const revision = () =>
+			s.owner.query(api.managedContent.revision, s.address);
+		let previous = await revision();
+		expect(previous).not.toBeNull();
+		const initial = await s.current();
+		await s.owner.mutation(api.managedContent.commit, {
+			...s.target,
+			basis: initial.basis,
+			intent: { kind: "save", value: "Tradução" },
+		});
+		expect(await revision()).toBe(previous);
+		for (const [index, sourceValue] of [
+			initial.sourceValue,
+			"Updated source",
+		].entries()) {
+			await s.owner.mutation(api.managedContent.saveSource, {
+				...s.address,
+				messageId: s.target.messageId,
+				name: "Updated name",
+				sourceValue,
+				expectedSourceRevision: index + 1,
+			});
+			const next = await revision();
+			expect(next).not.toBe(previous);
+			previous = next;
+		}
+		await s.owner.mutation(api.managedContent.archiveMessage, {
+			...s.address,
+			messageId: s.target.messageId,
+			expectedSourceRevision: 3,
+		});
+		expect(await revision()).not.toBe(previous);
+		const outsider = await authenticatedBackend(s.t, "revision-outsider");
+		await expect(
+			outsider.query(api.managedContent.revision, s.address),
+		).rejects.toThrow("Insufficient project permissions");
+	});
+
 	test("creates a source and its initial translations as one human save", async () => {
 		const s = await setup();
 		const french = await s.owner.mutation(api.locales.create, {

@@ -20,6 +20,13 @@ export function useCatalogBrowsePage(
 		() => JSON.parse(argsKey) as BrowseArgs | "skip",
 		[argsKey],
 	);
+	// Store positions, not stale result data. The matching page is always a live
+	// subscription; any catalog/tag revision invalidates its scan bookmark.
+	const [bookmarks] = useState(
+		() => new Map<string, { after: number; targetIndex: number }>(),
+	);
+	const bookmark =
+		navigationRevision === undefined ? undefined : bookmarks.get(requestKey);
 	const [scan, setScan] = useState<{
 		requestKey: string;
 		after: number;
@@ -28,15 +35,12 @@ export function useCatalogBrowsePage(
 	const after =
 		scan?.requestKey === requestKey
 			? scan.after
-			: args === "skip"
-				? undefined
-				: args.after;
+			: (bookmark?.after ?? (args === "skip" ? undefined : args.after));
 	const scanTargetIndex =
 		scan?.requestKey === requestKey
 			? scan.targetIndex
-			: args === "skip"
-				? undefined
-				: args.scanTargetIndex;
+			: (bookmark?.targetIndex ??
+				(args === "skip" ? undefined : args.scanTargetIndex));
 	const queryArgs = useMemo(
 		() =>
 			args === "skip" ? ("skip" as const) : { ...args, after, scanTargetIndex },
@@ -67,5 +71,29 @@ export function useCatalogBrowsePage(
 			return previous?.requestKey === requestKey ? previous : null;
 		});
 	}, [requestKey, nextAfter, nextTargetIndex]);
+	useEffect(() => {
+		if (
+			navigationRevision === undefined ||
+			!page ||
+			page.stale ||
+			nextAfter !== null ||
+			after === undefined
+		)
+			return;
+		bookmarks.delete(requestKey);
+		bookmarks.set(requestKey, { after, targetIndex: scanTargetIndex ?? 0 });
+		if (bookmarks.size > 16) {
+			const oldest = bookmarks.keys().next().value;
+			if (oldest !== undefined) bookmarks.delete(oldest);
+		}
+	}, [
+		bookmarks,
+		navigationRevision,
+		page,
+		nextAfter,
+		after,
+		scanTargetIndex,
+		requestKey,
+	]);
 	return args === "skip" || nextAfter !== null ? undefined : page;
 }

@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
 import {
@@ -11,6 +11,7 @@ import {
 	activeProjectionFor,
 	MAX_PROJECTED_LOCALES,
 } from "./catalogProjection";
+import { searchSourceText, searchTargetText } from "./catalogSearchText";
 import {
 	backfillStepIsPending,
 	navigationReadIdentity,
@@ -19,15 +20,10 @@ import {
 	ORDINARY_IMPORT_POLICY_VERSION,
 	readyNavigationStateFor,
 } from "./catalogWorkspaceNavigation";
-import { readWorkspaceTarget } from "./catalogWorkspaceRead";
-import { currentSourceProposalRows, encodedSize } from "./catalogWorkspaceView";
+import { encodedSize } from "./catalogWorkspaceView";
 import { matchesMessageTags, tagRevision, validateTagIds } from "./messageTags";
 import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmations";
 import { requireViewer } from "./permissions";
-import {
-	publishedResolutionFor,
-	sourceProposalHeadFor,
-} from "./sourceProposals";
 
 /** Project-wide status is small and independent of catalog content. */
 export const overview = query({
@@ -114,6 +110,7 @@ export const page = query({
 				v.literal("unconfirmedImport"),
 				v.literal("stale"),
 				v.literal("introduced"),
+				v.literal("changedInGit"),
 			),
 		),
 		messageIds: v.optional(v.array(v.string())),
@@ -147,7 +144,7 @@ export const page = query({
 				code: "STALE_BASIS",
 				message: "Tags changed. Restart from the first page.",
 			});
-		const origins = await preparedOrigins(ctx, args);
+		const origins = await preparedOrigins(ctx, args, projection);
 		const after = args.after ?? -1;
 		const scanTargetIndex = args.scanTargetIndex ?? 0;
 		const needle = (args.q ?? "").trim().toLowerCase();
@@ -220,29 +217,76 @@ export const page = query({
 						)
 						.unique()
 				: null;
-		const batch = origins
-			? await originPageBatch(
+		const membership = args.messageIds ? new Set(args.messageIds) : null;
+		async function matchingTargets(row: Doc<"catalogWorkspaceNavigationRows">) {
+			if (membership && !membership.has(row.messageId)) return null;
+			if (origins && !origins.includes(row.firstSeenProjectionId)) return null;
+			if (
+				!(await matchesMessageTags(
 					ctx,
-					args,
-					origins,
-					focus ? focus.catalogIndex - 1 : after,
+					{ projectId: args.projectId, messageId: row.messageId },
+					tags,
+				))
+			)
+				return null;
+			const targets = [];
+			for (const target of row.targets) {
+				if (
+					(!selection || selection.has(target.localeId)) &&
+					(await isActive(target.localeId))
 				)
-			: await ctx.db
-					.query("catalogWorkspaceNavigationRows")
-					.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
-						q
-							.eq("projectId", args.projectId)
-							.eq("projectionId", projection._id)
-							.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
+					targets.push(target);
+			}
+			const matchesScope =
+				args.scope === undefined ||
+				(args.scope === "introduced"
+					? targets.some((value) => value.firstReviewPending)
+					: args.scope === "changedInGit"
+						? targets.some((value) => value.changedInGitPending)
+						: targets.some((value) => value.valueState === args.scope));
+			return matchesScope ? targets : null;
+		}
+		// An exact identifier is the first result. Next continues ordinary literal
+		// discovery from the beginning, excluding this already-returned key.
+		const exact =
+			needle && !focusKey
+				? await ctx.db
+						.query("catalogWorkspaceNavigationRows")
+						.withIndex("by_project_and_projection_and_messageId", (q) =>
+							q
+								.eq("projectId", args.projectId)
+								.eq("projectionId", projection._id)
+								.eq("messageId", args.q?.trim() ?? ""),
+						)
+						.unique()
+				: null;
+		const exactTargets = exact ? await matchingTargets(exact) : null;
+		const prioritizeExact =
+			exact !== null && exactTargets !== null && args.after === undefined;
+		const batch = prioritizeExact
+			? { page: [exact], isDone: false }
+			: origins
+				? await originPageBatch(
+						ctx,
+						args,
+						origins,
+						focus ? focus.catalogIndex - 1 : after,
 					)
-					.paginate({
-						cursor: null,
-						numItems: 64,
-						maximumBytesRead: 512 * 1024,
-					});
+				: await ctx.db
+						.query("catalogWorkspaceNavigationRows")
+						.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+							q
+								.eq("projectId", args.projectId)
+								.eq("projectionId", projection._id)
+								.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
+						)
+						.paginate({
+							cursor: null,
+							numItems: 64,
+							maximumBytesRead: 512 * 1024,
+						});
 		const counts = { waiting: 0, unconfirmedImport: 0, stale: 0, settled: 0 };
 		const keys = [];
-		const membership = args.messageIds ? new Set(args.messageIds) : null;
 		let readBytes = 0;
 		let hydrated = 0;
 		let outputBytes = 0;
@@ -251,35 +295,21 @@ export const page = query({
 		let partial = false;
 		for (const row of batch.page) {
 			if (
-				!(await matchesMessageTags(
-					ctx,
-					{ projectId: args.projectId, messageId: row.messageId },
-					tags,
-				))
+				!prioritizeExact &&
+				exactTargets !== null &&
+				row.messageId === exact?.messageId
 			) {
 				last = row.catalogIndex;
 				continue;
 			}
-			if (membership && !membership.has(row.messageId)) {
+			const targets = prioritizeExact
+				? exactTargets
+				: await matchingTargets(row);
+			if (!targets) {
 				last = row.catalogIndex;
 				continue;
 			}
-			const targets = [];
-			for (const target of row.targets)
-				if (
-					(!selection || selection.has(target.localeId)) &&
-					(await isActive(target.localeId))
-				)
-					targets.push(target);
-			const matchesScope =
-				args.scope === undefined ||
-				(args.scope === "introduced"
-					? targets.some((value) => value.firstReviewPending)
-					: targets.some((value) => value.valueState === args.scope));
-			if (!matchesScope) {
-				last = row.catalogIndex;
-				continue;
-			}
+
 			let matches = !needle || row.messageId.toLowerCase().includes(needle);
 			const start = row === batch.page[0] ? scanTargetIndex : 0;
 			if (start > targets.length)
@@ -287,60 +317,34 @@ export const page = query({
 					code: "VALIDATION",
 					message: "Invalid target search position.",
 				});
-			for (let index = start; !matches && index < targets.length; index++) {
-				if (readBytes >= 2 * 1024 * 1024 || hydrated >= 64) {
+			const address = {
+				projectId: args.projectId,
+				projectionId: projection._id,
+				messageId: row.messageId,
+			};
+			if (!matches) {
+				const source = await searchSourceText(ctx, address);
+				readBytes += source.bytes;
+				matches = source.value.toLowerCase().includes(needle);
+			}
+			for (let index = start; !matches && index < targets.length; index += 8) {
+				if (readBytes >= 2 * 1024 * 1024 || hydrated >= 256) {
 					resumeTarget = index;
 					partial = true;
 					break;
 				}
-				const target = targets[index];
-				if (!target) continue;
-				const current = await readWorkspaceTarget(
-					ctx,
-					args.projectId,
-					row.messageId,
-					target.localeId,
+				const texts = await Promise.all(
+					targets
+						.slice(index, index + 8)
+						.map((target) => searchTargetText(ctx, address, target.localeId)),
 				);
-				hydrated++;
-				readBytes += encodedSize(current);
-				matches =
-					current.source.value.toLowerCase().includes(needle) ||
-					current.value.toLowerCase().includes(needle);
+				hydrated += texts.length;
+				for (const text of texts) {
+					readBytes += text.bytes;
+					matches ||= text.value.toLowerCase().includes(needle);
+				}
 			}
 			if (partial) break;
-			if (!matches && targets.length === 0) {
-				const [source, head] = await Promise.all([
-					ctx.db
-						.query("catalogProjectionMessages")
-						.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-							q
-								.eq("projectionId", projection._id)
-								.eq("messageId", row.messageId)
-								.eq("isSource", true),
-						)
-						.unique(),
-					sourceProposalHeadFor(ctx, args.projectId, row.messageId),
-				]);
-				if (!source)
-					throw new ConvexError({
-						code: "INTEGRITY",
-						message: "Catalog key is missing its Source.",
-					});
-				const resolution = head
-					? await publishedResolutionFor(ctx, {
-							_id: head.proposalId,
-							projectId: args.projectId,
-							messageId: row.messageId,
-						})
-					: null;
-				const [effective] = currentSourceProposalRows(
-					[source],
-					new Map(head ? [[row.messageId, head]] : []),
-					new Map(head && resolution ? [[head.proposalId, resolution]] : []),
-				);
-				readBytes += encodedSize(source) + encodedSize(head);
-				matches = effective?.value.toLowerCase().includes(needle) ?? false;
-			}
 			if (matches) {
 				const key = {
 					messageId: row.messageId,
@@ -385,7 +389,11 @@ export const page = query({
 			tagRevision: metadataRevision,
 			keys,
 			counts,
-			nextAfter: batch.page.length && remaining ? last : null,
+			nextAfter: prioritizeExact
+				? -1
+				: batch.page.length && remaining
+					? last
+					: null,
 			nextTargetIndex:
 				batch.page.length && remaining
 					? keys.length
@@ -421,6 +429,7 @@ export const scopeCounts = query({
 			stale: 0,
 			settled: 0,
 			introduced: 0,
+			changedInGit: 0,
 		};
 		if (
 			!projection ||
@@ -447,7 +456,7 @@ export const scopeCounts = query({
 			args.expectedTagRevision !== metadataRevision
 		)
 			return { stale: true, counts, cursor: null };
-		const origins = await preparedOrigins(ctx, args);
+		const origins = await preparedOrigins(ctx, args, projection);
 		const selected = new Set(args.localeIds);
 		for (const localeId of selected) {
 			const locale = await ctx.db.get(localeId);
@@ -487,12 +496,15 @@ export const scopeCounts = query({
 			)
 				continue;
 			let introduced = false;
+			let changedInGit = false;
 			for (const target of row.targets) {
 				if (!selected.has(target.localeId)) continue;
 				counts[target.valueState]++;
 				introduced ||= target.firstReviewPending === true;
+				changedInGit ||= target.changedInGitPending === true;
 			}
 			if (introduced) counts.introduced++;
+			if (changedInGit) counts.changedInGit++;
 		}
 		return {
 			stale: false,
