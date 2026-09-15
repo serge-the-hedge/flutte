@@ -242,13 +242,13 @@ function RepositoryReleaseRoute() {
 							/>
 						) : (
 							<div className="flex flex-col gap-3">
-								<ReleaseDeliveryScope
-									changeKeyCount={
-										record.changedKeyCount ?? record.deltaKeyCount
-									}
-									changedValueCount={record.changedValueCount}
-									localeProposal={readyLocaleProposal}
-								/>
+								{record.changedKeyCount !== undefined ? (
+									<ReleaseDeliveryScope
+										changeKeyCount={record.changedKeyCount}
+										changedValueCount={record.changedValueCount}
+										localeProposal={readyLocaleProposal}
+									/>
+								) : null}
 								<div className="flex flex-col items-start gap-1.5">
 									<Button
 										size="sm"
