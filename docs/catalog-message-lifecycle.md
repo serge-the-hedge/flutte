@@ -242,12 +242,18 @@ bounded and may require several scans. It reads visible text before full editing
 context. Search input waits briefly for a typing pause; Enter and clearing apply
 immediately.
 
-Repeated repository searches retain only bounded scan positions, keyed by catalog
-and tag revisions and all filters. Returned values remain live subscriptions.
-Completed focus counts use the same revision boundaries. Source Proposal edits
-advance the catalog revision; Basic source revisions restart sparse searches.
-Changing filters resets paging, while snapshot choices remain subscribed after
-the picker first opens. No persistent browser copy of the catalog is required.
+Repository focus queries use indexed candidates in Catalog Order. Text search
+retains bounded scan positions; its content revision is separate from the
+classification revision used for focus membership and counts. Editing text
+without changing classification therefore does not restart a focus scan or
+recount. Strict content revisions still protect releases and exports.
+
+Visible editors keep their live value subscriptions during same-view refreshes.
+Changing filters resets paging; replacing the active projection discards the old
+view. Existing catalogs prepare the disposable focus indexes automatically in
+bounded batches, retaining the scan path until preparation completes. Basic
+source revisions still restart sparse text searches. No persistent browser copy
+of the catalog is required.
 
 ## Compatibility note
 

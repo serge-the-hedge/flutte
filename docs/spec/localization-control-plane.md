@@ -66,7 +66,8 @@ run may continue through bounded server-owned steps; its progress, terminal
 state, and diagnostics remain visible and retryable. This is a consequence of
 the credential contract — Blabla cannot reach Git, so it cannot act on Git's
 schedule — while still allowing a started operation to finish without keeping a
-browser tab open.
+browser tab open. Disposable browse indexes may prepare automatically when a
+person opens Strings; this changes no catalog content or review evidence.
 
 ---
 
@@ -451,9 +452,11 @@ only. Explicit selections live in the URL; an omitted selection means All,
 including newly bound languages. Strings reads compact key digests in bounded
 pages and hydrates at most 32 nearby cards through a Window, reducing key
 lookahead as the selected Locale count grows. The index retains identifiers and state facts,
-not a copy of every translated value. A browse query scans at most 64 digests
+not a copy of every translated value. Focus indexes select candidate keys before
+applying selected-Locale and other filters. A browse query reads at most 64 digests
 with a 512 KiB read budget. Search stops when its effective-text reads reach
-2 MiB, allowing the final bounded value read to cross that threshold. Search also caps hydrated targets at 64 per query. Empty pages can have a
+2 MiB, allowing the final bounded value read to cross that threshold. Search also
+caps effective target-text reads at 256 per query. Empty pages can have a
 continuation when a scan budget is exhausted, including an offset within a key
 so later selected Locales are not skipped.
 The browser shows page counts, rather than presenting them as catalog totals.
@@ -464,8 +467,10 @@ requested target Locales, with at most four targets per backend request. The UI
 loads selected languages progressively with at most four pending requests,
 splitting oversized reads by keys and then languages. Completed batches remain
 reactive and merge into one card per key. Changing the language selection
-preserves the unsaved-edit navigation guard. Publication changes invalidate
-browse generations.
+preserves the unsaved-edit navigation guard. Same-view revalidation retains the
+visible editors and their live Windows. Publication changes invalidate browse
+generations. Text-search positions follow content revisions; focus positions and
+counts follow classification changes.
 
 An upgraded deployment whose active Navigation generation predates the
 materialized ordinary-import counts is explicitly incomplete for the Agent
@@ -499,8 +504,10 @@ The selected Locales choose the targets shown alongside Source; a target-state
 scope matches a key when any selected target matches. A Work Hand-off narrows the keys without changing Catalog Order.
 Focus counts cover the selected snapshot cohort and Locales, independent of
 search, page, or active focus. With no snapshot selection, they cover the whole
-catalog. New from Git counts keys; target-state scopes count values. A bounded digest scan reads one Navigation revision and shows
-pending counts until all pages are totaled, never partial totals as zero.
+catalog. New from Git counts keys; target-state scopes count values. The
+unfiltered all-Locale view uses maintained totals. Other combinations use a
+bounded digest scan at one classification revision and show pending counts until
+all pages are totaled, never partial totals as zero.
 
 **Introduced in** selects one or more original accepted snapshots without
 changing Catalog Order. Choices are paginated, newest sync first. An optional

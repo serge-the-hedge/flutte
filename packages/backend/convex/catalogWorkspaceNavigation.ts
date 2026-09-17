@@ -10,6 +10,13 @@ import {
 } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
 import { isHumanOrAuthorizedReview } from "./agentReviewModel";
+import {
+	focusFlags,
+	invalidateBrowseState,
+	prepareBrowseIndex,
+	syncBrowseOrdinaryCounts,
+	updateBrowseClassification,
+} from "./catalogBrowseIndex";
 import { pendingIntroductionLocaleIds } from "./catalogIntroductionReviews";
 import {
 	activeProjectionFor,
@@ -54,16 +61,13 @@ import {
 /** The Catalog Navigation Index is the disposable read model behind the
  * windowed Catalog Workspace Browse seam. One bounded row per active key is
  * derived entirely from canonical evidence by the internal projector below;
- * callers never assemble or patch digest fields. The stored index is bounded
+ * callers never assemble or patch digest fields. The digest payload is bounded
  * at eight MiB so a Baseline-sized catalog stays inside the documented
  * uncached-open budget for the measured ten-Locale working catalog. */
 export const MAX_CATALOG_WORKSPACE_NAVIGATION_ROWS = MAX_WORKING_CATALOG_KEYS;
 export const MAX_CATALOG_WORKSPACE_NAVIGATION_BYTES = 8 * 1024 * 1024;
-/** The public Navigation response is intentionally kept below the measured
- * uncached-open budget. Search remains local because the compact corpus is
- * carried with every digest; larger catalogs must use a smaller projection or
- * a future paged Navigation contract rather than silently returning a giant
- * response. */
+/** The legacy complete Navigation response remains bounded. Strings uses the
+ * paged catalogBrowse contract and hydrates only its visible key window. */
 export const MAX_CATALOG_WORKSPACE_NAVIGATION_RETURN_BYTES = 8 * 1024 * 1024;
 const MAX_NAVIGATION_RESET_ROWS_PER_MUTATION = 256;
 // Repair derivation reads every Locale row and current decision for each key.
@@ -136,6 +140,9 @@ export type CatalogWorkspaceNavigationDigest = {
 
 type SourceProposalResolution = { status: "landed" | "superseded" };
 
+/** Logical payload accounting remains compatible with existing generations.
+ * Fixed system fields and five derived index booleans are storage metadata,
+ * excluded from this envelope and the public digest. */
 export function navigationDigestByteLength(
 	digest: CatalogWorkspaceNavigationDigest,
 ): number {
@@ -703,6 +710,28 @@ export function normalizedOrdinaryImportCounts(
 	return { ...counts, introduced: counts.introduced ?? 0 };
 }
 
+/** One readiness gate for browsing, preparation, and strict navigation reads. */
+export function navigationStateIsReady(
+	state: Doc<"catalogWorkspaceNavigationStates"> | null,
+	input: { projectionId: Id<"catalogProjections">; expectedRowCount: number },
+): state is Doc<"catalogWorkspaceNavigationStates"> & {
+	status: "ready";
+	expectedRowCount: number;
+	ordinaryImportCounts: NonNullable<
+		Doc<"catalogWorkspaceNavigationStates">["ordinaryImportCounts"]
+	>;
+} {
+	return (
+		state !== null &&
+		state.projectionId === input.projectionId &&
+		state.status === "ready" &&
+		state.ordinaryImportCounts !== undefined &&
+		state.ordinaryImportPolicyVersion === ORDINARY_IMPORT_POLICY_VERSION &&
+		state.rowCount === input.expectedRowCount &&
+		state.expectedRowCount === input.expectedRowCount
+	);
+}
+
 export async function readyNavigationStateFor(
 	ctx: MutationCtx | QueryCtx,
 	input: {
@@ -712,15 +741,7 @@ export async function readyNavigationStateFor(
 	},
 ): Promise<ReadyNavigationState> {
 	const state = await navigationStateFor(ctx, input.projectId);
-	if (
-		!state ||
-		state.projectionId !== input.projectionId ||
-		state.status !== "ready" ||
-		state.ordinaryImportCounts === undefined ||
-		state.ordinaryImportPolicyVersion !== ORDINARY_IMPORT_POLICY_VERSION ||
-		state.rowCount !== input.expectedRowCount ||
-		state.expectedRowCount !== input.expectedRowCount
-	) {
+	if (!navigationStateIsReady(state, input)) {
 		throw new ConvexError({
 			code: "INCOMPLETE",
 			message:
@@ -853,6 +874,7 @@ async function patchEnvelopeCounts(
 			envelope.state.ordinaryImportCounts = patch.ordinaryImportCounts;
 		}
 		await ctx.db.patch(envelope.state._id, { ...patch, revision });
+		await syncBrowseOrdinaryCounts(ctx, envelope.state);
 		return;
 	}
 	envelope.staging.rowCount = patch.rowCount;
@@ -937,6 +959,14 @@ async function upsertNavigationRow(
 			);
 		}
 	}
+	if (input.envelope.kind === "active")
+		await updateBrowseClassification(
+			ctx,
+			input.digest.projectId,
+			input.digest.projectionId,
+			existing,
+			input.digest,
+		);
 	if (existing) {
 		const replacedByteLength =
 			byteLength -
@@ -949,8 +979,10 @@ async function upsertNavigationRow(
 					"Catalog Workspace exceeds its supported Navigation Index envelope.",
 			});
 		}
-		await ctx.db.delete(existing._id);
-		await ctx.db.insert("catalogWorkspaceNavigationRows", input.digest);
+		await ctx.db.replace(existing._id, {
+			...input.digest,
+			...focusFlags(input.digest),
+		});
 		await patchEnvelopeCounts(ctx, input.envelope, {
 			rowCount,
 			byteLength: replacedByteLength,
@@ -970,7 +1002,10 @@ async function upsertNavigationRow(
 				"Catalog Workspace exceeds its supported Navigation Index envelope.",
 		});
 	}
-	await ctx.db.insert("catalogWorkspaceNavigationRows", input.digest);
+	await ctx.db.insert("catalogWorkspaceNavigationRows", {
+		...input.digest,
+		...focusFlags(input.digest),
+	});
 	await patchEnvelopeCounts(ctx, input.envelope, {
 		rowCount: nextRowCount,
 		byteLength: nextTotalByteLength,
@@ -1064,6 +1099,14 @@ async function removeNavigationRow(
 				-1,
 			)
 		: undefined;
+	if (input.envelope.kind === "active")
+		await updateBrowseClassification(
+			ctx,
+			input.existing.projectId,
+			input.existing.projectionId,
+			input.existing,
+			null,
+		);
 	await ctx.db.delete(input.existing._id);
 	await patchEnvelopeCounts(ctx, input.envelope, {
 		rowCount: nextRowCount,
@@ -1378,6 +1421,7 @@ export async function recomputeNavigationRows(
 	if (!projection) return;
 	let state = await navigationStateFor(ctx, input.projectId);
 	if (state === null) {
+		await invalidateBrowseState(ctx, input.projectId);
 		await ctx.db.insert("catalogWorkspaceNavigationStates", {
 			projectId: input.projectId,
 			projectionId: projection._id,
@@ -1696,6 +1740,7 @@ export const startNavigationIndexBackfill = mutation({
 	returns: navigationBackfillStatusValidator,
 	handler: async (ctx, args) => {
 		await requireEditor(ctx, args.projectId);
+		await invalidateBrowseState(ctx, args.projectId);
 		const projection = await activeProjectionFor(ctx, args.projectId);
 		if (!projection) {
 			throw new ConvexError({
@@ -1829,6 +1874,7 @@ export const backfillNavigationIndexStep = internalMutation({
 	}),
 	handler: async (ctx, args) => {
 		try {
+			await invalidateBrowseState(ctx, args.projectId);
 			const projection = await activeProjectionFor(ctx, args.projectId);
 			if (!projection) {
 				throw new ConvexError({
@@ -2045,6 +2091,7 @@ export const backfillNavigationIndexStep = internalMutation({
 				verifiedByteLength: undefined,
 				...IDLE_BACKFILL_STEP_PATCH,
 			});
+			await prepareBrowseIndex(ctx, args.projectId);
 			return { phase: "ready" as const };
 		} catch (error) {
 			const state = await navigationStateFor(ctx, args.projectId);
@@ -2192,6 +2239,8 @@ export async function activateNavigationGeneration(
 			ordinaryImportPolicyVersion: ORDINARY_IMPORT_POLICY_VERSION,
 		});
 	}
+	await invalidateBrowseState(ctx, input.projectId);
+	await prepareBrowseIndex(ctx, input.projectId);
 	await ctx.db.delete(staging._id);
 	const projection = await ctx.db.get(input.projectionId);
 	if (!projection || projection.projectId !== input.projectId) {

@@ -15,6 +15,11 @@ test("source proposal edits invalidate search bookmarks", async () => {
 		const t = createBackend({ transactionLimits: true });
 		const owner = await authenticatedBackend(t, "search-review");
 		const projectId = await createProject(owner);
+		// A deployed project can already have a strict proposal revision. Its
+		// first write must preserve that basis while leaving project readers alone.
+		await t.run((ctx) =>
+			ctx.db.patch(projectId, { sourceProposalHeadVersion: 41 }),
+		);
 		const [en] = await owner.query(api.locales.list, { projectId });
 		if (!en) throw Error("No source");
 		await owner.action(api.locales.bind, {
@@ -32,6 +37,8 @@ test("source proposal edits invalidate search bookmarks", async () => {
 				},
 			],
 		});
+		const projectBeforeEdits = await t.run((ctx) => ctx.db.get(projectId));
+		let expectedProposalRevision = 41;
 		for (const value of ["First proposal", "Second proposal"]) {
 			const workspace = await readWorkspaceKeyCards(owner, projectId);
 			const source = workspace.keys[0]?.values[0];
@@ -49,6 +56,18 @@ test("source proposal edits invalidate search bookmarks", async () => {
 				expectedGitValueRevision: source.gitValueRevision,
 				expectedWorkspaceRevision: source.workspaceRevision,
 			});
+			expect(await t.run((ctx) => ctx.db.get(projectId))).toEqual(
+				projectBeforeEdits,
+			);
+			const proposalState = await t.run((ctx) =>
+				ctx.db
+					.query("catalogWorkspaceSourceProposalStates")
+					.withIndex("by_project", (q) => q.eq("projectId", projectId))
+					.unique(),
+			);
+			expect(proposalState?.proposalSetRevision).toBe(
+				++expectedProposalRevision,
+			);
 			const after = await owner.query(api.catalogBrowse.overview, {
 				projectId,
 			});

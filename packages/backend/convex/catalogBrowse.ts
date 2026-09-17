@@ -1,7 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query } from "./_generated/server";
+import { type QueryCtx, query } from "./_generated/server";
 import { hasMinimumRole } from "./accessControl";
+import { focusCandidateQuery, preparedBrowseState } from "./catalogBrowseIndex";
 import {
 	originCountBatch,
 	originPageBatch,
@@ -16,8 +17,8 @@ import {
 	backfillStepIsPending,
 	navigationReadIdentity,
 	navigationStateFor,
+	navigationStateIsReady,
 	normalizedOrdinaryImportCounts,
-	ORDINARY_IMPORT_POLICY_VERSION,
 	readyNavigationStateFor,
 } from "./catalogWorkspaceNavigation";
 import { encodedSize } from "./catalogWorkspaceView";
@@ -26,66 +27,93 @@ import { ORDINARY_IMPORT_CONFIRMATION_POLICY } from "./ordinaryImportConfirmatio
 import { requireViewer } from "./permissions";
 
 /** Project-wide status is small and independent of catalog content. */
+async function catalogOverview(
+	ctx: QueryCtx,
+	args: { projectId: Id<"projects"> },
+	preferStable: boolean,
+) {
+	const { member } = await requireViewer(ctx, args.projectId);
+	const projection = await activeProjectionFor(ctx, args.projectId);
+	if (!projection) return { kind: "noBaseline" as const };
+	const browse = await preparedBrowseState(ctx, projection);
+	const state =
+		preferStable && browse
+			? null
+			: await navigationStateFor(ctx, args.projectId);
+	const identity = {
+		...navigationReadIdentity(projection),
+		canEdit: hasMinimumRole(member.role, "editor"),
+	};
+	if (
+		!(preferStable && browse) &&
+		!navigationStateIsReady(state, {
+			projectionId: projection._id,
+			expectedRowCount: projection.expectedKeyCount,
+		})
+	) {
+		const current = state?.projectionId === projection._id ? state : null;
+		return {
+			kind: "incomplete" as const,
+			...identity,
+			status: current?.status ?? ("missing" as const),
+			stepPending: current ? backfillStepIsPending(current) : false,
+			failure: current?.backfillFailure ?? null,
+			progress: {
+				rowCount: current?.rowCount ?? 0,
+				expectedRowCount: projection.expectedKeyCount,
+				byteLength: current?.byteLength ?? 0,
+			},
+		};
+	}
+	const ordinaryImportCounts =
+		browse?.ordinaryImportCounts ?? state?.ordinaryImportCounts;
+	if (!ordinaryImportCounts)
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Catalog counts are missing.",
+		});
+	const run = await ctx.db
+		.query("ordinaryImportRuns")
+		.withIndex("by_project_and_projection", (q) =>
+			q.eq("projectId", args.projectId).eq("projectionId", projection._id),
+		)
+		.order("desc")
+		.first();
+	return {
+		kind: "ready" as const,
+		...identity,
+		keyCount: browse?.keyCount ?? state?.rowCount ?? 0,
+		classificationRevision: browse?.classificationRevision,
+		classificationGeneration: browse?._id,
+		optimizationNeeded: !browse?.indexReady,
+		revision: preferStable && browse ? undefined : (state?.revision ?? 0),
+		ordinaryImports: {
+			...normalizedOrdinaryImportCounts(ordinaryImportCounts),
+			policy: ORDINARY_IMPORT_CONFIRMATION_POLICY,
+			run: run
+				? {
+						status: run.status,
+						confirmed: run.confirmed,
+						skipped: run.skipped,
+						failure: run.failure ?? null,
+					}
+				: null,
+		},
+	};
+}
 export const overview = query({
 	args: { projectId: v.id("projects") },
 	handler: async (ctx, args) => {
-		const { member } = await requireViewer(ctx, args.projectId);
-		const projection = await activeProjectionFor(ctx, args.projectId);
-		if (!projection) return { kind: "noBaseline" as const };
-		const state = await navigationStateFor(ctx, args.projectId);
-		const identity = {
-			...navigationReadIdentity(projection),
-			canEdit: hasMinimumRole(member.role, "editor"),
-		};
-		if (
-			!state ||
-			state.projectionId !== projection._id ||
-			state.status !== "ready" ||
-			!state.ordinaryImportCounts ||
-			state.ordinaryImportPolicyVersion !== ORDINARY_IMPORT_POLICY_VERSION ||
-			state.rowCount !== projection.expectedKeyCount ||
-			state.expectedRowCount !== projection.expectedKeyCount
-		) {
-			const current = state?.projectionId === projection._id ? state : null;
-			return {
-				kind: "incomplete" as const,
-				...identity,
-				status: current?.status ?? ("missing" as const),
-				stepPending: current ? backfillStepIsPending(current) : false,
-				failure: current?.backfillFailure ?? null,
-				progress: {
-					rowCount: current?.rowCount ?? 0,
-					expectedRowCount: projection.expectedKeyCount,
-					byteLength: current?.byteLength ?? 0,
-				},
-			};
-		}
-		const run = await ctx.db
-			.query("ordinaryImportRuns")
-			.withIndex("by_project_and_projection", (q) =>
-				q.eq("projectId", args.projectId).eq("projectionId", projection._id),
-			)
-			.order("desc")
-			.first();
-		return {
-			kind: "ready" as const,
-			...identity,
-			keyCount: state.rowCount,
-			revision: state.revision ?? 0,
-			ordinaryImports: {
-				...normalizedOrdinaryImportCounts(state.ordinaryImportCounts),
-				policy: ORDINARY_IMPORT_CONFIRMATION_POLICY,
-				run: run
-					? {
-							status: run.status,
-							confirmed: run.confirmed,
-							skipped: run.skipped,
-							failure: run.failure ?? null,
-						}
-					: null,
-			},
-		};
+		const result = await catalogOverview(ctx, args, false);
+		return result.kind === "ready"
+			? { ...result, revision: result.revision ?? 0 }
+			: result;
 	},
+});
+/** Browsing depends on classifications, not every content fingerprint. */
+export const readiness = query({
+	args: { projectId: v.id("projects") },
+	handler: (ctx, args) => catalogOverview(ctx, args, true),
 });
 
 /** A page is pinned to one published projection. Search hydrates only the
@@ -129,11 +157,13 @@ export const page = query({
 				nextTargetIndex: null,
 			};
 		}
-		await readyNavigationStateFor(ctx, {
-			projectId: args.projectId,
-			projectionId: projection._id,
-			expectedRowCount: projection.expectedKeyCount,
-		});
+		const browse = await preparedBrowseState(ctx, projection);
+		if (!browse)
+			await readyNavigationStateFor(ctx, {
+				projectId: args.projectId,
+				projectionId: projection._id,
+				expectedRowCount: projection.expectedKeyCount,
+			});
 		const tags = await validateTagIds(ctx, args.projectId, args.tagIds);
 		const metadataRevision = await tagRevision(ctx, args.projectId);
 		if (
@@ -272,19 +302,31 @@ export const page = query({
 						origins,
 						focus ? focus.catalogIndex - 1 : after,
 					)
-				: await ctx.db
-						.query("catalogWorkspaceNavigationRows")
-						.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
-							q
-								.eq("projectId", args.projectId)
-								.eq("projectionId", projection._id)
-								.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
-						)
-						.paginate({
+				: args.scope && browse?.indexReady
+					? await focusCandidateQuery(
+							ctx,
+							args.projectId,
+							projection._id,
+							args.scope,
+							focus ? focus.catalogIndex - 1 : after,
+						).paginate({
 							cursor: null,
 							numItems: 64,
 							maximumBytesRead: 512 * 1024,
-						});
+						})
+					: await ctx.db
+							.query("catalogWorkspaceNavigationRows")
+							.withIndex("by_project_and_projection_and_catalogIndex", (q) =>
+								q
+									.eq("projectId", args.projectId)
+									.eq("projectionId", projection._id)
+									.gt("catalogIndex", focus ? focus.catalogIndex - 1 : after),
+							)
+							.paginate({
+								cursor: null,
+								numItems: 64,
+								maximumBytesRead: 512 * 1024,
+							});
 		const counts = { waiting: 0, unconfirmedImport: 0, stale: 0, settled: 0 };
 		const keys = [];
 		let readBytes = 0;
@@ -415,14 +457,22 @@ export const scopeCounts = query({
 		tagIds: v.optional(v.array(v.id("tags"))),
 		expectedTagRevision: v.optional(v.number()),
 		introducedOriginUnknown: v.optional(v.boolean()),
-		revision: v.number(),
+		revision: v.optional(v.number()),
+		classificationRevision: v.optional(v.number()),
+		classificationGeneration: v.optional(v.id("catalogBrowseStates")),
 		localeIds: v.array(v.id("locales")),
 		cursor: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		await requireViewer(ctx, args.projectId);
 		const projection = await activeProjectionFor(ctx, args.projectId);
-		const state = await navigationStateFor(ctx, args.projectId);
+		const browse = projection
+			? await preparedBrowseState(ctx, projection)
+			: null;
+		const state =
+			args.classificationRevision === undefined
+				? await navigationStateFor(ctx, args.projectId)
+				: null;
 		const counts = {
 			waiting: 0,
 			unconfirmedImport: 0,
@@ -434,14 +484,19 @@ export const scopeCounts = query({
 		if (
 			!projection ||
 			projection._id !== args.projectionId ||
-			state?.projectionId !== args.projectionId ||
-			state.status !== "ready" ||
-			(state.revision ?? 0) !== args.revision
+			(args.classificationRevision !== undefined
+				? !browse ||
+					browse.classificationRevision !== args.classificationRevision ||
+					(args.classificationGeneration !== undefined &&
+						args.classificationGeneration !== browse._id)
+				: state?.projectionId !== args.projectionId ||
+					state.status !== "ready" ||
+					(state.revision ?? 0) !== args.revision)
 		)
 			return { stale: true, counts, cursor: null };
 		if (
-			!Number.isSafeInteger(args.revision) ||
-			args.revision < 0 ||
+			!Number.isSafeInteger(args.classificationRevision ?? args.revision) ||
+			(args.classificationRevision ?? args.revision ?? -1) < 0 ||
 			args.localeIds.length > MAX_PROJECTED_LOCALES ||
 			new Set(args.localeIds).size !== args.localeIds.length
 		)
@@ -471,6 +526,25 @@ export const scopeCounts = query({
 					code: "VALIDATION",
 					message: "Choose an active target language.",
 				});
+		}
+		if (selected.size === 0) return { stale: false, counts, cursor: null };
+		if (
+			!args.cursor &&
+			browse?.indexReady &&
+			!origins &&
+			!tags.length &&
+			browse.localeCounts.length === selected.size &&
+			browse.localeCounts.every((count) => selected.has(count.localeId))
+		) {
+			for (const row of browse.localeCounts) {
+				counts.waiting += row.waiting;
+				counts.unconfirmedImport += row.unconfirmedImport;
+				counts.stale += row.stale;
+				counts.settled += row.settled;
+			}
+			counts.introduced = browse.introduced;
+			counts.changedInGit = browse.changedInGit;
+			return { stale: false, counts, cursor: null };
 		}
 		const batch = origins
 			? await originCountBatch(ctx, args, origins)

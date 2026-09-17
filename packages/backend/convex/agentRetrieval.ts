@@ -23,6 +23,7 @@ import {
 	tagRevision,
 	validateTagIds,
 } from "./messageTags";
+import { sourceProposalSetRevision } from "./sourceProposalState";
 import {
 	guidanceContextValidator,
 	readGuidance,
@@ -387,8 +388,13 @@ export const workspaceSearch = internalQuery({
 			}),
 		);
 		const revision = state.revision ?? 0;
-		const sourceRevision =
-			(await ctx.db.get(token.projectId))?.sourceProposalHeadVersion ?? 0;
+		const project = await ctx.db.get(token.projectId);
+		if (!project)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Project not found.",
+			});
+		const sourceRevision = await sourceProposalSetRevision(ctx, project);
 		let position = { catalogIndex: 0, targetIndex: 0 };
 		if (args.cursor) {
 			const decoded: unknown = (() => {

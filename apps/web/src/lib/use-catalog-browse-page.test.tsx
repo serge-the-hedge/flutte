@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { act } from "react";
+import { StringsCatalogView } from "../components/localization/strings-catalog-view";
 import { createDomTest } from "../test/dom";
 import { type api, convexId } from "./convex-api";
 import { useCatalogBrowsePage } from "./use-catalog-browse-page";
@@ -82,6 +83,13 @@ describe("Strings sparse browse pages", () => {
 		tagRevision,
 		skip = false,
 		localeIds,
+		classificationRevision,
+		scope,
+		projection = "projection",
+		project = "project",
+		snapshotIds,
+		expectedTagRevision,
+		classificationGeneration,
 	}: {
 		q?: string;
 		after?: number;
@@ -89,21 +97,32 @@ describe("Strings sparse browse pages", () => {
 		tagRevision?: number;
 		skip?: boolean;
 		localeIds?: BrowseArgs["localeIds"];
+		classificationRevision?: number;
+		scope?: BrowseArgs["scope"];
+		projection?: string;
+		project?: string;
+		snapshotIds?: BrowseArgs["introducedSnapshotIds"];
+		expectedTagRevision?: number;
+		classificationGeneration?: string;
 	}) {
 		const args: BrowseArgs = {
-			projectId: convexId<"projects">("project"),
-			projectionId: convexId<"catalogProjections">("projection"),
+			projectId: convexId<"projects">(project),
+			projectionId: convexId<"catalogProjections">(projection),
 			q,
 			after,
 			localeIds,
+			scope,
+			introducedSnapshotIds: snapshotIds,
+			expectedTagRevision,
 		};
-		const page = useCatalogBrowsePage(
-			skip ? "skip" : args,
-			revision,
-			tagRevision,
-		);
+		const { page, isRefreshing } = useCatalogBrowsePage(skip ? "skip" : args, {
+			content: revision,
+			classification: classificationRevision,
+			classificationGeneration,
+			tags: tagRevision,
+		});
 		return (
-			<output>
+			<output data-refreshing={isRefreshing}>
 				{page === undefined ? "loading" : (page.keys[0]?.messageId ?? "empty")}{" "}
 				· logical position {after ?? "start"}
 			</output>
@@ -116,9 +135,14 @@ describe("Strings sparse browse pages", () => {
 		skip = false,
 		localeIds?: BrowseArgs["localeIds"],
 		tagRevision?: number,
+		options: Pick<
+			Parameters<typeof Harness>[0],
+			"classificationRevision" | "scope" | "projection"
+		> = {},
 	) => (
 		<ConvexProvider client={client}>
 			<Harness
+				{...options}
 				q={q}
 				after={after}
 				revision={revision}
@@ -130,7 +154,7 @@ describe("Strings sparse browse pages", () => {
 	);
 	async function publish(
 		q: string,
-		after: number,
+		after: number | undefined,
 		page: BrowsePage,
 		targetIndex = 0,
 	) {
@@ -141,6 +165,103 @@ describe("Strings sparse browse pages", () => {
 				callback();
 		});
 	}
+	function EditorHarness({
+		revision,
+		classification = 1,
+	}: {
+		revision: number;
+		classification?: number;
+	}) {
+		const { page } = useCatalogBrowsePage(
+			{
+				projectId: convexId<"projects">("project"),
+				projectionId: convexId<"catalogProjections">("projection"),
+				q: "",
+				scope: "introduced",
+			},
+			{ content: revision, classification },
+		);
+		return (
+			<StringsCatalogView
+				navigation={
+					page && !page.stale
+						? {
+								kind: "ready",
+								projectionId: "projection",
+								canEdit: true,
+								keys: page.keys,
+							}
+						: undefined
+				}
+				hydratedCards={
+					new Map([
+						[
+							"new-key",
+							{
+								id: "new-key",
+								source: {
+									localeId: "source",
+									localeCode: "en",
+									isSource: true,
+									value: "Welcome",
+									materialized: false,
+									gitValueFingerprint: "source-fingerprint",
+									gitValueRevision: 0,
+									workspaceRevision: 0,
+									expectedSourceFingerprint: "source-fingerprint",
+								},
+								targets: [],
+							},
+						],
+					])
+				}
+				navigationState={{ query: "", scope: "introduced" }}
+				onNavigationChange={() => {}}
+				onConnectCheckout={() => {}}
+				onWindowMessageIdsChange={() => {}}
+				onCommitValue={async ({ basis }) => ({ basis })}
+			/>
+		);
+	}
+
+	test("a refresh preserves the real English editor, focus, and unsaved draft", async () => {
+		responses.set(identity("", undefined), result(63));
+		responses.set(identity("", 63), result(null, "new-key"));
+		const editorView = (revision: number, classification = 1) => (
+			<ConvexProvider client={client}>
+				<EditorHarness revision={revision} classification={classification} />
+			</ConvexProvider>
+		);
+		await dom.render(editorView(1));
+		const field = dom.container.querySelector<
+			HTMLInputElement | HTMLTextAreaElement
+		>('[data-workspace-message-id="new-key"]');
+		if (!field) throw new Error("English editor did not render");
+		await act(async () => {
+			field.focus();
+			Object.getOwnPropertyDescriptor(
+				field.tagName === "TEXTAREA"
+					? HTMLTextAreaElement.prototype
+					: HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(field, "Still editing English");
+			field.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		responses.delete(identity("", undefined));
+		await dom.render(editorView(2));
+		expect(document.activeElement).toBe(field);
+		expect(field.value).toBe("Still editing English");
+		await dom.render(editorView(2, 2));
+		expect(
+			dom.container.querySelector('[data-workspace-message-id="new-key"]'),
+		).toBe(field);
+		expect(document.activeElement).toBe(field);
+		expect(field.value).toBe("Still editing English");
+		await publish("", undefined, result(null, "new-key"));
+		expect(document.activeElement).toBe(field);
+		expect(field.value).toBe("Still editing English");
+	});
+
 	test("scans empty responses until a match without changing the logical page", async () => {
 		responses.set(identity("first", undefined), result(63));
 		await dom.render(view());
@@ -241,6 +362,153 @@ describe("Strings sparse browse pages", () => {
 		await dom.render(view("first", undefined, 2));
 		expect(dom.container.textContent).toBe(
 			"earlier-match · logical position start",
+		);
+	});
+
+	test("keeps New from Git's resolved scan when only English content changes", async () => {
+		responses.set(identity("", undefined), result(63));
+		responses.set(identity("", 63), result(null, "new-key"));
+		const selection = {
+			scope: "introduced" as const,
+			classificationRevision: 7,
+		};
+		await dom.render(view("", undefined, 1, false, undefined, 0, selection));
+		expect(dom.container.textContent).toBe("new-key · logical position start");
+		requests.length = 0;
+		responses.delete(identity("", undefined));
+		await dom.render(view("", undefined, 2, false, undefined, 0, selection));
+		expect(dom.container.textContent).toBe("new-key · logical position start");
+		expect(requests).not.toContainEqual({ q: "", after: undefined });
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"false",
+		);
+	});
+
+	test("keeps a key mounted during reclassification, then applies actual membership changes", async () => {
+		responses.set(identity("", undefined), result(63));
+		responses.set(identity("", 63), result(null, "new-key"));
+		await dom.render(
+			view("", undefined, 1, false, undefined, 0, {
+				scope: "introduced",
+				classificationRevision: 7,
+			}),
+		);
+		responses.delete(identity("", undefined));
+		await dom.render(
+			view("", undefined, 2, false, undefined, 0, {
+				scope: "introduced",
+				classificationRevision: 8,
+			}),
+		);
+		expect(dom.container.textContent).toBe("new-key · logical position start");
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"true",
+		);
+		expect(requests).toContainEqual({ q: "", after: undefined });
+		await publish("", undefined, result(null));
+		expect(dom.container.textContent).toBe("empty · logical position start");
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"false",
+		);
+	});
+
+	test("keeps literal search's visible keys while finding newly matching earlier text", async () => {
+		responses.set(identity("first", undefined), result(63));
+		responses.set(identity("first", 63), result(null, "later-match"));
+		await dom.render(view("first", undefined, 1));
+		responses.delete(identity("first", undefined));
+		await dom.render(view("first", undefined, 2));
+		expect(dom.container.textContent).toBe(
+			"later-match · logical position start",
+		);
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"true",
+		);
+		await publish("first", undefined, result(null, "earlier-match"));
+		expect(dom.container.textContent).toBe(
+			"earlier-match · logical position start",
+		);
+	});
+
+	test("never retains editable keys across a projection replacement or stale response", async () => {
+		responses.set(identity("first", undefined), result(null, "old-key"));
+		await dom.render(view("first", undefined, 1));
+		responses.clear();
+		await dom.render(
+			view("first", undefined, 2, false, undefined, undefined, {
+				projection: "replacement",
+			}),
+		);
+		expect(dom.container.textContent).toBe("loading · logical position start");
+		await publish("first", undefined, result(null, "new-key"));
+		expect(dom.container.textContent).toBe("new-key · logical position start");
+		await publish("first", undefined, { ...result(null), stale: true });
+		expect(dom.container.textContent).toBe("empty · logical position start");
+	});
+
+	const changedSelections: Parameters<typeof Harness>[0][] = [
+		{ project: "another-project" },
+		{ projection: "another-snapshot" },
+		{ q: "second" },
+		{ scope: "waiting" as const },
+		{ localeIds: [convexId<"locales">("ja")] },
+		{ snapshotIds: [convexId<"sourceSnapshots">("snapshot-filter")] },
+		{ after: 100 },
+	];
+	test.each(changedSelections)(
+		"does not show the previous view while a different selection loads: %j",
+		async (selection) => {
+			responses.set(identity("first", undefined), result(null, "old-key"));
+			await dom.render(view("first", undefined, 1));
+			responses.clear();
+			await dom.render(
+				<ConvexProvider client={client}>
+					<Harness q="first" revision={1} {...selection} />
+				</ConvexProvider>,
+			);
+			expect(dom.container.textContent).toStartWith("loading");
+		},
+	);
+
+	test("tag version and rebuilt classification generations refresh the same view without dropping it", async () => {
+		responses.set(identity("first", undefined), result(63));
+		responses.set(identity("first", 63), result(null, "tagged-key"));
+		const retainedView = (
+			expectedTagRevision: number,
+			classificationGeneration = "generation-1",
+		) => (
+			<ConvexProvider client={client}>
+				<Harness
+					q="first"
+					revision={1}
+					expectedTagRevision={expectedTagRevision}
+					classificationGeneration={classificationGeneration}
+				/>
+			</ConvexProvider>
+		);
+		await dom.render(retainedView(1));
+		responses.delete(identity("first", undefined));
+		await dom.render(retainedView(2));
+		expect(dom.container.textContent).toBe(
+			"tagged-key · logical position start",
+		);
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"true",
+		);
+		await publish("first", 63, result(null, "updated-key"));
+		await publish("first", undefined, result(63));
+		expect(dom.container.textContent).toBe(
+			"updated-key · logical position start",
+		);
+		requests.length = 0;
+		responses.delete(identity("first", undefined));
+		await dom.render(retainedView(2, "generation-2"));
+		expect(requests).toContainEqual({ q: "first", after: undefined });
+		expect(dom.container.textContent).toBe(
+			"updated-key · logical position start",
+		);
+		expect(dom.container.querySelector("output")?.dataset.refreshing).toBe(
+			"true",
 		);
 	});
 

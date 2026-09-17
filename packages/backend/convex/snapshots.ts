@@ -97,6 +97,7 @@ import {
 	MAX_RESTORE_PROPOSAL_MESSAGE_IDS_PER_LOOKUP,
 	supportsRestoreProposalMessageId,
 } from "./restoreProposals";
+import { sourceProposalSetRevision } from "./sourceProposalState";
 import { readSyncSummary, sourceSyncSummary } from "./syncSummary";
 import {
 	translationResidueBatches,
@@ -802,7 +803,7 @@ async function publishProjection(
 		projection.previousCatalogProjectionId !==
 			args.project.activeCatalogProjectionId ||
 		projection.sourceProposalHeadVersion !==
-			(args.project.sourceProposalHeadVersion ?? 0)
+			(await sourceProposalSetRevision(ctx, args.project))
 	) {
 		throw new ConvexError({
 			code: "CONFLICT",

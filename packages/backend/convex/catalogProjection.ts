@@ -21,6 +21,7 @@ import {
 	repositoryAdapterActorValidator,
 	requireViewer,
 } from "./permissions";
+import { sourceProposalSetRevision } from "./sourceProposalState";
 import { syncSummaryValidator } from "./syncSummary";
 
 /** Increment when preserved Locale review evidence must be rederived on Snapshot replay. */
@@ -1160,16 +1161,10 @@ export const begin = internalMutation({
 				message:
 					"Locale bindings or the active projection changed while Snapshot files were read. Retry the operation.",
 			});
-		const sourceProposalHeadVersion = project.sourceProposalHeadVersion ?? 0;
-		if (
-			!Number.isSafeInteger(sourceProposalHeadVersion) ||
-			sourceProposalHeadVersion < 0
-		) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Source Proposal head version is invalid.",
-			});
-		}
+		const sourceProposalHeadVersion = await sourceProposalSetRevision(
+			ctx,
+			project,
+		);
 		const previousBaselineSnapshotId = project.baselineSnapshotId;
 		let previousCatalogProjectionId: Id<"catalogProjections"> | undefined;
 		if (project.activeCatalogProjectionId) {

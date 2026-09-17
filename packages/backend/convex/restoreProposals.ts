@@ -21,6 +21,7 @@ import {
 	requireEditor,
 	requireViewer,
 } from "./permissions";
+import { advanceSourceProposalSetRevision } from "./sourceProposalState";
 import { publishedResolutionFor } from "./sourceProposals";
 
 const MAX_RESTORE_PROPOSAL_SOURCE_VALUE_BYTES = 256 * 1024;
@@ -151,13 +152,6 @@ export const request = mutation({
 				message: "Project not found.",
 			});
 		}
-		const currentHeadVersion = project.sourceProposalHeadVersion ?? 0;
-		if (!Number.isSafeInteger(currentHeadVersion) || currentHeadVersion < 0) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Restore Proposal head version is invalid.",
-			});
-		}
 		assertRestoreProposalMessageId(args.messageId);
 		const projection = await activeProjectionFor(ctx, args.projectId);
 		if (!projection) {
@@ -252,10 +246,7 @@ export const request = mutation({
 				proposalId,
 			});
 		}
-		await ctx.db.patch(project._id, {
-			sourceProposalHeadVersion: currentHeadVersion + 1,
-			updatedAt: timestamp,
-		});
+		await advanceSourceProposalSetRevision(ctx, project);
 		return { proposalId, reused: false };
 	},
 });

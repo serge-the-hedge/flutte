@@ -6,27 +6,47 @@ import { api } from "./convex-api";
 type BrowseArgs = FunctionArgs<typeof api.catalogBrowse.page>;
 type BrowsePage = FunctionReturnType<typeof api.catalogBrowse.page>;
 
+type BrowseRevisions = {
+	content?: number;
+	classification?: number;
+	classificationGeneration?: string;
+	tags?: number;
+};
+
 /** A logical page may need several bounded scans before it contains a match.
- * Keep that scan cursor private: URL positions and Back/Previous history still
- * describe the user's page, rather than each empty backend response. */
+ * Keep scan positions private and retain the same logical page during a refresh.
+ * Only key digests are retained; visible values stay independently subscribed. */
 export function useCatalogBrowsePage(
 	input: BrowseArgs | "skip",
-	navigationRevision?: number,
-	tagRevision?: number,
-): BrowsePage | undefined {
+	revisions: BrowseRevisions = {},
+): { page: BrowsePage | undefined; isRefreshing: boolean } {
 	const argsKey = JSON.stringify(input);
-	const requestKey = JSON.stringify([argsKey, navigationRevision, tagRevision]);
+	const viewKey = JSON.stringify(
+		input === "skip" ? input : { ...input, expectedTagRevision: undefined },
+	);
+	// Text can change search membership without changing a key's review state.
+	// Focus membership and counts only depend on classifications.
+	const revision =
+		input !== "skip" && input.q?.trim()
+			? revisions.content
+			: revisions.classification;
+	const requestKey = JSON.stringify([
+		argsKey,
+		revision,
+		revisions.classificationGeneration,
+		revisions.tags,
+	]);
 	const args = useMemo(
 		() => JSON.parse(argsKey) as BrowseArgs | "skip",
 		[argsKey],
 	);
 	// Store positions, not stale result data. The matching page is always a live
-	// subscription; any catalog/tag revision invalidates its scan bookmark.
+	// subscription; relevant classification/content/tag changes reset its bookmark.
 	const [bookmarks] = useState(
 		() => new Map<string, { after: number; targetIndex: number }>(),
 	);
 	const bookmark =
-		navigationRevision === undefined ? undefined : bookmarks.get(requestKey);
+		revision === undefined ? undefined : bookmarks.get(requestKey);
 	const [scan, setScan] = useState<{
 		requestKey: string;
 		after: number;
@@ -73,7 +93,7 @@ export function useCatalogBrowsePage(
 	}, [requestKey, nextAfter, nextTargetIndex]);
 	useEffect(() => {
 		if (
-			navigationRevision === undefined ||
+			revision === undefined ||
 			!page ||
 			page.stale ||
 			nextAfter !== null ||
@@ -88,12 +108,39 @@ export function useCatalogBrowsePage(
 		}
 	}, [
 		bookmarks,
-		navigationRevision,
+		revision,
 		page,
 		nextAfter,
 		after,
 		scanTargetIndex,
 		requestKey,
 	]);
-	return args === "skip" || nextAfter !== null ? undefined : page;
+	const resolved = args !== "skip" && nextAfter === null ? page : undefined;
+	const [lastPage, setLastPage] = useState<{
+		viewKey: string;
+		page: BrowsePage;
+	}>();
+	useEffect(() => {
+		if (args === "skip" || resolved?.stale) {
+			setLastPage(undefined);
+		} else if (resolved) {
+			setLastPage((previous) =>
+				previous?.viewKey === viewKey && previous.page === resolved
+					? previous
+					: { viewKey, page: resolved },
+			);
+		} else {
+			setLastPage((previous) =>
+				previous?.viewKey === viewKey ? previous : undefined,
+			);
+		}
+	}, [args, viewKey, resolved]);
+	const retained =
+		args !== "skip" && lastPage?.viewKey === viewKey
+			? lastPage.page
+			: undefined;
+	return {
+		page: resolved ?? retained,
+		isRefreshing: resolved === undefined && retained !== undefined,
+	};
 }
