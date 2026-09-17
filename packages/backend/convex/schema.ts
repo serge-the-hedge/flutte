@@ -404,9 +404,8 @@ export default defineSchema({
 		minimumCliVersion: v.optional(v.string()),
 		minimumCliProtocol: v.optional(v.number()),
 		agentReviewPolicy: v.optional(agentReviewPolicyValidator),
-		// Incremented whenever the current Source Proposal set changes. A staging
-		// projection captures this revision and restages if a candidate races its
-		// accepted transition.
+		// Legacy counter, read until the first proposal write migrates it to
+		// catalogWorkspaceSourceProposalStates without rewriting this project.
 		sourceProposalHeadVersion: v.optional(v.number()),
 		createdByUserId: v.string(),
 		createdAt: v.number(),
@@ -1240,6 +1239,8 @@ export default defineSchema({
 	// Workspace remains one bounded read even after many source-value attempts.
 	catalogWorkspaceSourceProposalStates: defineTable({
 		projectId: v.id("projects"),
+		// Pins source and restore proposals across staged publication and reads.
+		proposalSetRevision: v.optional(v.number()),
 		headCount: v.number(),
 		headByteLength: v.number(),
 	}).index("by_project", ["projectId"]),
@@ -1267,7 +1268,37 @@ export default defineSchema({
 	// traversal, and the ordinary-confirmation summary need. The internal
 	// projector derives every field from canonical evidence; the index is never
 	// Release Truth and never a second edit path.
+	catalogBrowseStates: defineTable({
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		policyVersion: v.number(),
+		classificationRevision: v.number(),
+		keyCount: v.number(),
+		indexReady: v.boolean(),
+		after: v.number(),
+		jobId: v.optional(v.id("_scheduled_functions")),
+		ordinaryImportCounts: v.object(ordinaryImportCounts),
+		introduced: v.number(),
+		changedInGit: v.number(),
+		localeCounts: v.array(
+			v.object({
+				localeId: v.id("locales"),
+				waiting: v.number(),
+				unconfirmedImport: v.number(),
+				stale: v.number(),
+				settled: v.number(),
+			}),
+		),
+	}).index("by_projectId", ["projectId"]),
+
 	catalogWorkspaceNavigationRows: defineTable({
+		// Optional until the bounded derived-index migration covers this generation.
+		hasWaiting: v.optional(v.boolean()),
+		hasUnconfirmedImport: v.optional(v.boolean()),
+		hasStale: v.optional(v.boolean()),
+		hasIntroduced: v.optional(v.boolean()),
+		hasChangedInGit: v.optional(v.boolean()),
+
 		firstSeenProjectionId: v.optional(v.id("catalogProjections")),
 		projectId: v.id("projects"),
 		projectionId: v.id("catalogProjections"),
@@ -1313,6 +1344,36 @@ export default defineSchema({
 			}),
 		),
 	})
+		.index("by_projectId_projectionId_hasWaiting_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"hasWaiting",
+			"catalogIndex",
+		])
+		.index("by_projectId_projectionId_hasUnconfirmedImport_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"hasUnconfirmedImport",
+			"catalogIndex",
+		])
+		.index("by_projectId_projectionId_hasStale_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"hasStale",
+			"catalogIndex",
+		])
+		.index("by_projectId_projectionId_hasIntroduced_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"hasIntroduced",
+			"catalogIndex",
+		])
+		.index("by_projectId_projectionId_hasChangedInGit_catalogIndex", [
+			"projectId",
+			"projectionId",
+			"hasChangedInGit",
+			"catalogIndex",
+		])
 		// Rows are keyed per projection, so a pending generation can stage its
 		// complete index beside the active one and generations never mix.
 		.index("by_project_and_projection_and_messageId", [

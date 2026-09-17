@@ -14,6 +14,7 @@ import type * as contentModel from "../contentModel.js";
 import type * as contentCollections from "../contentCollections.js";
 import type * as managedContent from "../managedContent.js";
 import type * as agentContent from "../agentContent.js";
+import type * as catalogBrowseIndex from "../catalogBrowseIndex.js";
 import type * as catalogBrowse from "../catalogBrowse.js";
 import type * as catalogProcessing from "../catalogProcessing.js";
 import type * as snapshotUploads from "../snapshotUploads.js";
@@ -76,6 +77,7 @@ import type * as snapshotOriginIndex from "../snapshotOriginIndex.js";
 import type * as snapshotCatalog from "../snapshotCatalog.js";
 import type * as snapshots from "../snapshots.js";
 import type * as sourceProposals from "../sourceProposals.js";
+import type * as sourceProposalState from "../sourceProposalState.js";
 import type * as translationResidue from "../translationResidue.js";
 
 import type {
@@ -93,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   agentContent: typeof agentContent;
 
   catalogBrowse: typeof catalogBrowse;
+  catalogBrowseIndex: typeof catalogBrowseIndex;
   catalogProcessing: typeof catalogProcessing;
   snapshotUploads: typeof snapshotUploads;
   releaseUploadDelivery: typeof releaseUploadDelivery;
@@ -154,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   snapshotOriginIndex: typeof snapshotOriginIndex;
   snapshots: typeof snapshots;
   sourceProposals: typeof sourceProposals;
+  sourceProposalState: typeof sourceProposalState;
   translationResidue: typeof translationResidue;
 }>;
 

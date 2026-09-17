@@ -38,16 +38,24 @@ function Harness({
 	locale = "de",
 	revision = 1,
 	focus = "all",
+	classificationRevision,
+	classificationGeneration,
 }: {
 	locale?: string;
 	revision?: number;
 	focus?: string;
+	classificationRevision?: number;
+	classificationGeneration?: string;
 }) {
 	const counts = useCatalogScopeCounts({
 		projectId: convexId<"projects">("project"),
 		projectionId: convexId<"catalogProjections">("projection"),
 		localeIds: [convexId<"locales">(locale)],
 		revision,
+		classificationRevision,
+		classificationGeneration: classificationGeneration
+			? convexId<"catalogBrowseStates">(classificationGeneration)
+			: undefined,
 	});
 	return (
 		<output>
@@ -118,4 +126,26 @@ test("reuses completed counts when returning to an unchanged selection", async (
 	await dom.render(view({ revision: 2 }));
 	expect(dom.container.textContent).toContain("counting");
 	expect(query).toHaveBeenCalledTimes(3);
+});
+
+test("content edits reuse classification totals, while classification changes and repairs invalidate them", async () => {
+	const classification = {
+		classificationRevision: 5,
+		classificationGeneration: "first-index",
+	};
+	await dom.render(view({ ...classification, revision: 1 }));
+	await act(async () => requests[0]?.resolve(page(4, 2)));
+	await dom.render(view({ ...classification, revision: 2 }));
+	expect(dom.container.textContent).toContain("4 waiting, 2 introduced");
+	expect(query).toHaveBeenCalledTimes(1);
+	await dom.render(view({ ...classification, classificationRevision: 6 }));
+	expect(query).toHaveBeenCalledTimes(2);
+	await act(async () => requests[1]?.resolve(page(3, 1)));
+	await dom.render(
+		view({ ...classification, classificationGeneration: "rebuilt-index" }),
+	);
+	expect(dom.container.textContent).toContain("counting");
+	expect(query).toHaveBeenCalledTimes(3);
+	await act(async () => requests[2]?.resolve(page(2, 0)));
+	expect(dom.container.textContent).toContain("2 waiting, 0 introduced");
 });

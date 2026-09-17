@@ -18,6 +18,10 @@ import {
 	repositoryAdapterActorValidator,
 } from "./permissions";
 import {
+	advanceSourceProposalSetRevision,
+	sourceProposalStateFor,
+} from "./sourceProposalState";
+import {
 	appendTranslationHistory,
 	latestTranslationHistory,
 } from "./translationHistoryWrite";
@@ -98,16 +102,6 @@ function assertSourceProposalHeadFields(
 			message: "A Source Proposal exceeds the supported Workspace envelope.",
 		});
 	}
-}
-
-async function sourceProposalStateFor(
-	ctx: QueryCtx | MutationCtx,
-	projectId: Id<"projects">,
-): Promise<Doc<"catalogWorkspaceSourceProposalStates"> | null> {
-	return await ctx.db
-		.query("catalogWorkspaceSourceProposalStates")
-		.withIndex("by_project", (q) => q.eq("projectId", projectId))
-		.unique();
 }
 
 /** Read the bounded current Source Proposal set. The durable proposal table is
@@ -490,17 +484,7 @@ export async function saveSourceProposal(
 		previous,
 		next: { ...nextHeadFields, proposalId },
 	});
-	const currentHeadVersion = input.project.sourceProposalHeadVersion ?? 0;
-	if (!Number.isSafeInteger(currentHeadVersion) || currentHeadVersion < 0) {
-		throw new ConvexError({
-			code: "INTEGRITY",
-			message: "Source Proposal head version is invalid.",
-		});
-	}
-	await ctx.db.patch(input.project._id, {
-		sourceProposalHeadVersion: currentHeadVersion + 1,
-		updatedAt: nextTimestamp,
-	});
+	await advanceSourceProposalSetRevision(ctx, input.project);
 	return { workspaceRevision: nextRevision };
 }
 

@@ -11,13 +11,24 @@ type Counts = FunctionReturnType<
 	typeof api.catalogBrowse.scopeCounts
 >["counts"];
 
-/** Count each catalog generation once per language/snapshot selection, never per focus
- * or browse page. Revision changes cancel the scan so totals cannot mix edits. */
+/** Count each classification revision once per language/tag/snapshot selection,
+ * never per focus, browse page, or wording edit. Cancel changed classifications
+ * so totals cannot combine different review states. */
 export function useCatalogScopeCounts(
 	input: CountArgs | "skip",
 ): Counts | undefined {
 	const convex = useConvex();
-	const requestKey = JSON.stringify(input);
+	const requestKey = JSON.stringify(
+		input === "skip"
+			? input
+			: {
+					...input,
+					revision:
+						input.classificationRevision === undefined
+							? input.revision
+							: undefined,
+				},
+	);
 	const [completed] = useState(() => new Map<string, Counts>());
 	const [result, setResult] = useState<{
 		requestKey: string;

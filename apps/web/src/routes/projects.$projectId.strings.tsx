@@ -54,6 +54,7 @@ import {
 	updateStringsWindowCardCache,
 } from "@/lib/strings-window";
 import { useCatalogBrowsePage } from "@/lib/use-catalog-browse-page";
+import { useCatalogBrowseReadiness } from "@/lib/use-catalog-browse-readiness";
 import { useCatalogNavigationGuard } from "@/lib/use-catalog-navigation-guard";
 import { useCatalogScopeCounts } from "@/lib/use-catalog-scope-counts";
 import { useCatalogWindow } from "@/lib/use-catalog-window";
@@ -178,9 +179,10 @@ function RepositoryStrings() {
 			: targets.filter((locale) => search.locales?.includes(locale.code));
 	const selectedLocaleIds = selectedLocales.map((locale) => locale._id);
 	const selectionKey = JSON.stringify(search.locales ?? "all");
-	const overview = useQuery(api.catalogBrowse.overview, {
-		projectId: convexProjectId,
-	});
+	const { overview, contentRevision } = useCatalogBrowseReadiness(
+		convexProjectId,
+		search.q,
+	);
 	const snapshotIndex = useSnapshotOriginIndex(
 		overview?.kind === "ready" &&
 			Array.isArray(search.snapshots) &&
@@ -238,8 +240,9 @@ function RepositoryStrings() {
 				}
 			: "skip",
 	);
-	const page = useCatalogBrowsePage(
+	const { page, isRefreshing } = useCatalogBrowsePage(
 		overview?.kind === "ready" &&
+			(!search.q?.trim() || contentRevision !== undefined) &&
 			snapshotIndex.ready &&
 			locales !== undefined &&
 			(!search.release || releaseHandoff !== undefined)
@@ -262,8 +265,18 @@ function RepositoryStrings() {
 							: undefined,
 				}
 			: "skip",
-		overview?.kind === "ready" ? overview.revision : undefined,
-		tagOptions?.revision,
+		{
+			content: contentRevision,
+			classification:
+				overview?.kind === "ready"
+					? (overview.classificationRevision ?? overview.revision)
+					: undefined,
+			classificationGeneration:
+				overview?.kind === "ready"
+					? overview.classificationGeneration
+					: undefined,
+			tags: search.tags?.length ? tagOptions?.revision : undefined,
+		},
 	);
 	const scopeCounts = useCatalogScopeCounts(
 		overview?.kind === "ready" && locales !== undefined && snapshotIndex.ready
@@ -271,7 +284,11 @@ function RepositoryStrings() {
 					projectId: convexProjectId,
 					projectionId: overview.projectionId,
 					revision: overview.revision,
-					expectedTagRevision: tagOptions?.revision,
+					classificationRevision: overview.classificationRevision,
+					classificationGeneration: overview.classificationGeneration,
+					expectedTagRevision: search.tags?.length
+						? tagOptions?.revision
+						: undefined,
 					localeIds: selectedLocaleIds,
 					tagIds: search.tags?.map((id) => convexId<"tags">(id)),
 					introducedSnapshotIds: Array.isArray(search.snapshots)
@@ -318,13 +335,12 @@ function RepositoryStrings() {
 	const [windowCardCache, setWindowCardCache] = useState(
 		createStringsWindowCardCache,
 	);
-	// The Window read binds to one exact projection. When the Baseline advances
-	// under an open Strings page, the old window's message ids would fail the
-	// read's STALE_BASIS check, so the window is dropped at once and rebuilt
-	// from the new Navigation read on the next scroll or focus.
+	// Visible values belong to a catalog generation, not a completed list scan.
+	// Keep their subscriptions alive during same-filter refreshes; a new
+	// generation or language selection must discard the old editable values.
 	const windowedProjectionId =
-		navigation?.kind === "ready"
-			? `${navigation.projectionId}:${JSON.stringify(selectedLocaleIds)}`
+		overview?.kind === "ready"
+			? `${overview.projectionId}:${JSON.stringify(selectedLocaleIds)}`
 			: undefined;
 	const windowMessageIds =
 		windowRequest.projectionId === windowedProjectionId
@@ -342,12 +358,13 @@ function RepositoryStrings() {
 		[windowedProjectionId],
 	);
 	const windowArgs =
-		navigation?.kind === "ready" &&
-		navigation.projectionId !== undefined &&
+		overview?.kind === "ready" &&
+		page &&
+		!page.stale &&
 		windowMessageIds.length > 0
 			? {
 					projectId: convexProjectId,
-					expectedProjectionId: navigation.projectionId,
+					expectedProjectionId: overview.projectionId,
 					messageIds: windowMessageIds,
 					localeIds: selectedLocaleIds,
 				}
@@ -774,7 +791,7 @@ function RepositoryStrings() {
 			/>
 			{overview?.kind === "ready" ? (
 				<StringsPagination
-					count={page?.stale ? undefined : page?.keys.length}
+					count={page?.stale || isRefreshing ? undefined : page?.keys.length}
 					hasPrevious={search.after !== undefined}
 					hasNext={page?.nextAfter != null}
 					onPrevious={() => {
