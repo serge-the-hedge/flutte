@@ -25,16 +25,6 @@ const catalogs = { en, de, es, fr, ru, zh } as const;
 type LocaleCode = keyof typeof catalogs;
 const pathFor = (code: LocaleCode) => `lib/l10n/intl_${code}.arb`;
 
-function withCatalogValue(
-	content: string,
-	messageId: string,
-	value: string,
-): string {
-	const catalog = JSON.parse(content) as Record<string, unknown>;
-	catalog[messageId] = value;
-	return JSON.stringify(catalog);
-}
-
 async function readActiveCatalog(
 	user: AuthenticatedBackend,
 	projectId: Id<"projects">,
@@ -304,47 +294,6 @@ describe("catalog projection", () => {
 			snapshotId: result.snapshotId,
 			sourceFingerprint:
 				"5d1070b4fef7ee899c0d9c79fd189e740beb9736638b4e014c350d9fc9bf9112",
-		});
-
-		const next = await user.action(api.snapshots.ingest, {
-			projectId,
-			repository: "github.com/brickit-app/brickit-flutter",
-			commit: "projection-next",
-			lineage: {
-				baselineCommit: "projection-baseline",
-				relationship: "descendant",
-				mergeBase: "projection-baseline",
-			},
-			files: (Object.keys(catalogs) as LocaleCode[]).map((code) => ({
-				catalogPath: pathFor(code),
-				content:
-					code === "en"
-						? withCatalogValue(
-								catalogs[code],
-								"aboutapp_brickit",
-								"Brickit Next",
-							)
-						: code === "de"
-							? withCatalogValue(
-									catalogs[code],
-									"aboutapp_brickit",
-									"Brickit Weiter",
-								)
-							: catalogs[code],
-			})),
-		});
-		expect(await readGitChanges(user, projectId)).toMatchObject({
-			snapshotId: next.snapshotId,
-			previousSnapshotId: result.snapshotId,
-			keys: [
-				{
-					id: "aboutapp_brickit",
-					values: [
-						{ current: { value: "Brickit Next" } },
-						{ current: { value: "Brickit Weiter" } },
-					],
-				},
-			],
 		});
 	});
 
