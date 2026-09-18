@@ -260,6 +260,19 @@ describe("Catalog Navigation Index publication", () => {
 			navigationReusedKeyCount: 1,
 			navigationDerivedKeyCount: 1,
 		});
+		const parity = await t.run(
+			async (ctx) =>
+				await Promise.all(
+					second.rows
+						.filter((row) => row.projectionId === second.projection._id)
+						.map(async (row) => ({
+							stored: stripSystemFields(row),
+							fresh: (await navigationEvidence(ctx, projectId, row.messageId))
+								.digest,
+						})),
+				),
+		);
+		for (const row of parity) expect(row.stored).toEqual(row.fresh);
 		// The previous generation's rows linger as garbage until the reset
 		// worker reclaims them, and the active generation stays complete.
 		expect(
@@ -631,7 +644,7 @@ describe("Catalog Navigation Index publication", () => {
 		});
 	}, 60_000);
 
-	test("reuses unchanged navigation while matching a fresh Brickit-sized derivation", async () => {
+	test("matches a fresh derivation for every key of a Brickit-sized catalog", async () => {
 		const user = await authenticatedBackend(t, "nav-parity");
 		const projectId = await createProject(user);
 		await bindLocales(user, projectId, [
@@ -654,34 +667,6 @@ describe("Catalog Navigation Index publication", () => {
 				{ catalogPath: "intl_zh.arb", content: zh },
 			],
 		});
-		const initialProjection = await t.run(async (ctx) => {
-			const projection = await readActiveProjection(ctx, projectId);
-			return projection;
-		});
-		expect(initialProjection).toMatchObject({
-			navigationReusedKeyCount: 0,
-			navigationDerivedKeyCount: initialProjection.expectedKeyCount,
-		});
-
-		await ingest(user, {
-			projectId,
-			commit: "brickit-next",
-			baselineCommit: "brickit",
-			files: [
-				{
-					catalogPath: "intl_en.arb",
-					content: en.replace(
-						'"aboutapp_brickit": "Brickit"',
-						'"aboutapp_brickit": "Brickit app"',
-					),
-				},
-				{ catalogPath: "intl_de.arb", content: de },
-				{ catalogPath: "intl_es.arb", content: es },
-				{ catalogPath: "intl_fr.arb", content: fr },
-				{ catalogPath: "intl_ru.arb", content: ru },
-				{ catalogPath: "intl_zh.arb", content: zh },
-			],
-		});
 		const { projectionId, expectedKeyCount } = await t.run(async (ctx) => {
 			const projection = await readActiveProjection(ctx, projectId);
 			return {
@@ -692,16 +677,9 @@ describe("Catalog Navigation Index publication", () => {
 		const state = await t.run(
 			async (ctx) => await readNavigationState(ctx, projectId),
 		);
-		const projectionStats = await t.run(
-			async (ctx) => await ctx.db.get(projectionId),
-		);
 		expect(state).toMatchObject({
 			rowCount: expectedKeyCount,
 			status: "ready",
-		});
-		expect(projectionStats).toMatchObject({
-			navigationReusedKeyCount: expectedKeyCount - 1,
-			navigationDerivedKeyCount: 1,
 		});
 		expect(state?.byteLength).toBeGreaterThan(0);
 
