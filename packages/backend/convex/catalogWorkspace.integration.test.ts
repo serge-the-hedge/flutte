@@ -1346,36 +1346,42 @@ describe("Catalog Workspace", () => {
 			throw new Error("Expected a ready Navigation read.");
 		}
 
-		const started = await user.mutation(
-			api.ordinaryImportRuns.startOrdinaryImportRun,
-			{
-				projectId,
-				expectedProjectionId: navigation.projectionId,
-				policy: "ordinary-v1" as const,
-			},
-		);
-
-		// A new Baseline publishes while the run is still walking. The
-		// scheduled steps race the ingest in this harness, so the run is
-		// deterministically re-armed against the OLD projection afterwards:
-		// a running run bound to a projection that is no longer active must
-		// be marked superseded by the next step.
+		// Model a run that was still walking when a new Baseline published.
+		// Constructing it after publication avoids racing the scheduler that
+		// startOrdinaryImportRun deliberately arms immediately.
 		await ingestCatalog(user, {
 			projectId,
 			commit: "next",
 			baselineCommit: "baseline",
 		});
-		await t.run(async (ctx) => {
-			await ctx.db.patch(started.runId, {
+		const { currentProjectionId, runId } = await t.run(async (ctx) => {
+			const project = await ctx.db.get(projectId);
+			if (!project?.activeCatalogProjectionId) {
+				throw new Error("Expected the next active Catalog Projection.");
+			}
+			const runId = await ctx.db.insert("ordinaryImportRuns", {
+				projectId,
+				projectionId: navigation.projectionId,
+				policy: "ordinary-v1",
 				status: "running",
 				cursor: 0,
+				confirmed: 0,
+				skipped: 0,
+				skipReasons: {},
+				startedBy: { kind: "system", id: "supersession-test" },
 				stepPending: true,
+				updatedAt: Date.now(),
 			});
+			return {
+				currentProjectionId: project.activeCatalogProjectionId,
+				runId,
+			};
 		});
+		expect(currentProjectionId).not.toBe(navigation.projectionId);
 
 		const result = await t.mutation(
 			internal.ordinaryImportRuns.runOrdinaryImportStep,
-			{ runId: started.runId },
+			{ runId },
 		);
 		expect(result).toMatchObject({ status: "superseded" });
 

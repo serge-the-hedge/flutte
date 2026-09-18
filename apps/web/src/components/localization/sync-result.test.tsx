@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ComponentProps } from "react";
 import { convexId } from "@/lib/convex-api";
 import { createDomTest } from "@/test/dom";
-import { SyncResult } from "./sync-result";
+import { SyncProgress, SyncResult } from "./sync-result";
 
 describe("Sync result", () => {
 	const dom = createDomTest();
@@ -68,5 +68,44 @@ describe("Sync result", () => {
 		expect(dom.container.textContent).toContain("The sync did not complete.");
 		expect(dom.container.textContent).toContain("intl_en.arb: Invalid JSON");
 		expect(dom.container.querySelector("dl")).toBeNull();
+	});
+});
+
+describe("Sync progress", () => {
+	const dom = createDomTest();
+	const sync = {
+		id: convexId<"snapshotUploadSessions">("upload"),
+		status: "running",
+		stage: "reconciling",
+		progress: { completed: 512, total: 1_559 },
+		createdAt: 1_000,
+		updatedAt: 2_000,
+		failure: null,
+	} satisfies ComponentProps<typeof SyncProgress>["sync"];
+
+	test("shows the current durable phase and bounded progress", async () => {
+		await dom.render(<SyncProgress sync={sync} />);
+		expect(dom.container.textContent).toContain("Reconciling catalog keys");
+		expect(dom.container.textContent).toContain("512 of 1,559 strings");
+		const width =
+			dom.container.querySelector<HTMLElement>("[style]")?.style.width;
+		expect(Number.parseFloat(width ?? "0")).toBeCloseTo(32.84, 2);
+	});
+
+	test("shows an operational failure without a progress bar", async () => {
+		await dom.render(
+			<SyncProgress
+				sync={{
+					...sync,
+					status: "failed",
+					stage: "validating",
+					progress: null,
+					failure: "Stored catalog is missing.",
+				}}
+			/>,
+		);
+		expect(dom.container.textContent).toContain("Sync failed");
+		expect(dom.container.textContent).toContain("Stored catalog is missing.");
+		expect(dom.container.querySelector("[style]")).toBeNull();
 	});
 });

@@ -656,12 +656,39 @@ export default defineSchema({
 			v.literal("uploading"),
 			v.literal("processing"),
 			v.literal("completed"),
+			v.literal("failed"),
 		),
 		createdAt: v.number(),
 		expiresAt: v.number(),
 		processingAt: v.optional(v.number()),
+		processingUpdatedAt: v.optional(v.number()),
+		processingStage: v.optional(
+			v.union(
+				v.literal("queued"),
+				v.literal("validating"),
+				v.literal("reconciling"),
+				v.literal("staging"),
+				v.literal("reviewing"),
+				v.literal("indexing"),
+				v.literal("publishing"),
+			),
+		),
+		progressCompleted: v.optional(v.number()),
+		progressTotal: v.optional(v.number()),
+		processingJobId: v.optional(v.id("_scheduled_functions")),
+		processingWatchdogId: v.optional(v.id("_scheduled_functions")),
+		processingAttempts: v.optional(v.number()),
+		failure: v.optional(
+			v.object({ message: v.string(), failedAt: v.number() }),
+		),
 		runId: v.optional(v.id("snapshotIngestionRuns")),
-	}),
+		resultReused: v.optional(v.boolean()),
+	}).index("by_project_and_release_and_status_and_createdAt", [
+		"projectId",
+		"releaseRecordId",
+		"status",
+		"createdAt",
+	]),
 	snapshotUploadFiles: defineTable({
 		sessionId: v.id("snapshotUploadSessions"),
 		catalogPath: v.string(),
@@ -833,6 +860,7 @@ export default defineSchema({
 	})
 		.index("by_projection", ["projectionId"])
 		.index("by_proposal", ["proposalId"])
+		.index("by_proposal_and_localeId", ["proposalId", "localeId"])
 		.index("by_project_and_catalogPath", ["projectId", "catalogPath"]),
 
 	localeProposalValues: defineTable({
@@ -915,6 +943,12 @@ export default defineSchema({
 		// readable while new projections always write the complete envelope.
 		previousBaselineSnapshotId: v.optional(v.id("sourceSnapshots")),
 		previousCatalogProjectionId: v.optional(v.id("catalogProjections")),
+		// Pins the active Navigation generation while a descendant projection is
+		// staged. Unchanged digests may be copied only while this revision remains
+		// current; publication rejects a racing workspace edit and restages.
+		previousNavigationRevision: v.optional(v.number()),
+		navigationReusedKeyCount: v.optional(v.number()),
+		navigationDerivedKeyCount: v.optional(v.number()),
 		// Captured at staging time and checked immediately before publication so a
 		// racing Source Proposal is never omitted from an accepted transition.
 		sourceProposalHeadVersion: v.optional(v.number()),
@@ -1216,6 +1250,10 @@ export default defineSchema({
 			"recordedAt",
 		])
 		.index("by_deliveryProjectionId", ["deliveryProjectionId"])
+		.index("by_deliveryProjectionId_and_messageId", [
+			"deliveryProjectionId",
+			"messageId",
+		])
 		.index("by_project", ["projectId"])
 		.index("by_value_identity", [
 			"projectId",

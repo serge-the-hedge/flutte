@@ -73,6 +73,10 @@ const MAX_NAVIGATION_RESET_ROWS_PER_MUTATION = 256;
 // Repair derivation reads every Locale row and current decision for each key.
 // Keep its transactions comfortably below Convex's system-operation ceiling.
 const MAX_NAVIGATION_KEYS_PER_STAGE_STEP = 32;
+/** Snapshot ingestion already knows which keys changed while reconciling them.
+ * Carry that plan into Navigation staging in larger batches instead of
+ * rediscovering and re-deriving every key from the database. */
+export const MAX_NAVIGATION_PLAN_BATCH_KEYS = 32;
 const MAX_NAVIGATION_VERIFY_ROWS_PER_MUTATION = 256;
 const NAVIGATION_BACKFILL_STEP_LEASE_MS = 60_000;
 /** Step budget for the ingest action's staging loop; 32 keys per step over
@@ -768,6 +772,36 @@ function navigationStagingFor(
 		.unique();
 }
 
+async function ensureNavigationStaging(
+	ctx: MutationCtx,
+	input: {
+		projectId: Id<"projects">;
+		projection: Doc<"catalogProjections">;
+	},
+): Promise<Doc<"catalogWorkspaceNavigationStaging">> {
+	let staging = await navigationStagingFor(ctx, input.projection._id);
+	if (!staging) {
+		await ctx.db.insert("catalogWorkspaceNavigationStaging", {
+			projectId: input.projectId,
+			projectionId: input.projection._id,
+			status: "staging",
+			lastCatalogIndex: -1,
+			rowCount: 0,
+			byteLength: 0,
+			expectedRowCount: input.projection.expectedKeyCount,
+			ordinaryImportCounts: emptyOrdinaryImportCounts(),
+		});
+		staging = await navigationStagingFor(ctx, input.projection._id);
+	}
+	if (!staging || staging.projectId !== input.projectId) {
+		throw new ConvexError({
+			code: "INTEGRITY",
+			message: "Navigation staging is missing its envelope.",
+		});
+	}
+	return staging;
+}
+
 function navigationRowToDigest(
 	row: Doc<"catalogWorkspaceNavigationRows">,
 ): CatalogWorkspaceNavigationDigest {
@@ -1012,6 +1046,93 @@ async function upsertNavigationRow(
 		ordinaryImportCounts: nextOrdinaryImportCounts,
 	});
 	return true;
+}
+
+/** Insert a private generation batch while updating its aggregate envelope
+ * once. This is intentionally staging-only: active edits still use the
+ * one-row projector so each canonical write and its digest stay atomic. */
+async function stageNavigationDigests(
+	ctx: MutationCtx,
+	staging: Doc<"catalogWorkspaceNavigationStaging">,
+	digests: CatalogWorkspaceNavigationDigest[],
+): Promise<void> {
+	let rowCount = staging.rowCount;
+	let byteLength = staging.byteLength;
+	let ordinaryImportCounts = normalizedOrdinaryImportCounts(
+		staging.ordinaryImportCounts ?? emptyOrdinaryImportCounts(),
+	);
+	for (const digest of digests) {
+		const existing = await navigationRowFor(
+			ctx,
+			digest.projectId,
+			staging.projectionId,
+			digest.messageId,
+		);
+		if (!digest.firstSeenProjectionId) {
+			digest.firstSeenProjectionId = (
+				await ctx.db
+					.query("catalogMessageOrigins")
+					.withIndex("by_project_and_messageId", (q) =>
+						q
+							.eq("projectId", digest.projectId)
+							.eq("messageId", digest.messageId),
+					)
+					.unique()
+			)?.firstSeenProjectionId;
+			if (!digest.firstSeenProjectionId) delete digest.firstSeenProjectionId;
+		}
+		const nextByteLength = navigationDigestByteLength(digest);
+		if (nextByteLength > 512 * 1024) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A Navigation digest exceeds the 512 KiB document budget.",
+			});
+		}
+		if (existing && navigationRowMatchesDigest(existing, digest)) continue;
+		if (existing) {
+			const previousDigest = navigationRowToDigest(existing);
+			byteLength -= navigationDigestByteLength(previousDigest);
+			ordinaryImportCounts = combineOrdinaryImportCounts(
+				ordinaryImportCounts,
+				ordinaryImportCountsForDigest(previousDigest),
+				-1,
+			);
+			await ctx.db.replace(existing._id, {
+				...digest,
+				...focusFlags(digest),
+			});
+		} else {
+			rowCount++;
+			await ctx.db.insert("catalogWorkspaceNavigationRows", {
+				...digest,
+				...focusFlags(digest),
+			});
+		}
+		byteLength += nextByteLength;
+		ordinaryImportCounts = combineOrdinaryImportCounts(
+			ordinaryImportCounts,
+			ordinaryImportCountsForDigest(digest),
+			1,
+		);
+	}
+	if (
+		rowCount > MAX_CATALOG_WORKSPACE_NAVIGATION_ROWS ||
+		byteLength > MAX_CATALOG_WORKSPACE_NAVIGATION_BYTES
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message:
+				"Catalog Workspace exceeds its supported Navigation Index envelope.",
+		});
+	}
+	await ctx.db.patch(staging._id, {
+		rowCount,
+		byteLength,
+		ordinaryImportCounts,
+	});
+	staging.rowCount = rowCount;
+	staging.byteLength = byteLength;
+	staging.ordinaryImportCounts = ordinaryImportCounts;
 }
 
 /** Stamp derived provenance without changing values, review state, or envelope accounting. */
@@ -1543,26 +1664,10 @@ export const stageNavigationIndexStep = internalMutation({
 				message: "Navigation staging needs its Catalog Projection.",
 			});
 		}
-		let staging = await navigationStagingFor(ctx, args.projectionId);
-		if (!staging) {
-			await ctx.db.insert("catalogWorkspaceNavigationStaging", {
-				projectId: args.projectId,
-				projectionId: args.projectionId,
-				status: "staging",
-				lastCatalogIndex: -1,
-				rowCount: 0,
-				byteLength: 0,
-				expectedRowCount: projection.expectedKeyCount,
-				ordinaryImportCounts: emptyOrdinaryImportCounts(),
-			});
-			staging = await navigationStagingFor(ctx, args.projectionId);
-			if (!staging) {
-				throw new ConvexError({
-					code: "INTEGRITY",
-					message: "Navigation staging is missing its envelope.",
-				});
-			}
-		}
+		const staging = await ensureNavigationStaging(ctx, {
+			projectId: args.projectId,
+			projection,
+		});
 		if (staging.status === "ready") {
 			return { status: "ready" as const, stagedKeys: 0 };
 		}
@@ -1603,6 +1708,17 @@ export const stageNavigationIndexStep = internalMutation({
 		const status = batch.moreRemaining
 			? ("staging" as const)
 			: ("ready" as const);
+		const derivedKeys =
+			(projection.navigationDerivedKeyCount ?? 0) + batch.messageIds.length;
+		if (derivedKeys > projection.expectedKeyCount) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Navigation staging exceeded the Catalog key envelope.",
+			});
+		}
+		await ctx.db.patch(projection._id, {
+			navigationDerivedKeyCount: derivedKeys,
+		});
 		await ctx.db.patch(staging._id, {
 			lastCatalogIndex: batch.lastCatalogIndex,
 			status,
@@ -1614,6 +1730,198 @@ export const stageNavigationIndexStep = internalMutation({
 				: {}),
 		});
 		return { status, stagedKeys: batch.messageIds.length };
+	},
+});
+
+const navigationStagePlanValidator = v.object({
+	messageId: v.string(),
+	catalogIndex: v.number(),
+	reusePrevious: v.boolean(),
+});
+
+/** Stage the reconciliation plan the Snapshot projector already computed.
+ * Unchanged keys copy their current digest into the new generation; changed
+ * keys and keys receiving new private review evidence are derived normally. */
+export const stageNavigationPlanBatch = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+		plans: v.array(navigationStagePlanValidator),
+	},
+	returns: v.object({ reusedKeys: v.number(), derivedKeys: v.number() }),
+	handler: async (ctx, args) => {
+		if (
+			args.plans.length === 0 ||
+			args.plans.length > MAX_NAVIGATION_PLAN_BATCH_KEYS ||
+			new Set(args.plans.map((plan) => plan.messageId)).size !==
+				args.plans.length ||
+			args.plans.some(
+				(plan) =>
+					plan.messageId.length === 0 ||
+					!Number.isInteger(plan.catalogIndex) ||
+					plan.catalogIndex < 0,
+			)
+		) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Stage 1–${MAX_NAVIGATION_PLAN_BATCH_KEYS} distinct Navigation keys with valid Catalog positions.`,
+			});
+		}
+		const projection = await ctx.db.get(args.projectionId);
+		if (
+			!projection ||
+			projection.projectId !== args.projectId ||
+			projection.status !== "staging"
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Navigation staging needs its private Catalog Projection.",
+			});
+		}
+		const staging = await ensureNavigationStaging(ctx, {
+			projectId: args.projectId,
+			projection,
+		});
+		if (staging.status !== "staging") {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message: "This Navigation generation has already finished staging.",
+			});
+		}
+		const previousState = await navigationStateFor(ctx, args.projectId);
+		const hasPinnedPreviousGeneration =
+			projection.previousCatalogProjectionId !== undefined &&
+			projection.previousNavigationRevision !== undefined;
+		if (
+			hasPinnedPreviousGeneration &&
+			(!previousState ||
+				previousState.projectionId !== projection.previousCatalogProjectionId ||
+				previousState.status !== "ready" ||
+				previousState.revision !== projection.previousNavigationRevision)
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"Strings changed while Snapshot navigation was being prepared. Retry the sync.",
+			});
+		}
+
+		const digests: CatalogWorkspaceNavigationDigest[] = [];
+		let reusedKeys = 0;
+		let derivedKeys = 0;
+		for (const plan of args.plans) {
+			let digest: CatalogWorkspaceNavigationDigest | null = null;
+			if (
+				plan.reusePrevious &&
+				hasPinnedPreviousGeneration &&
+				previousState?.ordinaryImportPolicyVersion ===
+					ORDINARY_IMPORT_POLICY_VERSION &&
+				projection.previousCatalogProjectionId
+			) {
+				const privateDecision = await ctx.db
+					.query("catalogWorkspaceDecisionRecords")
+					.withIndex("by_deliveryProjectionId_and_messageId", (q) =>
+						q
+							.eq("deliveryProjectionId", projection._id)
+							.eq("messageId", plan.messageId),
+					)
+					.first();
+				if (!privateDecision) {
+					const previous = await navigationRowFor(
+						ctx,
+						args.projectId,
+						projection.previousCatalogProjectionId,
+						plan.messageId,
+					);
+					if (previous) {
+						digest = {
+							...navigationRowToDigest(previous),
+							projectionId: projection._id,
+							catalogIndex: plan.catalogIndex,
+						};
+						reusedKeys++;
+					}
+				}
+			}
+			if (!digest) {
+				digest = await deriveDigestForMessage(ctx, {
+					projectId: args.projectId,
+					projectionId: projection._id,
+					messageId: plan.messageId,
+				});
+				if (!digest) {
+					throw new ConvexError({
+						code: "INTEGRITY",
+						message: "A Navigation plan lost its Catalog key.",
+					});
+				}
+				derivedKeys++;
+			}
+			digests.push(digest);
+		}
+		await stageNavigationDigests(ctx, staging, digests);
+		const nextReused = (projection.navigationReusedKeyCount ?? 0) + reusedKeys;
+		const nextDerived =
+			(projection.navigationDerivedKeyCount ?? 0) + derivedKeys;
+		if (nextReused + nextDerived > projection.expectedKeyCount) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Navigation staging exceeded the Catalog key envelope.",
+			});
+		}
+		await ctx.db.patch(projection._id, {
+			navigationReusedKeyCount: nextReused,
+			navigationDerivedKeyCount: nextDerived,
+		});
+		await ctx.db.patch(staging._id, {
+			lastCatalogIndex: Math.max(
+				staging.lastCatalogIndex,
+				...args.plans.map((plan) => plan.catalogIndex),
+			),
+		});
+		return { reusedKeys, derivedKeys };
+	},
+});
+
+export const completeNavigationPlan = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		projectionId: v.id("catalogProjections"),
+	},
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const projection = await ctx.db.get(args.projectionId);
+		if (
+			!projection ||
+			projection.projectId !== args.projectId ||
+			projection.status !== "staging"
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Navigation completion needs its private Catalog Projection.",
+			});
+		}
+		const staging = await ensureNavigationStaging(ctx, {
+			projectId: args.projectId,
+			projection,
+		});
+		if (
+			(projection.navigationReusedKeyCount ?? 0) +
+				(projection.navigationDerivedKeyCount ?? 0) !==
+				projection.expectedKeyCount ||
+			staging.rowCount !== projection.expectedKeyCount
+		) {
+			throw new ConvexError({
+				code: "INTEGRITY",
+				message: "Navigation staging did not cover every Catalog key.",
+			});
+		}
+		await ctx.db.patch(staging._id, {
+			status: "ready",
+			expectedRowCount: projection.expectedKeyCount,
+			expectedByteLength: staging.byteLength,
+		});
+		return null;
 	},
 });
 

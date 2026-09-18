@@ -72,6 +72,12 @@ export const agentRateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	repositorySnapshotStatus: {
+		kind: "token bucket",
+		rate: 60,
+		period: MINUTE,
+		capacity: 12,
+	},
 	repositoryReleaseDelivery: {
 		kind: "token bucket",
 		rate: 12,
@@ -93,6 +99,7 @@ export const consume = internalMutation({
 			v.literal("agentLocaleProposal"),
 			v.literal("agentTranslationProposal"),
 			v.literal("repositorySnapshotContext"),
+			v.literal("repositorySnapshotStatus"),
 			v.literal("repositorySnapshotSubmit"),
 			v.literal("repositorySnapshotUpload"),
 			v.literal("repositoryReleaseDelivery"),

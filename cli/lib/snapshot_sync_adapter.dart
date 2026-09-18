@@ -185,6 +185,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     this.onWarning,
     this.onProgress,
     this.progressInterval = const Duration(seconds: 10),
+    this.pollInterval = const Duration(seconds: 2),
   });
 
   final Uri baseUrl;
@@ -192,6 +193,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
   final void Function(String line)? onWarning;
   final void Function(String line)? onProgress;
   final Duration progressInterval;
+  final Duration pollInterval;
   final _compatibility = CliCompatibility();
 
   @override
@@ -285,12 +287,66 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       onProgress?.call('Uploading catalogs: ${index + 1}/${files.length}');
     }
     onProgress?.call('Waiting for Blabla to validate and apply the snapshot…');
-    final response = await _request(
+    var response = await _request(
       'POST',
       '/snapshot-uploads/finalize',
       waitingFor: 'Still waiting for Blabla to validate and apply the snapshot',
-      body: {'sessionId': sessionId},
+      body: {'sessionId': sessionId, 'async': true},
     );
+    final elapsed = Stopwatch()..start();
+    String? lastProgress;
+    var lastProgressAt = Duration.zero;
+    while (response['run'] == null) {
+      final finalization = _object(response['finalization']);
+      final status = _requiredString(finalization, 'status');
+      if (status == 'failed') {
+        final failure = finalization['failure'] == null
+            ? null
+            : _object(finalization['failure']);
+        throw RepositoryAdapterException(
+          'Blabla could not finish the snapshot sync. ${failure == null ? 'Retry the sync; it is safe.' : '${_requiredString(failure, 'message')} Retry the sync; it is safe.'}',
+        );
+      }
+      final progress = _finalizationProgress(finalization);
+      if (progress != lastProgress ||
+          elapsed.elapsed - lastProgressAt >= progressInterval) {
+        onProgress?.call(progress);
+        lastProgress = progress;
+        lastProgressAt = elapsed.elapsed;
+      }
+      await Future<void>.delayed(pollInterval);
+      response = await _request(
+        'POST',
+        '/snapshot-uploads/status',
+        waitingFor: 'Waiting for Blabla sync status',
+        body: {'sessionId': sessionId},
+      );
+    }
+    elapsed.stop();
+    return _receipt(response);
+  }
+
+  String _finalizationProgress(Map<String, Object?> finalization) {
+    final stage = _optionalString(finalization, 'stage') ?? 'queued';
+    final progress = finalization['progress'] == null
+        ? null
+        : _object(finalization['progress']);
+    final count = progress == null
+        ? ''
+        : ' ${_requiredInt(progress, 'completed')}/${_requiredInt(progress, 'total')}';
+    return switch (stage) {
+      'queued' => 'Snapshot queued…',
+      'validating' => 'Validating catalogs$count…',
+      'reconciling' => 'Reconciling catalog keys$count…',
+      'staging' => 'Writing catalog changes$count…',
+      'reviewing' => 'Restoring approved translations…',
+      'indexing' => 'Preparing Strings$count…',
+      'publishing' => 'Publishing the snapshot…',
+      _ => 'Applying the snapshot…',
+    };
+  }
+
+  SnapshotSyncReceipt _receipt(Map<String, Object?> response) {
     final run = _object(response['run']);
     final diagnostics = _requiredList(run, 'diagnostics')
         .map((value) {

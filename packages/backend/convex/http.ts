@@ -28,7 +28,12 @@ import {
 	finalizeReleaseUpload,
 	storedReleaseBundle,
 } from "./releaseUploadDelivery";
-import { finalizeUpload, uploadFile } from "./snapshotUploads";
+import {
+	finalizationStatus,
+	finalizeUpload,
+	startUploadFinalization,
+	uploadFile,
+} from "./snapshotUploads";
 
 function searchChoice<T extends string>(
 	params: URLSearchParams,
@@ -62,6 +67,7 @@ type AgentRateLimitName =
 	| "agentTranslationProposal";
 type RepositoryAdapterRateLimitName =
 	| "repositorySnapshotContext"
+	| "repositorySnapshotStatus"
 	| "repositorySnapshotSubmit"
 	| "repositorySnapshotUpload"
 	| "repositoryReleaseDelivery";
@@ -844,9 +850,39 @@ http.route({
 						};
 						return body.kind === "release"
 							? await finalizeReleaseUpload(ctx, args)
-							: await finalizeUpload(ctx, args);
+							: body.async === true
+								? await startUploadFinalization(ctx, args)
+								: await finalizeUpload(ctx, args);
 					},
 					body.kind === "release" ? "export" : "snapshot-submission",
+				),
+			);
+		} catch (error) {
+			return routeError(error);
+		}
+	}),
+});
+http.route({
+	path: "/api/repository-adapter/v1/snapshot-uploads/status",
+	method: "POST",
+	handler: httpAction(async (ctx, request) => {
+		try {
+			const body = await jsonObject(request);
+			return agentJson(
+				await withRepositoryAdapter(
+					ctx,
+					request,
+					"repositorySnapshotStatus",
+					async ({ projectId, tokenId }) =>
+						await finalizationStatus(ctx, {
+							projectId,
+							tokenId,
+							sessionId: requiredJsonString(
+								body,
+								"sessionId",
+							) as Id<"snapshotUploadSessions">,
+						}),
+					"snapshot-submission",
 				),
 			);
 		} catch (error) {

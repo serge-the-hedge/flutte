@@ -1,10 +1,13 @@
-import { expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
 	createProject,
 } from "../test/support";
 import { api } from "./_generated/api";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 test("streams two dozen languages through introduction, archival and restoration", async () => {
 	const t = createBackend();
@@ -79,6 +82,9 @@ test("streams two dozen languages through introduction, archival and restoration
 		},
 		files: files(["retained", "introduced"]),
 	});
+	expect(
+		await t.run((ctx) => ctx.db.query("catalogProcessingInputs").take(1)),
+	).toHaveLength(1);
 	await t.run(async (ctx) => {
 		const project = await ctx.db.get(projectId);
 		if (!project?.activeCatalogProjectionId)
@@ -97,9 +103,6 @@ test("streams two dozen languages through introduction, archival and restoration
 			)
 			.unique();
 		expect(introduced?.introductionLocaleIds).toHaveLength(23);
-		expect(await ctx.db.query("catalogProcessingInputs").take(1)).toHaveLength(
-			0,
-		);
 	});
 	await user.action(api.snapshots.ingest, {
 		projectId,
@@ -112,6 +115,7 @@ test("streams two dozen languages through introduction, archival and restoration
 		},
 		files: files(["retained", "introduced", "archived"], true),
 	});
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
 	await t.run(async (ctx) => {
 		const project = await ctx.db.get(projectId);
 		if (!project?.activeCatalogProjectionId)
@@ -170,6 +174,10 @@ test("splits a byte-heavy processing partition before publishing", async () => {
 		files,
 	});
 	expect(result.snapshotId).toBeTruthy();
+	expect(
+		await t.run((ctx) => ctx.db.query("catalogProcessingInputs").take(1)),
+	).toHaveLength(1);
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
 	await t.run(async (ctx) => {
 		const project = await ctx.db.get(projectId);
 		if (!project?.activeCatalogProjectionId)

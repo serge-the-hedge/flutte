@@ -256,6 +256,23 @@ describe("Catalog Navigation Index publication", () => {
 		expect(second.projection._id).not.toBe(first.projection._id);
 		expect(second.state?.projectionId).toBe(second.projection._id);
 		expect(second.state).toMatchObject({ rowCount: 2, status: "ready" });
+		expect(second.projection).toMatchObject({
+			navigationReusedKeyCount: 1,
+			navigationDerivedKeyCount: 1,
+		});
+		const parity = await t.run(
+			async (ctx) =>
+				await Promise.all(
+					second.rows
+						.filter((row) => row.projectionId === second.projection._id)
+						.map(async (row) => ({
+							stored: stripSystemFields(row),
+							fresh: (await navigationEvidence(ctx, projectId, row.messageId))
+								.digest,
+						})),
+				),
+		);
+		for (const row of parity) expect(row.stored).toEqual(row.fresh);
 		// The previous generation's rows linger as garbage until the reset
 		// worker reclaims them, and the active generation stays complete.
 		expect(
