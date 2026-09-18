@@ -60,6 +60,7 @@ import { advanceWorkspaceReconciliationGeneration } from "./catalogWorkspace";
 import {
 	activateNavigationGeneration,
 	assertNavigationIndexStagedForPublication,
+	MAX_NAVIGATION_PLAN_BATCH_KEYS,
 	MAX_NAVIGATION_STAGE_STEPS,
 } from "./catalogWorkspaceNavigation";
 import {
@@ -588,6 +589,12 @@ type StagedProjection = {
 	projectionId: Id<"catalogProjections">;
 };
 
+type NavigationStagePlan = {
+	messageId: string;
+	catalogIndex: number;
+	reusePrevious: boolean;
+};
+
 type IngestArgs = {
 	projectId: Id<"projects">;
 	repository: string;
@@ -596,6 +603,24 @@ type IngestArgs = {
 	lineage?: Lineage;
 	actor?: RepositoryAdapterActor;
 };
+
+export type SnapshotIngestionStage =
+	| "validating"
+	| "reconciling"
+	| "staging"
+	| "reviewing"
+	| "indexing"
+	| "publishing";
+
+export type SnapshotIngestionProgress = {
+	stage: SnapshotIngestionStage;
+	completed?: number;
+	total?: number;
+};
+
+type ReportSnapshotIngestionProgress = (
+	progress: SnapshotIngestionProgress,
+) => Promise<void>;
 
 type PublicIngestionResult = {
 	runId: Id<"snapshotIngestionRuns">;
@@ -811,6 +836,26 @@ async function publishProjection(
 				"The Baseline Snapshot or Source Proposal set changed while catalog reconciliation was staged.",
 		});
 	}
+	if (projection.previousNavigationRevision !== undefined) {
+		const navigation = await ctx.db
+			.query("catalogWorkspaceNavigationStates")
+			.withIndex("by_project", (q) =>
+				q.eq("projectId", args.identity.projectId),
+			)
+			.unique();
+		if (
+			!navigation ||
+			navigation.projectionId !== projection.previousCatalogProjectionId ||
+			navigation.status !== "ready" ||
+			navigation.revision !== projection.previousNavigationRevision
+		) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"Strings changed while Snapshot navigation was being prepared.",
+			});
+		}
+	}
 	// The new generation may only become visible with a complete staged
 	// Navigation Index, so the public Navigation read can rely on the exact
 	// Catalog Projection it reads from.
@@ -854,6 +899,9 @@ async function publishProjection(
 		await advanceWorkspaceReconciliationGeneration(ctx, args.project._id);
 	}
 	await publishStagedReconciliationReport(ctx, projection, args.snapshotId);
+	await ctx.scheduler.runAfter(0, internal.catalogProcessing.cleanupInputs, {
+		projectionId: args.projectionId,
+	});
 }
 
 async function reuseExistingSnapshot(
@@ -1673,6 +1721,41 @@ function addProcessingTotals<T extends Record<string, number>>(
 		total[key] = (total[key] + increment[key]) as T[keyof T];
 }
 
+/** Navigation consumes only these projection facts. Workspace heads,
+ * decisions, and Source Proposals are pinned separately by the active
+ * Navigation revision and proposal-set revision. */
+function navigationProjectionFact(message: ProjectedMessage) {
+	return [
+		message.localeId,
+		message.localeCode,
+		message.isSource,
+		message.messageId,
+		message.value,
+		message.valueFingerprint ?? null,
+		message.gitValueFingerprint ?? null,
+		message.gitValueRevision ?? null,
+		message.repeatedGitContent ?? null,
+		message.repeatedGitContentVersion ?? null,
+		message.sourceFingerprint,
+		message.firstSeenProjectionId ?? null,
+		message.introducedAt ?? null,
+		message.introductionLocaleIds ?? null,
+		message.materialized,
+	] as const;
+}
+
+function canReuseNavigationDigest(
+	current: readonly ProjectedMessage[],
+	previous: readonly ProjectedMessage[],
+): boolean {
+	if (current.length === 0 || current.length !== previous.length) return false;
+	const order = (left: ProjectedMessage, right: ProjectedMessage) =>
+		String(left.localeId).localeCompare(String(right.localeId));
+	const currentFacts = [...current].sort(order).map(navigationProjectionFact);
+	const previousFacts = [...previous].sort(order).map(navigationProjectionFact);
+	return JSON.stringify(currentFacts) === JSON.stringify(previousFacts);
+}
+
 /** Read a single immutable message partition. Database pages are byte-bounded;
  * the action rejects an oversized key before retaining the complete partition. */
 async function processingValues(
@@ -1772,19 +1855,18 @@ async function deriveProcessingChunk(
 	introducedAt: number,
 	openSourceProposals: readonly OpenSourceProposalObservation[],
 ) {
-	const inputs = await processingValues(
-		ctx,
-		identity,
-		projectionId,
-		messageIds,
-		"input",
+	// These immutable partitions are independent. Reading them together removes
+	// two serial database round trips from every reconciliation chunk without
+	// changing the query or document budget.
+	const [inputs, previousInputs, archivedInputs] = await Promise.all([
+		processingValues(ctx, identity, projectionId, messageIds, "input"),
+		processingValues(ctx, identity, projectionId, messageIds, "previous"),
+		processingValues(ctx, identity, projectionId, messageIds, "archive"),
+	]);
+	const previousMessages = previousInputs.map((input) => input.message);
+	const archived = archivedInputs.map(
+		(input) => input.message as ArchivedValue,
 	);
-	const previousMessages = (
-		await processingValues(ctx, identity, projectionId, messageIds, "previous")
-	).map((input) => input.message);
-	const archived = (
-		await processingValues(ctx, identity, projectionId, messageIds, "archive")
-	).map((input) => input.message as ArchivedValue);
 	if (
 		new TextEncoder().encode(
 			JSON.stringify([inputs, previousMessages, archived]),
@@ -1895,6 +1977,8 @@ async function deriveProcessingChunk(
 		: [];
 	return {
 		rows,
+		previousMessages,
+		processedKeyCount: messageIds.length,
 		residues,
 		sourceProposalObservations,
 		gitChanges,
@@ -1914,6 +1998,7 @@ async function stageProjection(
 	unboundLocaleFiles: readonly UnboundLocaleFile[],
 	deliveryFiles: readonly SubmittedFile[] | AsyncIterable<SubmittedFile> = [],
 	expectedBindingBasis?: BindingBasis,
+	reportProgress?: ReportSnapshotIngestionProgress,
 ): Promise<StagedProjection> {
 	const projectionId: Id<"catalogProjections"> = await ctx.runMutation(
 		internal.catalogProjection.begin,
@@ -2155,6 +2240,12 @@ async function stageProjection(
 		>();
 		const repeatIdentity = (row: ProjectedMessage) =>
 			JSON.stringify([row.localeId, row.valueFingerprint]);
+		let reconciledKeys = 0;
+		await reportProgress?.({
+			stage: "reconciling",
+			completed: 0,
+			total: keys.length,
+		});
 
 		for await (const chunk of allChunks()) {
 			addProcessingTotals(reconciledEnvelope, projectionEnvelope(chunk.rows));
@@ -2216,6 +2307,12 @@ async function stageProjection(
 					total + new TextEncoder().encode(JSON.stringify(key)).length,
 				0,
 			);
+			reconciledKeys += chunk.processedKeyCount;
+			await reportProgress?.({
+				stage: "reconciling",
+				completed: Math.min(reconciledKeys, keys.length),
+				total: keys.length,
+			});
 		}
 		for (const entry of repeatedCounts.values())
 			reconciledEnvelope.byteLength +=
@@ -2296,8 +2393,17 @@ async function stageProjection(
 		let stagedResidues = 0;
 		let stagedRestorations = 0;
 		let stagedObservations = 0;
+		let stagedKeys = 0;
+		const navigationPlan: NavigationStagePlan[] = [];
+		await reportProgress?.({
+			stage: "staging",
+			completed: 0,
+			total: keys.length,
+		});
 		for await (const {
 			rows,
+			previousMessages,
+			processedKeyCount,
 			gitChanges,
 			residues,
 			restorations,
@@ -2314,6 +2420,22 @@ async function stageProjection(
 					row.repeatedGitContent = entry.count > 1;
 					row.repeatedGitContentVersion = 2;
 				}
+			}
+			for (const sourceRow of rows.filter((row) => row.isSource)) {
+				const currentKeyRows = rows.filter(
+					(row) => row.messageId === sourceRow.messageId,
+				);
+				const previousKeyRows = previousMessages.filter(
+					(row) => row.messageId === sourceRow.messageId,
+				);
+				navigationPlan.push({
+					messageId: sourceRow.messageId,
+					catalogIndex: sourceRow.catalogIndex,
+					reusePrevious: canReuseNavigationDigest(
+						currentKeyRows,
+						previousKeyRows,
+					),
+				});
 			}
 			for (const messages of stageBatches(rows)) {
 				await ctx.runMutation(internal.catalogProjection.stageBatch, {
@@ -2421,6 +2543,12 @@ async function stageProjection(
 						{ ...scope, keys: quietHandoff },
 					);
 			}
+			stagedKeys += processedKeyCount;
+			await reportProgress?.({
+				stage: "staging",
+				completed: Math.min(stagedKeys, keys.length),
+				total: keys.length,
+			});
 		}
 		for (const locales of archiveLocaleBatches(transitionArchives.locales))
 			await ctx.runMutation(internal.archiveReconciliation.stageLocales, {
@@ -2444,11 +2572,7 @@ async function stageProjection(
 		});
 		if (reportTotals.rowCount > 0)
 			await ctx.runMutation(internal.reconciliationReports.complete, scope);
-		while (
-			!(await ctx.runMutation(internal.catalogProcessing.discardInputs, scope))
-		) {
-			/* bounded cleanup */
-		}
+		await reportProgress?.({ stage: "reviewing" });
 		await stageLocaleDeliveries(ctx, {
 			projectId: identity.projectId,
 			projectionId,
@@ -2459,27 +2583,74 @@ async function stageProjection(
 			boundFiles,
 			actor: identity.actor,
 		});
-		// Stage the complete Navigation Index for the pending generation so the
-		// publish gate can rely on a full envelope for this projection.
-		let navigationReady = false;
-		for (
-			let step = 0;
-			step < MAX_NAVIGATION_STAGE_STEPS && !navigationReady;
-			step += 1
+		const reusableNavigationKeys = navigationPlan.filter(
+			(plan) => plan.reusePrevious,
+		).length;
+		let indexedKeys = 0;
+		await reportProgress?.({
+			stage: "indexing",
+			completed: 0,
+			total: navigationPlan.length,
+		});
+		if (
+			navigationPlan.length > 0 &&
+			reusableNavigationKeys * 2 >= navigationPlan.length
 		) {
-			const staged = await ctx.runMutation(
-				internal.catalogWorkspaceNavigation.stageNavigationIndexStep,
+			for (
+				let offset = 0;
+				offset < navigationPlan.length;
+				offset += MAX_NAVIGATION_PLAN_BATCH_KEYS
+			) {
+				await ctx.runMutation(
+					internal.catalogWorkspaceNavigation.stageNavigationPlanBatch,
+					{
+						projectId: identity.projectId,
+						projectionId,
+						plans: navigationPlan.slice(
+							offset,
+							offset + MAX_NAVIGATION_PLAN_BATCH_KEYS,
+						),
+					},
+				);
+				indexedKeys += Math.min(
+					MAX_NAVIGATION_PLAN_BATCH_KEYS,
+					navigationPlan.length - offset,
+				);
+				await reportProgress?.({
+					stage: "indexing",
+					completed: indexedKeys,
+					total: navigationPlan.length,
+				});
+			}
+			await ctx.runMutation(
+				internal.catalogWorkspaceNavigation.completeNavigationPlan,
 				{ projectId: identity.projectId, projectionId },
 			);
-			if (staged.status === "ready") {
-				navigationReady = true;
+		} else {
+			let navigationReady = false;
+			for (
+				let step = 0;
+				step < MAX_NAVIGATION_STAGE_STEPS && !navigationReady;
+				step += 1
+			) {
+				const staged = await ctx.runMutation(
+					internal.catalogWorkspaceNavigation.stageNavigationIndexStep,
+					{ projectId: identity.projectId, projectionId },
+				);
+				navigationReady = staged.status === "ready";
+				indexedKeys += staged.stagedKeys;
+				await reportProgress?.({
+					stage: "indexing",
+					completed: Math.min(indexedKeys, navigationPlan.length),
+					total: navigationPlan.length,
+				});
 			}
-		}
-		if (!navigationReady) {
-			throw new ConvexError({
-				code: "INTEGRITY",
-				message: "Navigation staging did not finish within its step budget.",
-			});
+			if (!navigationReady) {
+				throw new ConvexError({
+					code: "INTEGRITY",
+					message: "Navigation staging did not finish within its step budget.",
+				});
+			}
 		}
 		return { projectionId };
 	} catch (error) {
@@ -3014,11 +3185,42 @@ export const syncSetup = query({
 			isSource: locale.isSource,
 			catalogPath: locale.catalogPath ?? null,
 		}));
-		const latestRun = await ctx.db
-			.query("snapshotIngestionRuns")
-			.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-			.order("desc")
-			.first();
+		const [latestRun, processingSync, failedSync] = await Promise.all([
+			ctx.db
+				.query("snapshotIngestionRuns")
+				.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+				.order("desc")
+				.first(),
+			ctx.db
+				.query("snapshotUploadSessions")
+				.withIndex("by_project_and_release_and_status_and_createdAt", (q) =>
+					q
+						.eq("projectId", args.projectId)
+						.eq("releaseRecordId", undefined)
+						.eq("status", "processing"),
+				)
+				.order("desc")
+				.first(),
+			ctx.db
+				.query("snapshotUploadSessions")
+				.withIndex("by_project_and_release_and_status_and_createdAt", (q) =>
+					q
+						.eq("projectId", args.projectId)
+						.eq("releaseRecordId", undefined)
+						.eq("status", "failed"),
+				)
+				.order("desc")
+				.first(),
+		]);
+		// A failed upload is useful only when no newer ingestion run explains it.
+		// Ingestion failures already have durable diagnostics in `latestRun`.
+		const failedUpload =
+			failedSync && failedSync.createdAt > (latestRun?.createdAt ?? 0)
+				? failedSync
+				: null;
+		const activeSync = [processingSync, failedUpload]
+			.filter((session) => session !== null)
+			.sort((left, right) => right.createdAt - left.createdAt)[0];
 		const baseline = project.baselineSnapshotId
 			? await ctx.db.get(project.baselineSnapshotId)
 			: null;
@@ -3097,6 +3299,30 @@ export const syncSetup = query({
 						commit: baseline.commit,
 						kind: baseline.kind,
 						createdAt: baseline.createdAt,
+					}
+				: null,
+			activeSync: activeSync
+				? {
+						id: activeSync._id,
+						status:
+							activeSync.status === "failed"
+								? ("failed" as const)
+								: ("running" as const),
+						stage: activeSync.processingStage ?? null,
+						progress:
+							activeSync.progressCompleted === undefined ||
+							activeSync.progressTotal === undefined
+								? null
+								: {
+										completed: activeSync.progressCompleted,
+										total: activeSync.progressTotal,
+									},
+						createdAt: activeSync.createdAt,
+						updatedAt:
+							activeSync.processingUpdatedAt ??
+							activeSync.processingAt ??
+							activeSync.createdAt,
+						failure: activeSync.failure?.message ?? null,
 					}
 				: null,
 			latestRun: latestRun
@@ -3476,6 +3702,7 @@ export async function ingestUploadedSnapshot(
 			contentHash: string;
 			byteLength: number;
 		}[];
+		reportProgress?: ReportSnapshotIngestionProgress;
 	},
 	remainingConflictRetries = MAX_INGEST_CONFLICT_RESTAGES,
 ): Promise<AdapterIngestionResult> {
@@ -3503,6 +3730,11 @@ export async function ingestUploadedSnapshot(
 			code: "VALIDATION",
 			message: "Too many catalog files in the upload.",
 		});
+	await args.reportProgress?.({
+		stage: "validating",
+		completed: 0,
+		total: sorted.length,
+	});
 	async function load(file: (typeof sorted)[number]) {
 		const blob = await ctx.storage.get(file.storageId);
 		if (!blob || blob.size !== file.byteLength || blob.size > 8 * 1024 * 1024)
@@ -3559,6 +3791,11 @@ export async function ingestUploadedSnapshot(
 					: { messageCount: inspected.messageCount }),
 			});
 		}
+		await args.reportProgress?.({
+			stage: "validating",
+			completed: index + 1,
+			total: sorted.length,
+		});
 	}
 	manifest.update(encoder.encode("]"));
 	const identity: Identity = {
@@ -3646,7 +3883,9 @@ export async function ingestUploadedSnapshot(
 					projectionId: bindingBasis.projectionId,
 					localeBindingRevision: bindingBasis.localeBindingRevision,
 				},
+				args.reportProgress,
 			);
+		await args.reportProgress?.({ stage: "publishing" });
 		result = await ctx.runMutation(internal.snapshots.finalizeIngestion, {
 			...identity,
 			...(stagedProjection

@@ -19,17 +19,28 @@ session protocol retains the `/snapshot-uploads` path:
    send `kind: "release"`. Repeating the same path and hash succeeds; replacing
    that path with different content requires a new session.
 3. `POST /snapshot-uploads/finalize`: send `sessionId`, and `kind: "release"` for
-   delivery. All declared files must have arrived. Snapshot finalization returns
-   the normal ingestion receipt. Release finalization returns `releaseRecord`,
-   `catalogPaths`, `applied`, and `skipped`.
-4. For releases, `POST /snapshot-uploads/download` with `sessionId` and
+   delivery. All declared files must have arrived. Current sync clients also send
+   `async: true`; the server starts a durable job and immediately returns its
+   stage and optional `{ completed, total }` progress. Older clients may omit the
+   flag and receive the normal ingestion receipt from this request. Release
+   finalization remains synchronous and returns `releaseRecord`, `catalogPaths`,
+   `applied`, and `skipped`.
+4. During asynchronous sync finalization, `POST /snapshot-uploads/status` with
+   `sessionId`. A running response reports `queued`, `validating`, `reconciling`,
+   `staging`, `reviewing`, `indexing`, or `publishing`. Completion returns the
+   ordinary ingestion receipt; an operational failure remains readable and the
+   command can be retried safely.
+5. For releases, `POST /snapshot-uploads/download` with `sessionId` and
    `catalogPath` returns one resulting catalog's `content`. The CLI downloads all
    outputs before changing its disposable worktree.
 
 Sync requires `snapshot-submission`; release upload and download require only
 `export`. A session belongs to the exact project and token that created it.
 Finalization is exclusive for 35 minutes, exceeding Convex's 30-minute action
-runtime; a completed session returns its original receipt on retry.
+runtime. Progress survives a disconnected CLI and is also visible on the web
+Sync page. A mutation watchdog restarts a worker that stops before recording an
+outcome, up to three attempts. A completed session returns its original receipt
+on retry.
 
 Each input and delivered catalog is limited to 8 MiB. There is no combined
 catalog upload byte limit. The operational manifest limit is 1,000 files.

@@ -115,6 +115,60 @@ export const matchingArtifact = internalQuery({
 	},
 });
 
+async function hasPublishedDecisionCoverage(
+	ctx: QueryCtx | MutationCtx,
+	input: {
+		proposalId: Id<"localeProposals">;
+		localeId: Id<"locales">;
+	},
+): Promise<boolean> {
+	const observations = await ctx.db
+		.query("localeDeliveryObservations")
+		.withIndex("by_proposal_and_localeId", (q) =>
+			q.eq("proposalId", input.proposalId).eq("localeId", input.localeId),
+		)
+		.order("desc")
+		.take(64);
+	for (const observation of observations) {
+		if (!observation.decisionsStaged) continue;
+		const publication = await projectionPublicationStateFor(
+			ctx,
+			observation.projectionId,
+		);
+		if (publication?.status === "published") return true;
+	}
+	return false;
+}
+
+export const publishedDecisionCoverage = internalQuery({
+	args: {
+		projectId: v.id("projects"),
+		proposalId: v.id("localeProposals"),
+		localeId: v.id("locales"),
+		actor: v.optional(repositoryAdapterActorValidator),
+	},
+	returns: v.boolean(),
+	handler: async (ctx, args) => {
+		await authorizeProjectIngestion(ctx, args.projectId, args.actor);
+		const [proposal, locale] = await Promise.all([
+			ctx.db.get(args.proposalId),
+			ctx.db.get(args.localeId),
+		]);
+		if (
+			!proposal ||
+			proposal.projectId !== args.projectId ||
+			!locale ||
+			locale.projectId !== args.projectId
+		) {
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale review evidence was not found.",
+			});
+		}
+		return await hasPublishedDecisionCoverage(ctx, args);
+	},
+});
+
 export const observe = internalMutation({
 	args: {
 		projectId: v.id("projects"),
@@ -159,7 +213,13 @@ export const observe = internalMutation({
 					message: "Locale delivery cannot supply decisions for this binding.",
 				});
 		}
-		return await ctx.db.insert("localeDeliveryObservations", {
+		const decisionsStaged = args.localeId
+			? await hasPublishedDecisionCoverage(ctx, {
+					proposalId: args.proposalId,
+					localeId: args.localeId,
+				})
+			: true;
+		const observationId = await ctx.db.insert("localeDeliveryObservations", {
 			projectId: args.projectId,
 			projectionId: args.projectionId,
 			proposalId: args.proposalId,
@@ -167,9 +227,10 @@ export const observe = internalMutation({
 			catalogContentHash: args.contentHash,
 			localeCode: proposal.localeCode,
 			...(args.localeId ? { localeId: args.localeId } : {}),
-			decisionsStaged: !args.localeId,
+			decisionsStaged,
 			observedAt: now(),
 		});
+		return { observationId, decisionsStaged };
 	},
 });
 
@@ -440,6 +501,20 @@ async function stageMatchingReviewedPairs(
 					);
 				})
 				.map((message) => message.id);
+			const decisionsAlreadyPublished: boolean = await ctx.runQuery(
+				internal.localeDelivery.publishedDecisionCoverage,
+				{
+					projectId: input.projectId,
+					proposalId: proposal._id,
+					localeId: input.localeId,
+					actor: input.actor,
+				},
+			);
+			if (decisionsAlreadyPublished) {
+				for (const id of eligible) remaining.delete(id);
+				if (!remaining.size) return;
+				continue;
+			}
 			for (let offset = 0; offset < eligible.length; offset += 16) {
 				const matched: string[] = await ctx.runMutation(
 					internal.localeDelivery.stageReviewedPairs,
@@ -573,17 +648,19 @@ export async function stageLocaleDeliveries(
 				message:
 					"A Snapshot supports at most 128 Locale delivery observations.",
 			});
-		const observationId: Id<"localeDeliveryObservations"> =
-			await ctx.runMutation(internal.localeDelivery.observe, {
-				projectId: input.projectId,
-				projectionId: input.projectionId,
-				proposalId: proposal._id,
-				catalogPath: file.catalogPath,
-				contentHash,
-				...(bound ? { localeId: bound.localeId } : {}),
-				actor: input.actor,
-			});
-		if (!bound) continue;
+		const observation: {
+			observationId: Id<"localeDeliveryObservations">;
+			decisionsStaged: boolean;
+		} = await ctx.runMutation(internal.localeDelivery.observe, {
+			projectId: input.projectId,
+			projectionId: input.projectionId,
+			proposalId: proposal._id,
+			catalogPath: file.catalogPath,
+			contentHash,
+			...(bound ? { localeId: bound.localeId } : {}),
+			actor: input.actor,
+		});
+		if (!bound || observation.decisionsStaged) continue;
 		let after: string | undefined;
 		let done = false;
 		for (
@@ -593,7 +670,11 @@ export async function stageLocaleDeliveries(
 		) {
 			const result: { done: boolean; after?: string } = await ctx.runMutation(
 				internal.localeDelivery.stageDecisions,
-				{ observationId, after, actor: input.actor },
+				{
+					observationId: observation.observationId,
+					after,
+					actor: input.actor,
+				},
 			);
 			done = result.done;
 			after = result.after;

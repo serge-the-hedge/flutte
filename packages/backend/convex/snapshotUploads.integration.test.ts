@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
 	authenticatedBackend,
 	type Backend,
@@ -58,6 +58,106 @@ async function begin(t: Backend, token: string) {
 }
 
 describe("file manifest uploads", () => {
+	test("starts durable finalization, reports progress, and returns its receipt", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const { t, user, token, projectId } = await setup();
+			const sessionId = await begin(t, token);
+			expect(
+				(
+					await post(t, token, "snapshot-uploads/file", {
+						sessionId,
+						...file,
+						contentHash: await sha256Hex(file.content),
+					})
+				).status,
+			).toBe(200);
+
+			const started = await post(t, token, "snapshot-uploads/finalize", {
+				sessionId,
+				async: true,
+			});
+			expect(started.status).toBe(200);
+			expect(await started.json()).toMatchObject({
+				version: 2,
+				finalization: { status: "queued", stage: "queued", progress: null },
+			});
+			const session = await t.run(async (ctx) => await ctx.db.get(sessionId));
+			if (!session) throw new Error("Expected upload");
+			const identity = { sessionId, projectId, tokenId: session.tokenId };
+			await t.mutation(internal.snapshotUploads.updateProgress, {
+				...identity,
+				stage: "reconciling",
+				completed: 256,
+				total: 1_559,
+			});
+
+			const status = await post(t, token, "snapshot-uploads/status", {
+				sessionId,
+			});
+			expect(status.status).toBe(200);
+			expect(await status.json()).toMatchObject({
+				version: 2,
+				finalization: {
+					status: "running",
+					stage: "reconciling",
+					progress: { completed: 256, total: 1_559 },
+				},
+			});
+			expect(
+				(await user.query(api.snapshots.syncSetup, { projectId })).activeSync,
+			).toMatchObject({
+				status: "running",
+				stage: "reconciling",
+				progress: { completed: 256, total: 1_559 },
+			});
+
+			await t.action(internal.snapshotUploads.processFinalization, identity);
+			const completed = await post(t, token, "snapshot-uploads/status", {
+				sessionId,
+			});
+			expect(completed.status).toBe(200);
+			expect(await completed.json()).toMatchObject({
+				version: 1,
+				run: {
+					status: "succeeded",
+					summary: { outcome: "initial", sourceKeyCount: 1 },
+				},
+			});
+			expect(
+				(await user.query(api.snapshots.syncSetup, { projectId })).activeSync,
+			).toBeNull();
+
+			const repeatedSessionId = await begin(t, token);
+			await post(t, token, "snapshot-uploads/file", {
+				sessionId: repeatedSessionId,
+				...file,
+				contentHash: await sha256Hex(file.content),
+			});
+			await post(t, token, "snapshot-uploads/finalize", {
+				sessionId: repeatedSessionId,
+				async: true,
+			});
+			const repeatedSession = await t.run(
+				async (ctx) => await ctx.db.get(repeatedSessionId),
+			);
+			if (!repeatedSession) throw new Error("Expected repeated upload");
+			await t.action(internal.snapshotUploads.processFinalization, {
+				sessionId: repeatedSessionId,
+				projectId,
+				tokenId: repeatedSession.tokenId,
+			});
+			const repeated = await post(t, token, "snapshot-uploads/status", {
+				sessionId: repeatedSessionId,
+			});
+			expect(await repeated.json()).toMatchObject({
+				run: { status: "succeeded", reused: true },
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("publishes original blobs, preserves inline manifest identity, and retries finalization", async () => {
 		const { t, user, token, projectId } = await setup();
 		const sessionId = await begin(t, token);

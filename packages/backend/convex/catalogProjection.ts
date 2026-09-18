@@ -1167,6 +1167,7 @@ export const begin = internalMutation({
 		);
 		const previousBaselineSnapshotId = project.baselineSnapshotId;
 		let previousCatalogProjectionId: Id<"catalogProjections"> | undefined;
+		let previousNavigationRevision: number | undefined;
 		if (project.activeCatalogProjectionId) {
 			const previousProjection = await ctx.db.get(
 				project.activeCatalogProjectionId,
@@ -1184,6 +1185,20 @@ export const begin = internalMutation({
 				});
 			}
 			previousCatalogProjectionId = previousProjection._id;
+			const navigation = await ctx.db
+				.query("catalogWorkspaceNavigationStates")
+				.withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+				.unique();
+			if (
+				navigation?.projectionId === previousProjection._id &&
+				navigation.status === "ready" &&
+				navigation.rowCount === previousProjection.expectedKeyCount &&
+				navigation.expectedRowCount === previousProjection.expectedKeyCount &&
+				Number.isInteger(navigation.revision) &&
+				(navigation.revision ?? -1) >= 0
+			) {
+				previousNavigationRevision = navigation.revision;
+			}
 		}
 		const projectionId = await ctx.db.insert("catalogProjections", {
 			localeBindingRevision: project.localeBindingRevision ?? 0,
@@ -1203,6 +1218,11 @@ export const begin = internalMutation({
 			...(previousCatalogProjectionId === undefined
 				? {}
 				: { previousCatalogProjectionId }),
+			...(previousNavigationRevision === undefined
+				? {}
+				: { previousNavigationRevision }),
+			navigationReusedKeyCount: 0,
+			navigationDerivedKeyCount: 0,
 			sourceProposalHeadVersion,
 			expectedGitChangeCount: 0,
 			expectedGitChangeByteLength: 0,

@@ -1,5 +1,6 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalMutation,
@@ -219,5 +220,29 @@ export const discardInputs = internalMutation({
 			.paginate({ numItems: 100, cursor: null, maximumBytesRead: PAGE_BYTES });
 		for (const row of rows.page) await ctx.db.delete(row._id);
 		return rows.isDone;
+	},
+});
+
+/** Reconciliation no longer needs raw processing rows after publication.
+ * Reclaim them in server-owned batches without holding the submitter open. */
+export const cleanupInputs = internalMutation({
+	args: { projectionId: v.id("catalogProjections") },
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const rows = await ctx.db
+			.query("catalogProcessingInputs")
+			.withIndex("by_projection", (q) =>
+				q.eq("projectionId", args.projectionId),
+			)
+			.take(100);
+		for (const row of rows) await ctx.db.delete(row._id);
+		if (rows.length === 100) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.catalogProcessing.cleanupInputs,
+				args,
+			);
+		}
+		return null;
 	},
 });

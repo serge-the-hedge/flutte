@@ -208,6 +208,109 @@ void main() {
     );
   }
 
+  test('polls durable finalization and reports server phases', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    final progress = <String>[];
+    final requestBodies = <Map<String, Object?>>[];
+    var statusRequests = 0;
+    server.listen((request) async {
+      final text = await utf8.decoder.bind(request).join();
+      if (text.isNotEmpty) {
+        requestBodies.add((jsonDecode(text) as Map).cast<String, Object?>());
+      }
+      request.response.headers.contentType = ContentType.json;
+      final path = request.uri.path;
+      if (path.endsWith('/snapshot-uploads')) {
+        request.response.write(jsonEncode({'sessionId': 'upload_1'}));
+      } else if (path.endsWith('/file')) {
+        request.response.write('{}');
+      } else if (path.endsWith('/finalize')) {
+        request.response.write(
+          jsonEncode({
+            'version': 2,
+            'finalization': {
+              'status': 'queued',
+              'stage': 'queued',
+              'progress': null,
+            },
+          }),
+        );
+      } else if (path.endsWith('/status')) {
+        statusRequests++;
+        request.response.write(
+          jsonEncode(switch (statusRequests) {
+            1 => {
+              'version': 2,
+              'finalization': {
+                'status': 'running',
+                'stage': 'reconciling',
+                'progress': {'completed': 256, 'total': 1559},
+              },
+            },
+            2 => {
+              'version': 2,
+              'finalization': {
+                'status': 'running',
+                'stage': 'indexing',
+                'progress': {'completed': 1024, 'total': 1559},
+              },
+            },
+            _ => {
+              'version': 1,
+              'run': {
+                'id': 'run_1',
+                'status': 'succeeded',
+                'snapshotKind': 'baseline',
+                'reused': false,
+                'summary': {
+                  'outcome': 'updated',
+                  'sourceKeyCount': 1559,
+                  'addedKeyCount': 1,
+                  'changedSourceKeyCount': 0,
+                  'removedKeyCount': 0,
+                  'targetValueChangeCount': 6,
+                },
+                'snapshotId': 'snapshot_1',
+                'diagnosticCount': 0,
+                'diagnostics': [],
+                'unboundLocaleFileCount': 0,
+                'absentTargetLocaleCount': 0,
+              },
+            },
+          }),
+        );
+      } else {
+        request.response.statusCode = HttpStatus.notFound;
+      }
+      await request.response.close();
+    });
+
+    final receipt =
+        await HttpSnapshotSyncGateway(
+          baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+          token: 'test-token',
+          pollInterval: const Duration(milliseconds: 1),
+          onProgress: progress.add,
+        ).submit(
+          repository: 'repo',
+          commit: 'commit',
+          files: const [SnapshotFile(catalogPath: 'en.arb', content: '{}')],
+        );
+
+    expect(receipt.succeeded, isTrue);
+    expect(statusRequests, 3);
+    expect(
+      requestBodies.any(
+        (body) => body['sessionId'] == 'upload_1' && body['async'] == true,
+      ),
+      isTrue,
+    );
+    expect(progress, contains('Snapshot queued…'));
+    expect(progress, contains('Reconciling catalog keys 256/1559…'));
+    expect(progress, contains('Preparing Strings 1024/1559…'));
+  });
+
   for (final outcome in ['unchanged', 'reused', 'preview', 'legacy']) {
     test(
       'distinguishes $outcome sync results without inventing changes',
