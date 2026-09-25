@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
 	type AuthenticatedBackend,
@@ -49,8 +49,12 @@ describe("Archive Reconciliation", () => {
 	let t: Backend;
 
 	beforeEach(() => {
+		// Background index maintenance must not overlap action storage writes in
+		// convex-test's shared transaction emulation.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		t = createBackend();
 	});
+	afterEach(() => vi.useRealTimers());
 
 	test("pages archive values and automatic restorations within a pinned transition", async () => {
 		const user = await authenticatedBackend(t, "archive-pages");
@@ -1262,6 +1266,10 @@ describe("Archive Reconciliation", () => {
 			commit: "preview",
 			files: previewFiles,
 		});
+		expect(
+			preview.snapshotId,
+			JSON.stringify(await user.query(api.snapshots.syncSetup, { projectId })),
+		).not.toBeNull();
 		expect(
 			await user.query(api.restoreProposals.get, {
 				projectId,

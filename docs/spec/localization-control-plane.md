@@ -10,12 +10,12 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Release assessment, bundles, configured language delivery and binding | Implemented; exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
+| Release assessment, bundles, configured language delivery and binding | Implemented, including script/region variants over an existing language base and adapter-owned locale-subtag preservation. Exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
 | Agent retrieval | Literal source/target search with continuation, confirmation evidence, and authorized reviewed new-Locale examples implemented |
-| Coding-agent workflows | Portable Context, Translation, Review, and Dictionary skills plus a bounded HTTP helper implemented; see [agent kit](../../agent-kit/README.md). |
+| Coding-agent workflows | Portable skills, bounded HTTP transport, and a resumable translation/review runner implemented: explicit revision-bound verdicts, reviewer-owned recovery, local shared pacing, and server-observed coverage. See [agent kit](../../agent-kit/README.md). |
 | Snapshot filtering and value history | Named, date-ordered introduction picker; source and target history; bounded, reusable introduction indexes; Changed in Git review focus |
 | MCP adapter | Deferred; terminal-equipped agents use the portable skills and supported HTTP transport |
 | Project types and shared Dictionaries | Basic/Repository projects with stable navigation, shared terminology, plain-text authoring and downloads; existing collection promotion preserves history. See [Projects and Dictionaries](../projects-and-dictionaries.md) |

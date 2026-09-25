@@ -11,6 +11,26 @@ class BrickitLocaleConstants {
 ''';
 
 void main() {
+  test(
+    'script parser upgrades survive formatting and reject unfamiliar selection code',
+    () {
+      final registered = addLocaleTagParser(_source);
+      final formatted = registered
+          .replaceAll('  ', '    ')
+          .replaceAll('RegExp(', 'RegExp(\n');
+      expect(addLocaleTagParser(formatted), formatted);
+      const selected = '''final computedLocale =
+        BrickitLocaleConstants.localeFromTag(locale);
+    save(event.locale.toLanguageTag());''';
+      expect(upgradeLocaleSelection(selected), selected);
+      expect(
+        () => upgradeLocaleSelection(
+          'final computedLocale = customResolver(locale);',
+        ),
+        throwsA(isA<RepositoryAdapterException>()),
+      );
+    },
+  );
   test('repeated additions do not depend on any existing target language', () {
     var source = _source;
     for (final runtime in ['it-IT', 'ja', 'sr-Latn-RS']) {

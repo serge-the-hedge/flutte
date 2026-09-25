@@ -18,6 +18,7 @@ const _l10nConfigPath = 'packages/brickit_generated/l10n.yaml';
 const _sourceCatalogPath = 'packages/brickit_generated/lib/l10n/intl_en.arb';
 const _runtimeConstantsPath =
     'packages/brickit/lib/constants/locale_const.dart';
+const _runtimeSelectionPath = 'packages/brickit/lib/blocs/user/user_bloc.dart';
 const _generatedLocalizationPath =
     'packages/brickit_generated/lib/l10n/app_localizations.dart';
 
@@ -49,6 +50,19 @@ class ProposedLocale {
   final String code;
   final String label;
   final String runtimeLocale;
+
+  String get languageCode => code.split('-').first;
+  bool get isVariant => code.contains('-');
+  String get arbLocale => code
+      .split('-')
+      .map(
+        (part) => part.length == 4
+            ? '${part[0]}${part.substring(1).toLowerCase()}'
+            : part,
+      )
+      .join('_');
+  String get generatedClass =>
+      'AppLocalizations${arbLocale.split('_').map((part) => '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}').join()}';
 }
 
 class ProposedCatalog {
@@ -117,6 +131,7 @@ class LocaleDelivery {
     _l10nDirectory,
     _l10nConfigPath,
     _runtimeConstantsPath,
+    _runtimeSelectionPath,
   };
 
   Set<String> expectedChangedPaths(LocaleProposalArtifact artifact) => {
@@ -124,7 +139,11 @@ class LocaleDelivery {
     _runtimeConstantsPath,
     _generatedLocalizationPath,
     generatedLocalePath(artifact),
+    if (artifact.locale.isVariant) _runtimeSelectionPath,
   };
+
+  Set<String> requiredChangedPaths(LocaleProposalArtifact artifact) =>
+      {...expectedChangedPaths(artifact)}..remove(_runtimeSelectionPath);
 
   String catalogPath(LocaleProposalArtifact artifact) =>
       artifact.catalog.catalogPath ??
@@ -132,7 +151,7 @@ class LocaleDelivery {
   String get runtimeConstantsPath => _runtimeConstantsPath;
   String get generatedLocalizationPath => _generatedLocalizationPath;
   String generatedLocalePath(LocaleProposalArtifact artifact) =>
-      '$_l10nDirectory/app_localizations_${artifact.locale.code}.dart';
+      '$_l10nDirectory/app_localizations_${artifact.locale.languageCode}.dart';
 
   Future<LocaleProposalArtifact> prepare(
     LocaleProposalGateway gateway,
@@ -233,7 +252,8 @@ class LocaleDelivery {
     }
     try {
       final document = jsonDecode(artifact.catalog.content);
-      if (document is! Map || document['@@locale'] != artifact.locale.code) {
+      if (document is! Map ||
+          document['@@locale'] != artifact.locale.arbLocale) {
         throw const FormatException();
       }
     } on FormatException {
@@ -287,6 +307,17 @@ class LocaleDelivery {
         'Brickit already has ${artifact.catalog.fileName}. Refusing to replace a Catalog Document.',
       );
     }
+    // Flutter variants inherit their language base. Refuse an incomplete
+    // hierarchy before writing anything; the adapter never invents fallback text.
+    if (artifact.locale.isVariant &&
+        !await _fileAt(
+          checkout,
+          '$_l10nDirectory/app_localizations_${artifact.locale.languageCode}.dart',
+        ).exists()) {
+      throw RepositoryAdapterException(
+        'Introduce the ${artifact.locale.languageCode} base catalog before its ${artifact.locale.code} variant.',
+      );
+    }
     await catalog.parent.create(recursive: true);
     await catalog.writeAsString(artifact.catalog.content, flush: true);
     final runtimeConstants = _fileAt(checkout, _runtimeConstantsPath);
@@ -295,13 +326,23 @@ class LocaleDelivery {
         'Brickit no longer has the expected runtime locale registration file.',
       );
     }
-    await runtimeConstants.writeAsString(
-      addRuntimeLocaleMapping(
-        await runtimeConstants.readAsString(),
-        artifact.locale.runtimeLocale,
-      ),
-      flush: true,
+    var registration = addRuntimeLocaleMapping(
+      await runtimeConstants.readAsString(),
+      artifact.locale.runtimeLocale,
     );
+    if (artifact.locale.isVariant) {
+      registration = addLocaleTagParser(registration);
+      final selection = _fileAt(checkout, _runtimeSelectionPath);
+      if (!await selection.exists())
+        throw RepositoryAdapterException(
+          'Missing app locale selection. Verify device selection before introducing a locale variant.',
+        );
+      await selection.writeAsString(
+        upgradeLocaleSelection(await selection.readAsString()),
+        flush: true,
+      );
+    }
+    await runtimeConstants.writeAsString(registration, flush: true);
   }
 
   Future<void> verifyGenerated(
@@ -309,6 +350,22 @@ class LocaleDelivery {
     LocaleProposalArtifact artifact,
     ResolvedFlutter flutter,
   ) async {
+    if (artifact.locale.isVariant) {
+      final registration = await _fileAt(
+        staging,
+        _runtimeConstantsPath,
+      ).readAsString();
+      final selection = await _fileAt(
+        staging,
+        _runtimeSelectionPath,
+      ).readAsString();
+      if (addLocaleTagParser(registration) != registration ||
+          upgradeLocaleSelection(selection) != selection) {
+        throw RepositoryAdapterException(
+          'The app does not preserve locale subtags during startup and preference storage.',
+        );
+      }
+    }
     final catalog = _fileAt(staging, catalogPath(artifact));
     if (!await catalog.exists() ||
         sha256.convert(await catalog.readAsBytes()).toString() !=
@@ -321,10 +378,9 @@ class LocaleDelivery {
       staging,
       _generatedLocalizationPath,
     ).readAsString();
-    final language = artifact.locale.code;
+    final language = artifact.locale.languageCode;
     final generatedLocale = _fileAt(staging, generatedLocalePath(artifact));
-    final className =
-        'AppLocalizations${language[0].toUpperCase()}${language.substring(1)}';
+    final className = artifact.locale.generatedClass;
     if (!generated.contains("case '$language':") ||
         !generated.contains(className) ||
         !await generatedLocale.exists() ||
@@ -533,6 +589,7 @@ class RepositoryAdapter {
       _l10nDirectory,
       _l10nConfigPath,
       _runtimeConstantsPath,
+      _runtimeSelectionPath,
     ]);
     if (output.isNotEmpty) {
       throw RepositoryAdapterException(
@@ -631,7 +688,8 @@ class RepositoryAdapter {
   ) async {
     final changed = await _changedPaths(staging);
     final expected = _localeDelivery.expectedChangedPaths(artifact);
-    if (!_sameSet(changed.toSet(), expected)) {
+    if (!expected.containsAll(changed) ||
+        !changed.containsAll(_localeDelivery.requiredChangedPaths(artifact))) {
       throw RepositoryAdapterException(
         'Flutter generation changed an unexpected surface. Refusing to write the checkout. ${flutter.description}',
       );
@@ -725,13 +783,24 @@ bool _isValidIntegrationBranch(String branch) {
       !branch.endsWith('.lock');
 }
 
-// This adapter registers one language catalog; regional and script selection
-// belongs to the explicit runtime mapping, not ARB metadata aliases.
-bool _validLocaleCode(String code) => RegExp(r'^[a-z]{2,3}$').hasMatch(code);
+bool _validLocaleCode(String code) => RegExp(
+  r'^[a-z]{2,3}(?:-[A-Z]{4})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$',
+).hasMatch(code);
 
 bool _validRuntimeLocale(String code) => RegExp(
   r'^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$',
 ).hasMatch(code);
 
-bool _runtimeMatchesCatalog(ProposedLocale locale) =>
-    locale.runtimeLocale.split('-').first == locale.code;
+bool _runtimeMatchesCatalog(ProposedLocale locale) {
+  final catalog = RegExp(
+    r'^([a-z]{2,3})(?:-([A-Z]{4}))?(?:-([A-Z]{2}|[0-9]{3}))?$',
+  ).firstMatch(locale.code);
+  final runtime = RegExp(
+    r'^([a-z]{2,3})(?:-([A-Z][a-z]{3}))?(?:-([A-Z]{2}|[0-9]{3}))?$',
+  ).firstMatch(locale.runtimeLocale);
+  return catalog != null &&
+      runtime != null &&
+      catalog[1] == runtime[1] &&
+      (catalog[2] == null || catalog[2] == runtime[2]?.toUpperCase()) &&
+      (catalog[3] == null || catalog[3] == runtime[3]);
+}

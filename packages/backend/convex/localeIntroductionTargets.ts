@@ -104,26 +104,37 @@ export async function saveIntroductionTarget(
 	const label = args.label.trim();
 	const catalogPath = normalizeCatalogPath(args.catalogPath);
 	const runtimeLocale = args.runtimeLocale.trim();
-	if (runtimeLocale.split("-")[0] !== localeCode)
+	const catalogParts =
+		/^([a-z]{2,3})(?:-([A-Z]{4}))?(?:-([A-Z]{2}|[0-9]{3}))?$/.exec(localeCode);
+	const runtimeParts =
+		/^([a-z]{2,3})(?:-([A-Z][a-z]{3}))?(?:-([A-Z]{2}|[0-9]{3}))?$/.exec(
+			runtimeLocale,
+		);
+	if (
+		catalogParts &&
+		runtimeParts &&
+		(catalogParts[1] !== runtimeParts[1] ||
+			(catalogParts[2] !== undefined &&
+				catalogParts[2] !== runtimeParts[2]?.toUpperCase()) ||
+			(catalogParts[3] !== undefined && catalogParts[3] !== runtimeParts[3]))
+	)
 		throw new ConvexError({
 			code: "VALIDATION",
 			message:
-				"The runtime locale must use the same language as the catalog code.",
+				"The runtime locale must match the catalog's language and any specified script or region.",
 		});
 	if (
-		!/^[a-z]{2,3}$/.test(localeCode) ||
+		!catalogParts ||
 		!label ||
 		label.length > 128 ||
 		catalogPath.length > 512 ||
 		!catalogPath.endsWith(".arb") ||
-		!/^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/.test(
-			runtimeLocale,
-		)
+		!runtimeParts
 	) {
 		throw new ConvexError({
 			code: "VALIDATION",
 			message:
-				"This Flutter adapter needs a language-only catalog code (2–3 letters), a label, an ARB path, and an explicit runtime locale (language, optional Script and REGION).",
+				"This Flutter adapter needs a catalog locale (language, optional script and region), a label, an ARB path, and a matching runtime locale such as zh-Hant-TW.",
 		});
 	}
 	const [source, existingLocale, pathClaim] = await Promise.all([
@@ -146,6 +157,19 @@ export async function saveIntroductionTarget(
 			)
 			.unique(),
 	]);
+	if (catalogParts[2] || catalogParts[3]) {
+		const base = await ctx.db
+			.query("locales")
+			.withIndex("by_project_code", (q) =>
+				q.eq("projectId", args.projectId).eq("code", catalogParts[1]),
+			)
+			.unique();
+		if (!base || !isRepositoryLocale(base))
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: `Introduce and bind the ${catalogParts[1]} base catalog before configuring its ${localeCode} variant.`,
+			});
+	}
 	assertIntroductionCatalogPath(catalogPath, source?.catalogPath);
 	if (
 		(existingLocale && isRepositoryLocale(existingLocale)) ||

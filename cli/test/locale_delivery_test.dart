@@ -13,6 +13,8 @@ void main() {
         ('it', 'it-IT'),
         ('ja', 'ja'),
         ('sr', 'sr-Latn-RS'),
+        ('zh-HANT-TW', 'zh-Hant-TW'),
+        ('it-IT', 'it-IT'),
       ]) {
         final artifact = _artifact(code: code, runtime: runtime);
         delivery.validateArtifact(artifact, artifact.proposalId);
@@ -22,7 +24,7 @@ void main() {
         );
         expect(
           delivery.generatedLocalePath(artifact),
-          endsWith('app_localizations_$code.dart'),
+          endsWith('app_localizations_${code.split('-').first}.dart'),
         );
       }
     },
@@ -37,7 +39,9 @@ void main() {
         _artifact(path: 'packages/brickit_generated/lib/l10n/intl_en.arb'),
         _artifact(runtime: 'ja-JP'),
         _artifact(runtime: 'it-it'),
-        _artifact(code: 'it-IT', runtime: 'it-IT'),
+        _artifact(code: 'zh-HANT-TW', runtime: 'zh-Hans-TW'),
+        _artifact(code: 'zh-HANT-TW', runtime: 'zh-Hant-HK'),
+        _artifact(code: 'zh-Hant-TW', runtime: 'zh-Hant-TW'),
         _artifact(metadata: 'ja'),
         _artifact(omitPath: true),
       ]) {
@@ -64,7 +68,13 @@ LocaleProposalArtifact _artifact({
   bool omitPath = false,
 }) {
   final content = jsonEncode({
-    '@@locale': metadata ?? code,
+    '@@locale':
+        metadata ??
+        ProposedLocale(
+          code: code,
+          label: 'Example',
+          runtimeLocale: runtime,
+        ).arbLocale,
     'welcome': 'Welcome',
   });
   return LocaleProposalArtifact(

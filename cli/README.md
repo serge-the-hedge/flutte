@@ -135,12 +135,17 @@ new Locale; repeat the same flow for the next language after merging and syncing
 the preceding delivery.
 
 A project editor configures the catalog code, label, path, and explicit Runtime
-Locale Mapping before a task starts. This Brickit adapter supports language-only
-catalog codes in `packages/brickit_generated/lib/l10n/` and runtime mappings such
-as `it-IT`, `ja`, or `sr-Latn-RS`. Script mappings use Flutter's
+Locale Mapping before a task starts. This Brickit adapter supports language and
+script/region catalogs in `packages/brickit_generated/lib/l10n/` with runtime mappings
+such as `it-IT`, `ja`, `sr-Latn-RS`, or `zh-Hant-TW`. Script mappings use Flutter's
 [`Locale.fromSubtags`](https://api.flutter.dev/flutter/dart-ui/Locale/Locale.fromSubtags.html).
-A content variant requiring a separate regional/script ARB is not supported by
-this adapter yet. Runtime registration recognizes literal Locale declarations
+For variants, keep the API identity returned by discovery (for example `zh-HANT-TW`);
+the finalized ARB uses Flutter metadata `zh_Hant_TW`. Introduce the base language
+catalog first. Variant delivery also preserves subtags in Brickit's startup parser
+and saved locale preferences. The adapter upgrades the recognized legacy parser;
+an unfamiliar integration stops for an explicit fix. Check target-device resolution
+before bulk translation; a finalized artifact alone does not establish device readiness.
+Runtime registration recognizes literal Locale declarations
 and Brickit's named `supportedLocales` and `supportedLanguageCodes` lists; it
 does not depend on a particular existing language or its position. Unfamiliar
 registration expressions and duplicate runtime mappings stop delivery.
@@ -213,7 +218,7 @@ A checkout that advances during preparation must be retried.
 Existing-Locale delivery preserves unrelated staged work outside its commit.
 Combined delivery requires a clean checkout; standalone new-Locale delivery
 requires clean localization paths and an empty index. New-Locale output
-is limited to its ARB, runtime locale registration, and expected generated Dart
+is limited to its ARB, runtime locale registration, variant locale selection when needed, and expected generated Dart
 files; Release Delta output is verified against its delivery manifest. A complete
 new-Locale artifact requires the checkout Source Catalog to match its pinned
 commit, including when combined with a Release Bundle. Sync and continue the
@@ -247,7 +252,8 @@ For normal updates, prefer the published release so everyone gets the same build
    published release is unnecessary; fixes get a new version.
 
 `test/brickit_flutter_integration_test.dart` is the real-generator acceptance
-test for Italian, Japanese, and a Serbian script/region runtime mapping. It
+test for Italian, Japanese, a Serbian script/region runtime mapping, and a Traditional
+Chinese variant with actual Flutter device resolution and preference round-tripping. It
 clones the supplied checkout into a temporary directory, so it never
 writes the named checkout:
 

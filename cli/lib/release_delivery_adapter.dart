@@ -729,9 +729,9 @@ class ReleaseRepositoryAdapter {
               (catalog) => changedCatalogPaths.contains(catalog.catalogPath),
             ))
               if (generatedBefore.contains(
-                '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
+                '$_l10nDirectory/app_localizations_${catalog.localeCode.split('-').first}.dart',
               ))
-                '$_l10nDirectory/app_localizations_${catalog.localeCode}.dart',
+                '$_l10nDirectory/app_localizations_${catalog.localeCode.split('-').first}.dart',
             _localeDelivery.generatedLocalizationPath,
             _localeDelivery.generatedLocalePath(localeArtifact),
           };
@@ -741,8 +741,7 @@ class ReleaseRepositoryAdapter {
             ...changedCatalogPaths,
             ...(sourceChanged ? generatedBefore : const <String>{}),
             ...combinedGeneratedPaths,
-            _localeDelivery.catalogPath(localeArtifact),
-            _localeDelivery.runtimeConstantsPath,
+            ..._localeDelivery.expectedChangedPaths(localeArtifact),
           };
     if (changed.isEmpty || !allowed.containsAll(changed)) {
       throw RepositoryAdapterException(
@@ -769,7 +768,7 @@ class ReleaseRepositoryAdapter {
       final required = {
         ...changedCatalogPaths,
         ...combinedGeneratedPaths,
-        ..._localeDelivery.expectedChangedPaths(localeArtifact),
+        ..._localeDelivery.requiredChangedPaths(localeArtifact),
       };
       if (!changed.containsAll(required)) {
         throw RepositoryAdapterException(

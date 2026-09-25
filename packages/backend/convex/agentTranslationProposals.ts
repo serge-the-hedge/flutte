@@ -41,6 +41,7 @@ import {
 	ensureLocaleProposalForReview,
 	finalizeProposal,
 	type LocaleProposalCarryForwardResult,
+	proposalDeliveryIdentity,
 } from "./localeProposals";
 import {
 	commitManagedTarget,
@@ -3187,7 +3188,10 @@ const recordedReviewValidator = v.object({
 	reviewAuthorization: agentReviewAuthorizationValidator,
 });
 
-function reviewSummary(review: Doc<"agentTranslationCandidateReviews">) {
+function reviewSummary(
+	review: Doc<"agentTranslationCandidateReviews">,
+	exact = false,
+) {
 	const reason =
 		"reason" in review.decision ? review.decision.reason : undefined;
 	return {
@@ -3197,7 +3201,10 @@ function reviewSummary(review: Doc<"agentTranslationCandidateReviews">) {
 			...(reason === undefined
 				? {}
 				: {
-						reason: reason.length > 1024 ? `${reason.slice(0, 1024)}…` : reason,
+						reason:
+							!exact && reason.length > 1024
+								? `${reason.slice(0, 1024)}…`
+								: reason,
 					}),
 		},
 		reviewer: review.reviewer,
@@ -3346,13 +3353,16 @@ async function contextForAgentReviewer(
 			target: {
 				value: value?.value ?? "",
 				intentionalBlankReason: value?.intentionalBlankReason,
-				catalogPath: `${current.localeProposal.sourceCatalogPath.slice(0, current.localeProposal.sourceCatalogPath.lastIndexOf("/") + 1)}intl_pt.arb`,
+				catalogPath: proposalDeliveryIdentity(current.localeProposal)
+					.catalogPath,
 			},
 			basisIsCurrent: sameLocaleProposalTaskBasis(revision.basis, basis),
 		};
 		mutableBasis = {
 			...basis,
-			proposalRevision: current.localeProposal.revision,
+			// Other messages' staging increments the proposal revision without
+			// changing this assessment. Draft/baseline eligibility is checked above;
+			// only this message's staged value belongs in its review token.
 			stagedValue: value,
 		};
 	}
@@ -3399,7 +3409,7 @@ export const contextForAgentReview = internalQuery({
 				kind: "recordedReview" as const,
 				candidateRevisionId: args.candidateRevisionId,
 				alreadyReviewed: true as const,
-				latestReview: reviewSummary(review),
+				latestReview: reviewSummary(review, true),
 				reviewAuthorization: authorized.authorization,
 			};
 		if (authorized.candidate.latestRevisionId !== args.candidateRevisionId)

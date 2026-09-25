@@ -34,7 +34,8 @@ const FIELDS = [
 		name: "localeCode",
 		label: "Catalog code",
 		placeholder: "ja",
-		description: "2–3 letter language code in the ARB file.",
+		description:
+			"Language or variant, such as ja or zh-Hant-TW. Variants need an existing base catalog.",
 	},
 	{ name: "label", label: "Language name", placeholder: "Japanese" },
 	{
