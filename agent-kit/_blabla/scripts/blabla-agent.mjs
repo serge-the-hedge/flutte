@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { CredentialError, resolveConnection } from "./credentials.mjs";
 
 /** @typedef {null | boolean | number | string | unknown[] | {[key: string]: unknown}} Json */
@@ -10,7 +11,7 @@ import { CredentialError, resolveConnection } from "./credentials.mjs";
 const MAX_BYTES = 8 * 1024 * 1024;
 const PREFIX = "/api/agent/v1";
 
-class Failure extends Error {
+export class Failure extends Error {
 	/** @param {string} code @param {string} message @param {number | null} [status] @param {number | null} [retryAfterMs] */
 	constructor(code, message, status = null, retryAfterMs = null) {
 		super(message);
@@ -18,11 +19,11 @@ class Failure extends Error {
 	}
 }
 /** @param {unknown} value @returns {value is {[key: string]: unknown}} */
-function object(value) {
+export function object(value) {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 /** @param {string | undefined} value @param {number} fallback @param {number} maximum */
-function boundedNumber(value, fallback, maximum) {
+export function boundedNumber(value, fallback, maximum) {
 	if (value === undefined) return fallback;
 	if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > maximum)
 		throw new Failure(
@@ -116,7 +117,7 @@ function options(argv) {
 	};
 }
 /** @param {string | undefined} file @param {number} timeoutMs @returns {Promise<{text: string, value: Json} | undefined>} */
-async function input(file, timeoutMs) {
+export async function input(file, timeoutMs) {
 	if (!file) return undefined;
 	const stream = file === "-" ? process.stdin : createReadStream(file);
 	const timer = setTimeout(
@@ -149,7 +150,7 @@ async function input(file, timeoutMs) {
 	}
 }
 /** @param {URL} origin @param {string} path @param {Json | undefined} query */
-function endpoint(origin, path, query) {
+export function endpoint(origin, path, query) {
 	const url = new URL(`${PREFIX}${path}`, origin);
 	if (query !== undefined && !object(query))
 		throw new Failure(
@@ -209,7 +210,7 @@ function responseMessage(value, token) {
 		: "The API rejected the request.";
 }
 /** @param {{url: URL, method: string, token: string, body?: string, maxBytes: number, timeoutMs: number}} args */
-async function fetchJson(args) {
+export async function fetchJson(args) {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), args.timeoutMs);
 	try {
@@ -304,7 +305,7 @@ async function fetchJson(args) {
 	}
 }
 /** @param {unknown} value @returns {value is Cursor} */
-function cursor(value) {
+export function cursor(value) {
 	return (
 		value === null ||
 		typeof value === "string" ||
@@ -423,38 +424,46 @@ accepted page means restart the original request. Only API nextCursor:null compl
 Errors are JSON; failed requests and scan errors exit nonzero. Partial scans keep
 completed pages and the failing request's cursor in stdout. Request errors use stderr.
 `;
-if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2])) {
-	process.stdout.write(help);
-} else {
-	try {
-		const config = options(process.argv.slice(2));
-		const auth = await resolveConnection(process.env, config.profile);
-		const query = await input(config.queryFile, config.timeoutMs);
-		const body = await input(config.bodyFile, config.timeoutMs);
-		if (config.mode === "request") {
-			const result = await fetchJson({
-				url: endpoint(auth.origin, config.path, query?.value),
-				method: config.method,
-				token: auth.token,
-				body: body?.text,
-				maxBytes: config.maxBytes,
-				timeoutMs: config.timeoutMs,
-			});
-			process.stdout.write(result.text);
-		} else {
-			const result = await scan(config, auth, query?.value, body);
-			process.stdout.write(`${JSON.stringify(result)}\n`);
-			if (result.stopReason === "error") process.exitCode = 1;
+// Importable transport keeps the workflow runner on the same validated HTTP path.
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+) {
+	if (process.argv.length === 3 && ["--help", "-h"].includes(process.argv[2])) {
+		process.stdout.write(help);
+	} else {
+		try {
+			const config = options(process.argv.slice(2));
+			const auth = await resolveConnection(process.env, config.profile);
+			const query = await input(config.queryFile, config.timeoutMs);
+			const body = await input(config.bodyFile, config.timeoutMs);
+			if (config.mode === "request") {
+				const result = await fetchJson({
+					url: endpoint(auth.origin, config.path, query?.value),
+					method: config.method,
+					token: auth.token,
+					body: body?.text,
+					maxBytes: config.maxBytes,
+					timeoutMs: config.timeoutMs,
+				});
+				process.stdout.write(result.text);
+			} else {
+				const result = await scan(config, auth, query?.value, body);
+				process.stdout.write(`${JSON.stringify(result)}\n`);
+				if (result.stopReason === "error") process.exitCode = 1;
+			}
+		} catch (error) {
+			const failure =
+				error instanceof Failure
+					? error.info
+					: error instanceof CredentialError
+						? new Failure("CONFIGURATION", error.message).info
+						: new Failure(
+								"REQUEST_FAILED",
+								"The request could not be completed.",
+							).info;
+			process.stderr.write(`${JSON.stringify({ error: failure })}\n`);
+			process.exitCode = 1;
 		}
-	} catch (error) {
-		const failure =
-			error instanceof Failure
-				? error.info
-				: error instanceof CredentialError
-					? new Failure("CONFIGURATION", error.message).info
-					: new Failure("REQUEST_FAILED", "The request could not be completed.")
-							.info;
-		process.stderr.write(`${JSON.stringify({ error: failure })}\n`);
-		process.exitCode = 1;
 	}
 }

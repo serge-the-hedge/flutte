@@ -27,5 +27,7 @@ Requires the same reviewer identity and current authorization:
 Rejection uses `{ "kind": "reject", "reason": "Explain the defect" }` and leaves
 the live value unchanged. Acceptance applies exact bytes and any existing blank
 reason; edited values cannot be supplied. Changes to Source, target, candidate,
-prior review, guidance, or authority invalidate the token. The
+prior review, guidance, or authority invalidate the token. Unrelated messages
+being staged in the same Locale Proposal do not. Recorded review responses retain
+the full decision reason for exact recovery comparisons. The
 [review skill](../../blabla-review/SKILL.md) owns reassessment and recovery steps.

@@ -26,6 +26,7 @@ import {
 	sourceContractsMatch,
 } from "./contractTransforms";
 import {
+	arbLocaleCode,
 	DEFAULT_INTEGRATION_BRANCH,
 	isRepositoryLocale,
 	now,
@@ -3229,7 +3230,7 @@ function deriveLocaleDocument(
 	return {
 		globals: source.globals.map((global) =>
 			global.name === "@@locale"
-				? { ...global, value: localeCode }
+				? { ...global, value: arbLocaleCode(localeCode) }
 				: { ...global },
 		),
 		messages: source.messages.map((message) => {

@@ -46,7 +46,16 @@ to Git. Corrections require a new translation revision and a new review.
 
 The server rechecks revision, Source and target basis, latest review, reviewer
 identity, guidance, and current permission in the write transaction. A change
-invalidates the review token.
+invalidates the review token. Accepting an unrelated message in the same Locale
+Proposal does not invalidate it; the token binds that message's staged value,
+not the proposal-wide staging counter.
+
+The installed skills use the [resumable workflow](../agent-kit/_blabla/references/workflow.md).
+The reviewer fetches its own context, fills exact revision/token verdicts, posts
+them, and owns recovery. Missing decisions cannot become acceptance. Progress
+counts server-recorded reviews, including Intentional Blanks, rather than local
+judgment files. A recorded-review response preserves the full decision reason
+so recovery can compare the recorded verdict exactly.
 
 ## Evidence
 

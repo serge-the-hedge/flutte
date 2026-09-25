@@ -1,5 +1,8 @@
 # Use the HTTP helper
 
+For translation and review, start with the [resumable workflow](workflow.md).
+Use this lower-level helper for discovery, retrieval and other API operations.
+
 Requirements: Node.js 22 or newer and a complete installed Blabla skill bundle.
 Resolve the helper path relative to this reference file:
 `../scripts/blabla-agent.mjs`. Its `--help` output is the command-line reference.

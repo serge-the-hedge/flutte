@@ -702,6 +702,88 @@ describe("independent agent review", () => {
 			latestReview: { decision: { kind: "accept" } },
 		});
 	});
+	test("new-Locale reviewers can commit independently assessed messages without invalidating each other", async () => {
+		const f = await setup();
+		await f.owner.action(api.snapshots.ingest, {
+			projectId: f.projectId,
+			repository: "repo",
+			commit: "two-messages",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "en.arb",
+					content: '{"@@locale":"en","greeting":"Hello","farewell":"Goodbye"}',
+				},
+				{
+					catalogPath: "de.arb",
+					content: '{"@@locale":"de","greeting":"Hallo","farewell":"Tschüss"}',
+				},
+			],
+		});
+		await f.owner.mutation(api.localeIntroductionTargets.save, {
+			projectId: f.projectId,
+			localeCode: "it",
+			label: "Italian",
+			catalogPath: "italian.arb",
+			runtimeLocale: "it-IT",
+		});
+		const task = await f.owner.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId: f.projectId,
+				title: "Italian",
+				target: { kind: "newLocale", localeCode: "it" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		const targets = await f.t.query(
+			internal.agentTranslationProposals.newLocaleTaskSubmissionContext,
+			{
+				token: f.translator.token,
+				taskId: task.taskId,
+				messageIds: ["greeting", "farewell"],
+			},
+		);
+		const submitted = await f.t.mutation(
+			internal.agentTranslationProposals.submitRevisions,
+			{
+				token: f.translator.token,
+				proposalId: task.taskId,
+				items: targets.map((target) => ({
+					messageId: target.messageId,
+					value: target.messageId === "greeting" ? "Ciao" : "Arrivederci",
+					basis: target.basis,
+					clientRevisionKey: target.messageId,
+					expectedCandidateRevision: 0,
+				})),
+			},
+		);
+		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+			projectId: f.projectId,
+			enabled: true,
+		});
+		const assessed = await Promise.all(
+			submitted.revisions.map(async ({ revisionId }) => ({
+				revisionId,
+				context: await context(f, revisionId),
+			})),
+		);
+		for (const item of assessed) {
+			const response = await request(f.t, f.reviewer.token, item.revisionId, {
+				reviewToken: item.context.reviewToken,
+				decision: { kind: "accept" },
+			});
+			expect(response.status, await response.clone().text()).toBe(200);
+		}
+		const reviews = await f.t.run((ctx) =>
+			ctx.db.query("agentTranslationCandidateReviews").collect(),
+		);
+		expect(reviews).toHaveLength(2);
+	});
 	test("defaults off; exact human delegation applies with durable reviewer provenance", async () => {
 		const f = await setup();
 		expect((await request(f.t, f.reviewer.token, f.revisionId)).status).toBe(
@@ -768,6 +850,7 @@ describe("independent agent review", () => {
 
 	test("project policy permits rejection without changing the current value", async () => {
 		const f = await setup();
+		const reason = `Too formal: ${"Specific evidence. ".repeat(80)}`;
 		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
 			projectId: f.projectId,
 			enabled: true,
@@ -777,7 +860,7 @@ describe("independent agent review", () => {
 			(
 				await request(f.t, f.reviewer.token, f.revisionId, {
 					reviewToken: read.reviewToken,
-					decision: { kind: "reject", reason: "Too formal" },
+					decision: { kind: "reject", reason },
 				})
 			).status,
 		).toBe(200);
@@ -787,8 +870,14 @@ describe("independent agent review", () => {
 		}));
 		expect(result.heads).toEqual([]);
 		expect(result.review).toMatchObject({
-			decision: { kind: "reject", reason: "Too formal" },
+			decision: { kind: "reject", reason },
 			reviewAuthorization: { kind: "projectPolicy", policyRevision: 1 },
+		});
+		expect(
+			await (await request(f.t, f.reviewer.token, f.revisionId)).json(),
+		).toMatchObject({
+			kind: "recordedReview",
+			latestReview: { decision: { kind: "reject", reason } },
 		});
 	});
 

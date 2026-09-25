@@ -14,6 +14,11 @@ void main() {
     ProposedLocale(code: 'it', label: 'Italian', runtimeLocale: 'it-IT'),
     ProposedLocale(code: 'ja', label: 'Japanese', runtimeLocale: 'ja'),
     ProposedLocale(code: 'sr', label: 'Serbian', runtimeLocale: 'sr-Latn-RS'),
+    ProposedLocale(
+      code: 'zh-HANT-TW',
+      label: 'Traditional Chinese',
+      runtimeLocale: 'zh-Hant-TW',
+    ),
   ]) {
     test(
       'real Flutter generation delivers ${locale.code} with ${locale.runtimeLocale} runtime mapping',
@@ -40,7 +45,9 @@ void main() {
             'packages/brickit_generated/lib/l10n/intl_${locale.code}.arb',
             'packages/brickit/lib/constants/locale_const.dart',
             'packages/brickit_generated/lib/l10n/app_localizations.dart',
-            'packages/brickit_generated/lib/l10n/app_localizations_${locale.code}.dart',
+            'packages/brickit_generated/lib/l10n/app_localizations_${locale.languageCode}.dart',
+            if (locale.isVariant)
+              'packages/brickit/lib/blocs/user/user_bloc.dart',
           ]),
         );
         expect(await fixture.git(['status', '--porcelain']), isEmpty);
@@ -50,14 +57,19 @@ void main() {
                 'packages/brickit_generated/lib/l10n/app_localizations.dart',
               )
               .readAsString(),
-          contains("case '${locale.code}':"),
+          contains("case '${locale.languageCode}':"),
         );
         expect(
           await fixture
               .file('packages/brickit/lib/constants/locale_const.dart')
               .readAsString(),
-          contains('${locale.code}Locale'),
+          contains(
+            locale.isVariant
+                ? '${locale.runtimeLocale.replaceAll('-', '')}Locale'
+                : '${locale.code}Locale',
+          ),
         );
+        if (locale.isVariant) await fixture.verifyDeviceResolution(flutter);
       },
       skip: brickitCheckout == null
           ? 'Set BRICKIT_CHECKOUT to a Brickit checkout to run the real Flutter acceptance test.'
@@ -139,7 +151,7 @@ class _RealBrickitFixture {
         throw StateError('Brickit catalog has a non-string key.');
       catalogDocument[entry.key as String] = entry.value;
     }
-    catalogDocument['@@locale'] = locale.code;
+    catalogDocument['@@locale'] = locale.arbLocale;
     final content = jsonEncode(catalogDocument);
     return LocaleProposalArtifact(
       version: 1,
@@ -164,6 +176,62 @@ class _RealBrickitFixture {
 
   File file(String relativePath) =>
       File('${checkout.path}${Platform.pathSeparator}$relativePath');
+
+  Future<void> verifyDeviceResolution(ResolvedFlutter flutter) async {
+    final probe = Directory('${parent.path}/device-probe');
+    await Directory('${probe.path}/test').create(recursive: true);
+    await Directory('${probe.path}/lib/l10n').create(recursive: true);
+    await File('${probe.path}/pubspec.yaml').writeAsString(
+      '''name: locale_device_probe
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+''',
+    );
+    await file(
+      'packages/brickit/lib/constants/locale_const.dart',
+    ).copy('${probe.path}/lib/locale_const.dart');
+    await for (final entry in Directory(
+      '${checkout.path}/packages/brickit_generated/lib/l10n',
+    ).list()) {
+      if (entry is File && entry.path.endsWith('.dart'))
+        await entry.copy(
+          '${probe.path}/lib/l10n/${entry.uri.pathSegments.last}',
+        );
+    }
+    await File('${probe.path}/test/device_test.dart').writeAsString(r'''
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:locale_device_probe/locale_const.dart';
+import 'package:locale_device_probe/l10n/app_localizations.dart';
+void main() {
+  test('Traditional Chinese devices and saved preferences resolve to their catalog', () {
+    for (final tag in ['zh_Hant_TW', 'zh-Hant-TW', 'zh_TW']) {
+      final requested = BrickitLocaleConstants.localeFromTag(tag);
+      final saved = requested.toLanguageTag();
+      expect(BrickitLocaleConstants.localeFromTag(saved), requested);
+      final selected = basicLocaleListResolution([requested], BrickitLocaleConstants.supportedLocales);
+      expect(lookupAppLocalizations(selected).localeName, 'zh_Hant_TW');
+    }
+    final simplified = basicLocaleListResolution([BrickitLocaleConstants.localeFromTag('zh_CN')], BrickitLocaleConstants.supportedLocales);
+    expect(lookupAppLocalizations(simplified).localeName, 'zh');
+  });
+}
+''');
+    final result = await Process.run(flutter.executable, [
+      ...flutter.argumentsPrefix,
+      'test',
+    ], workingDirectory: probe.path);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  }
 
   Future<String> git(List<String> arguments) async {
     final result = await Process.run(

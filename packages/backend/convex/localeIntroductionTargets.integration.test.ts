@@ -56,6 +56,139 @@ const italian = {
 };
 
 describe("configured Locale introduction", () => {
+	test("script variants keep stable API identities and emit Flutter ARB metadata", async () => {
+		const f = await setup();
+		await expect(
+			f.owner.mutation(api.localeIntroductionTargets.save, {
+				projectId: f.projectId,
+				localeCode: "zh-Hant-TW",
+				label: "Traditional Chinese",
+				catalogPath: "lib/l10n/intl_zh_Hant_TW.arb",
+				runtimeLocale: "zh-Hant-TW",
+			}),
+		).rejects.toThrow("base catalog");
+		const baseLocaleId = await f.owner.mutation(api.locales.create, {
+			projectId: f.projectId,
+			code: "zh",
+		});
+		await f.owner.action(api.locales.bind, {
+			localeId: baseLocaleId,
+			catalogPath: "lib/l10n/intl_zh.arb",
+		});
+		await f.owner.action(api.snapshots.ingest, {
+			projectId: f.projectId,
+			repository: "repo",
+			commit: "chinese-base",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "lib/l10n/intl_en.arb",
+					content: '{"@@locale":"en","hello":"Hello"}',
+				},
+				{
+					catalogPath: "lib/l10n/intl_zh.arb",
+					content: '{"@@locale":"zh","hello":"你好"}',
+				},
+			],
+		});
+		await f.owner.mutation(api.localeIntroductionTargets.save, {
+			projectId: f.projectId,
+			localeCode: "zh-Hant-TW",
+			label: "Traditional Chinese",
+			catalogPath: "lib/l10n/intl_zh_Hant_TW.arb",
+			runtimeLocale: "zh-Hant-TW",
+		});
+		expect(await (await f.request("projects/current")).json()).toMatchObject({
+			capabilities: { newLocaleTargets: ["zh-HANT-TW"] },
+		});
+		const created = await f.request("translation-tasks", {
+			clientTaskKey: "traditional",
+			target: { kind: "newLocale", localeCode: "zh-HANT-TW" },
+		});
+		expect(created.status, await created.clone().text()).toBe(200);
+		const proposalId = await f.owner.query(
+			api.localeProposals.currentForReview,
+			{ projectId: f.projectId, localeCode: "zh-HANT-TW" },
+		);
+		if (!proposalId) throw new Error("Missing variant proposal");
+		await f.owner.mutation(api.localeProposals.stageForReview, {
+			projectId: f.projectId,
+			proposalId,
+			items: [
+				{
+					messageId: "hello",
+					value: "你好",
+					sourceFingerprint: await sha256Hex("Hello"),
+				},
+			],
+		});
+		await f.owner.action(api.localeProposals.finalizeForReview, {
+			projectId: f.projectId,
+			proposalId,
+		});
+		const artifact = await f.owner.action(
+			api.localeProposals.artifactForReview,
+			{ projectId: f.projectId, proposalId },
+		);
+		expect(artifact.locale.code).toBe("zh-HANT-TW");
+		expect(JSON.parse(artifact.catalog.content)).toEqual({
+			"@@locale": "zh_Hant_TW",
+			hello: "你好",
+		});
+		// The Flutter spelling normalizes back to the same identity on ingest.
+		const variantLocaleId = await f.owner.mutation(api.locales.create, {
+			projectId: f.projectId,
+			code: "zh-Hant-TW",
+		});
+		await f.owner.action(api.locales.bind, {
+			localeId: variantLocaleId,
+			catalogPath: "lib/l10n/intl_zh_Hant_TW.arb",
+		});
+		await f.owner.action(api.snapshots.ingest, {
+			projectId: f.projectId,
+			repository: "repo",
+			commit: "variant-observed",
+			lineage: {
+				baselineCommit: "chinese-base",
+				relationship: "descendant",
+				mergeBase: "chinese-base",
+			},
+			files: [
+				{
+					catalogPath: "lib/l10n/intl_en.arb",
+					content: '{"@@locale":"en","hello":"Hello"}',
+				},
+				{
+					catalogPath: "lib/l10n/intl_zh.arb",
+					content: '{"@@locale":"zh","hello":"你好"}',
+				},
+				{
+					catalogPath: "lib/l10n/intl_zh_Hant_TW.arb",
+					content: artifact.catalog.content,
+				},
+			],
+		});
+		expect(
+			(await f.owner.query(api.locales.list, { projectId: f.projectId })).map(
+				(locale) => locale.code,
+			),
+		).toContain("zh-HANT-TW");
+		for (const runtimeLocale of ["zh-Hans-TW", "zh-Hant-HK", "zh-TW"]) {
+			await expect(
+				f.owner.mutation(api.localeIntroductionTargets.save, {
+					projectId: f.projectId,
+					localeCode: "zh-Hant-TW",
+					label: "Chinese",
+					catalogPath: "lib/l10n/intl_zh_Hant_TW.arb",
+					runtimeLocale,
+				}),
+			).rejects.toThrow("match");
+		}
+	});
 	test("discovers explicit targets, creates arbitrary agent tasks, and pins delivery identity across configuration changes", async () => {
 		const f = await setup();
 		expect(await (await f.request("projects/current")).json()).toMatchObject({

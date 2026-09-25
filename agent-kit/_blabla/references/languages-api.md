@@ -42,7 +42,14 @@ In a **Repository** project, configure a language for future proposals:
 
 Returns `{kind: "introductionTarget", targetId, updatedAt}`. Read the project's
 Source catalog path first: the Flutter adapter requires the same directory and
-a language-only catalog code. To update an existing target, include its
+a matching catalog/runtime identity. Script/region variants are supported: use
+`code: "zh-Hant-TW"`, `runtimeLocale: "zh-Hant-TW"`, and a distinct ARB path.
+Discovery returns the stable normalized API code `zh-HANT-TW`; use that returned
+code for tasks. The artifact's Flutter metadata is `zh_Hant_TW`. The language base
+catalog must already exist before introducing a variant. The current Repository
+Adapter preserves script subtags during app startup and saved preference handling;
+unrecognized app integration code stops delivery for an explicit integration fix.
+Verify target-device selection before broad translation. To update an existing target, include its
 `expectedUpdatedAt` from GET. Existing proposals keep their pinned configuration.
 Configuration does not activate or bind a repository language. Continue with
 [the new-language task workflow](translation-api.md#new-locale-translation-task)

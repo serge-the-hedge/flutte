@@ -22,7 +22,7 @@ node scripts/install-agent-kit.mjs --to /absolute/path/to/application/.agents/sk
 ```
 
 The installer copies all four skill directories plus `_blabla`, which contains
-the one shared helper and reference set. Keep those five directories together;
+the shared transport, resumable workflow, and reference set. Keep those five directories together;
 copying or installing an individual skill alone is unsupported. The installed
 bundle needs no Blabla checkout, package installation, or network dependency to
 run its helper. Installation makes no API calls.
@@ -39,6 +39,11 @@ Follow [Human Setup](_blabla/references/api.md#human-setup) to select credential
 for each project and role, including reviewer isolation. Credentials are never
 installed with the bundle. Use [transport](_blabla/references/transport.md) for
 helper commands.
+
+Translation and review skills default to the [resumable workflow](_blabla/references/workflow.md).
+It checkpoints small pages, shares local rate pacing, binds explicit verdicts to
+assessed revisions, and recovers writes from server evidence. The host still owns
+launching isolated reviewer agents and assigning their credentials.
 
 Start with assignments such as “Find our established German wording for this
 message,” “Translate task …,” or “Review candidate revision … independently.”

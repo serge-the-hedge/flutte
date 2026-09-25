@@ -37,6 +37,19 @@ export function normalizeLocaleCode(input: string): string {
 		.join("-");
 }
 
+/** Flutter ARB metadata uses underscores and title-cased scripts. Database
+ * identities retain the existing normalization so no stored keys are renamed. */
+export function arbLocaleCode(code: string): string {
+	return code
+		.split("-")
+		.map((part, index) =>
+			index > 0 && part.length === 4
+				? `${part[0]}${part.slice(1).toLowerCase()}`
+				: part,
+		)
+		.join("_");
+}
+
 export function now(): number {
 	return Date.now();
 }

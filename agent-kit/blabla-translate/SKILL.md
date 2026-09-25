@@ -8,6 +8,10 @@ description: Author Basic project source strings, translate or correct Blabla ta
 Work through Translation Tasks and report candidates as **proposed** until
 recorded review establishes otherwise.
 
+Use the [resumable workflow](../_blabla/references/workflow.md) as the default
+execution path. Its commands own pagination, checkpoints, pacing, review handoffs,
+and server-derived coverage. Do not generate a custom posting/recovery script.
+
 For an assignment to add or edit languages, follow [language management](../_blabla/references/languages-api.md)
 with `languages-write`. Verify the resulting language metadata before creating
 translation tasks; a language-only assignment ends after that verification.
@@ -38,7 +42,9 @@ when requested. Repository source authoring stays in its source checkout.
    Existing repository and Basic targets need one task per language and at most
    32 keys; configured new repository languages use complete-catalog tasks.
    Track every requested key/language pair across tasks. The server owns the basis.
-4. Read one [task page](../_blabla/references/translation-api.md#get-translation-tasksid),
+4. For broad work, establish a versioned brief and complete the representative
+   pilot described in the workflow before expanding. Read one task page with
+   `blabla-workflow.mjs task read TASK_ID --state DIRECTORY`,
    including Source, current target, applicable guidance, newest candidate, and
    review feedback. For wording questions follow
    [retrieval](../_blabla/references/retrieval.md); new languages can reuse
@@ -50,12 +56,16 @@ when requested. Repository source authoring stays in its source checkout.
    messages preserve their executable contract. Preserve exact
    intentional formatting. Resolve contextual ambiguity from evidence or the
    human's assignment; absent guidance is not invented project policy.
-6. Submit up to 16 decisions through
-   [task candidates](../_blabla/references/translation-api.md#post-translation-tasksidcandidates).
+6. Submit up to 16 candidates with `task submit ... --body FILE` using the
+   [candidate format](../_blabla/references/translation-api.md#post-translation-tasksidcandidates).
    Intentional Blanks require a reason. Process the assigned scope page by page;
    a continuation means there is more work even after a short or empty page.
    On stale basis or changed feedback, read and reassess before resubmitting.
-7. Report task identities and coverage per language: submitted, already reviewed
+7. Pass exact revision handoffs to a separate authorized reviewer; let that
+   reviewer fetch evidence, decide, post, and recover its own writes. Never load
+   its profile, merge unbound verdict files, or default an absent verdict to accept.
+   Run the workflow's bounded `task status` scan to completion after review.
+   Report task identities and coverage per language: submitted, already reviewed
    and preserved, or blocked, with remaining cursor/work and unresolved questions.
    Completion requires accounting for every requested key/language pair.
    Hand review to a human or a separately assigned reviewer with its

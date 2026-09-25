@@ -56,6 +56,17 @@ test("installed bundle runs outside the checkout, resolves references, and repla
 		});
 		assert.equal(help.status, 0, help.stderr);
 		assert.match(help.stdout, /request/);
+		const workflow = spawnSync(
+			process.execPath,
+			[join(target, "_blabla/scripts/blabla-workflow.mjs"), "--help"],
+			{
+				cwd: temporary,
+				encoding: "utf8",
+				env: { PATH: process.env.PATH },
+			},
+		);
+		assert.equal(workflow.status, 0, workflow.stderr);
+		assert.match(workflow.stdout, /review submit/);
 		for (const file of await files(target)) {
 			if (!file.endsWith(".md")) continue;
 			const content = await readFile(file, "utf8");
