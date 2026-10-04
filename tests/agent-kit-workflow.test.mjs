@@ -483,6 +483,89 @@ test("candidate submissions stop on changed source, enforce Unicode limits, and 
 	]);
 });
 
+test("reuse contention retry does not replay a review write", async (t) => {
+	let posts = 0;
+	const f = await fixture("review", (request, response) => {
+		if (request.method === "POST") {
+			posts++;
+			return json(response, { code: "WRITE_CONTENTION", retryAfter: 1 }, 503);
+		}
+		json(response, context("revision"));
+	});
+	t.after(() => f.close());
+	ok(await f.run(["review", "read"], assignment("revision")));
+	const submitted = await f.run(["review", "submit"], {
+		items: [
+			{
+				revisionId: "revision",
+				reviewToken: "token-revision",
+				decision: { kind: "accept" },
+			},
+		],
+	});
+	assert.equal(submitted.code, 1);
+	assert.equal(posts, 1);
+});
+
+test("task reuse retries explicit contention within a bound and preserves the saved page", async () => {
+	const requests = /** @type {Row[]} */ ([]);
+	let remainingFailures = 5;
+	const f = await fixture("task", async (request, response) => {
+		assert.equal(
+			request.url,
+			"/api/agent/v1/translation-tasks/destination/reuse",
+		);
+		const input = await body(request);
+		requests.push(input);
+		if (remainingFailures-- > 0) {
+			return json(response, { code: "WRITE_CONTENTION", retryAfter: 1 }, 503);
+		}
+		json(response, {
+			sourceTaskId: "source",
+			destinationTaskId: "destination",
+			clientReuseKey: input.clientReuseKey,
+			items: [{ messageId: "greeting", status: "copied", revisionId: "fresh" }],
+			nextCursor: null,
+		});
+	});
+	try {
+		const args = ["task", "reuse", "destination", "--source", "source"];
+		const failed = await f.run(args);
+		assert.equal(failed.code, 1);
+		assert.equal(requests.length, 4);
+		const saved = JSON.parse(
+			await readFile(join(f.directory, "state", "reuse.json"), "utf8"),
+		);
+		assert.equal(saved.cursor, 0);
+		assert.ok(
+			requests.every(
+				(input) => JSON.stringify(input) === JSON.stringify(requests[0]),
+			),
+		);
+		assert.equal(ok(await f.run(args)).complete, true);
+		assert.equal(requests.length, 6);
+		assert.ok(
+			requests.every(
+				(input) => JSON.stringify(input) === JSON.stringify(requests[0]),
+			),
+		);
+		assert.equal(requests[5].clientReuseKey, saved.clientReuseKey);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					join(f.directory, "state", "reuse-handoff-0.json"),
+					"utf8",
+				),
+			),
+			{
+				revisions: [{ revisionId: "fresh" }],
+			},
+		);
+	} finally {
+		await f.close();
+	}
+});
+
 test("task reuse resumes a lost response with the same request key and saves exact pending-review handoffs", async () => {
 	const requests = /** @type {Row[]} */ ([]);
 	const receipts = /** @type {Map<unknown, Row>} */ (new Map());

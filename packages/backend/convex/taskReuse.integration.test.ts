@@ -1,3 +1,5 @@
+import { getFunctionName } from "convex/server";
+import { ConvexError } from "convex/values";
 import { describe, expect, test, vi } from "vitest";
 import {
 	authenticatedBackend,
@@ -6,6 +8,8 @@ import {
 } from "../test/support";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { ActionCtx } from "./_generated/server";
+import http from "./http";
 
 function required<T>(value: T | null | undefined): T {
 	if (value === null || value === undefined)
@@ -131,6 +135,73 @@ async function setup(count = 4, definitions: Record<string, unknown> = {}) {
 }
 
 describe("explicit Translation Task authorship reuse", () => {
+	const writeConflict =
+		'Documents read from or written to the table "agentTranslationProposals" changed while this mutation was being run and on every subsequent retry. A call to "agentTranslationProposals:reviewCandidateForAgent" changed the document with ID "synthetic-task".';
+	test.each([
+		{ error: new Error(writeConflict), status: 503, code: "WRITE_CONTENTION" },
+		{
+			error: new ConvexError({ code: "CONFLICT", message: writeConflict }),
+			status: 409,
+			code: "CONFLICT",
+		},
+		{ error: new Error("Unknown failure"), status: 400, code: undefined },
+	])(
+		"classifies reuse failures as $status/$code and resumes the same page",
+		async ({ error, status, code }) => {
+			const f = await setup(1);
+			const [source] = await f.submit(f.from.taskId, [
+				{ messageId: "m0", value: "Translated" },
+			]);
+			await f.owner.mutation(api.agentTranslationProposals.reviewCandidate, {
+				candidateRevisionId: required(source).revisionId,
+				decision: { kind: "accept" },
+			});
+			const path = `/api/agent/v1/translation-tasks/${f.to.taskId}/reuse`;
+			const [route] = required(http.lookup(path, "POST"));
+			// Convex's runtime exposes the handler; its public declarations omit it.
+			const handler = route as typeof route & {
+				_handler: (ctx: ActionCtx, request: Request) => Promise<Response>;
+			};
+			const response = await f.t.action(async (ctx) => {
+				const runMutation = ctx.runMutation;
+				ctx.runMutation = async (reference, ...args) => {
+					if (getFunctionName(reference) === "taskReuse:commitPage") {
+						throw error;
+					}
+					return await runMutation(reference, ...args);
+				};
+				const response = await handler._handler(
+					ctx,
+					new Request(`https://example.test${path}`, {
+						method: "POST",
+						headers: { Authorization: `Bearer ${f.copier.token}` },
+						body: JSON.stringify({
+							sourceTaskId: f.from.taskId,
+							clientReuseKey: "contention",
+							cursor: 0,
+						}),
+					}),
+				);
+				return {
+					status: response.status,
+					retryAfter: response.headers.get("Retry-After"),
+					body: await response.text(),
+				};
+			});
+			expect(response.status, response.body).toBe(status);
+			expect(response.retryAfter).toBe(status === 503 ? "1" : null);
+			expect(JSON.parse(response.body).code).toBe(code);
+			const resumed = await f.reuse("contention");
+			expect(resumed.status).toBe(200);
+			const receipt = await resumed.json();
+			expect(receipt).toMatchObject({
+				items: [{ messageId: "m0", status: "copied" }],
+				nextCursor: null,
+			});
+			expect(await (await f.reuse("contention")).json()).toEqual(receipt);
+		},
+	);
+
 	test("copies exact accepted revisions and reasoned blanks as fresh agent candidates, with replayable receipts and independent review", async () => {
 		const f = await setup();
 		const revisions = await f.submit(f.from.taskId, [
