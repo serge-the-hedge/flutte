@@ -13,6 +13,7 @@ avoid fetching the same guide for every message.
 | Question | Read |
 | --- | --- |
 | What exactly does this known key say? | `POST /workspace/context` with selected `keys` and `locales` |
+| Which source strings exist in a Basic project? | [Source inventory](collection-api.md#inventory-source-strings), using one enabled target code |
 | Where have we used this wording? | `GET /workspace/search` with `localeCode`, `searchIn`, `view=compact`, usually `quality=confirmed` |
 | Which wording is established in this new-language draft? | `POST /proposal-examples/search` scoped to the owned task or authorized review revision |
 | What terms/voice apply to these supplied Source texts? | `POST /guidance/context`; needed only when existing context does not already provide it |
