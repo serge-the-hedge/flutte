@@ -1,6 +1,7 @@
 {
 	"name": "@blabla/backend",
 	"version": "1.0.0",
+	"type": "module",
 	"description": "",
 	"license": "ISC",
 	"author": "",
@@ -14,27 +15,27 @@
 		"check-types:test": "tsc -p tsconfig.test.json --noEmit"
 	},
 	"dependencies": {
-		"@convex-dev/aggregate": "^0.2.2",
-		"@convex-dev/better-auth": "^0.12.5",
-		"@convex-dev/migrations": "^0.3.5",
-		"@convex-dev/rate-limiter": "^0.3.2",
-		"@convex-dev/resend": "^0.2.7",
-		"@convex-dev/workflow": "^0.4.4",
-		"@noble/hashes": "^2.2.0",
+		"@convex-dev/aggregate": "^0.3.1",
+		"@convex-dev/better-auth": "catalog:",
+		"@convex-dev/migrations": "^0.3.6",
+		"@convex-dev/rate-limiter": "^0.4.0",
+		"@convex-dev/resend": "^0.2.8",
+		"@convex-dev/workflow": "^0.4.8",
+		"@noble/hashes": "^2.4.0",
 		"better-auth": "catalog:",
-		"convex": "^1.45.0",
-		"dotenv": "^17.4.2",
-		"unicode-case-folding": "1.1.1",
-		"zod": "^4.4.3"
+		"convex": "catalog:",
+		"dotenv": "catalog:",
+		"unicode-case-folding": "1.1.2",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@blabla/config": "workspace:*",
 		"@edge-runtime/vm": "^5.0.0",
-		"@types/bun": "^1.3.14",
-		"@types/node": "^24.13.3",
-		"convex-test": "^0.0.54",
-		"typescript": "^6.0.3",
-		"vite": "^8.1.5",
-		"vitest": "^4.1.10"
+		"@types/bun": "catalog:",
+		"@types/node": "catalog:",
+		"convex-test": "^0.0.60",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vitest": "^5.0.3"
 	}
 }

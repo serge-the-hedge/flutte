@@ -28,9 +28,22 @@ pushes to Git or opens a pull request on the developer's behalf.
 
 ## Local development
 
-Use Bun **1.3.13** (the version pinned in `package.json` and CI). The CLI also
+Use Bun **1.4.2** (the version pinned in `package.json` and CI). The CLI also
 needs Dart; see its [toolchain requirements](cli/README.md). Agent-kit checks
-require Node.js **22+**.
+require Node.js **24 LTS**.
+
+Shared JavaScript dependency versions live in the root Bun catalog. Better Auth
+stays pinned to the latest supported 1.6 release because the stable
+`@convex-dev/better-auth` adapter requires `>=1.6.11 <1.7.0`; upgrade them together.
+
+After updating Convex, refresh its generated AI guidance and official agent skills:
+
+```sh
+(cd packages/backend && bunx convex ai-files update)
+```
+
+Other checked-in development skills can be refreshed from their respective
+project directories with `bunx skills update --project --yes`.
 
 ```sh
 bun install --frozen-lockfile

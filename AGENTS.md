@@ -14,6 +14,10 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 
 ### Product contracts
 
+For backend work, read `packages/backend/AGENTS.md` and the official Convex
+skills in `packages/backend/.agents/skills/`. Refresh that guidance with
+`bunx convex ai-files update` from `packages/backend` after upgrading Convex.
+
 For localization changes, read `docs/catalog-message-lifecycle.md` and the
 implementation-status table in `docs/spec/localization-control-plane.md`. For
 agent integrations, use `docs/agent-api.md`; legacy catalog writes are retired.
