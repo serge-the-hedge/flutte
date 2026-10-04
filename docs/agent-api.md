@@ -34,6 +34,8 @@ These links preserve the former guide's bookmarks.
 | <a id="post-translation-tasks"></a>[`POST /translation-tasks`](../agent-kit/_blabla/references/translation-api.md#post-translation-tasks) |
 | <a id="get-translation-tasks"></a>[`GET /translation-tasks`](../agent-kit/_blabla/references/translation-api.md#get-translation-tasks) |
 | <a id="get-translation-tasksid"></a>[`GET /translation-tasks/:id`](../agent-kit/_blabla/references/translation-api.md#get-translation-tasksid) |
+| [Basic Source inventory](../agent-kit/_blabla/references/collection-api.md#inventory-source-strings) |
+| [Reviewed authorship reuse](../agent-kit/_blabla/references/translation-api.md#post-translation-tasksdestinationidreuse) |
 | <a id="post-translation-tasksidcandidates"></a>[`POST /translation-tasks/:id/candidates`](../agent-kit/_blabla/references/translation-api.md#post-translation-tasksidcandidates) |
 | <a id="post-translation-proposalsidcandidate-revisions"></a>[`POST /translation-proposals/:id/candidate-revisions`](../agent-kit/_blabla/references/advanced-api.md#post-translation-proposalsidcandidate-revisions) |
 | <a id="get-translation-proposalsid"></a>[`GET /translation-proposals/:id`](../agent-kit/_blabla/references/advanced-api.md#get-translation-proposalsid) |

@@ -74,28 +74,34 @@ between pages; finish repair work with a fresh verification pass.
 
 ### Inventory source strings
 
-Search returns source/target pairs. Choose one enabled target code from
-`GET /projects/current`, excluding `sourceLocale`, even when searching only Source.
-Passing the Source code as `localeCode` returns `NOT_FOUND`. For a complete source
-inventory, write a query like this with the discovered target code:
+`GET /workspace/strings` (`read`) lists Basic Source independently of enabled
+languages. Use `limit` 1–16 (default 16), optional literal `q` over key/name/source,
+and the returned opaque `cursor`. Braces are plain text and Unicode is preserved.
+Each item includes stable `messageId`/`key`, nullable `name`, exact `sourceValue`,
+source revision/fingerprint, optional context/character limit, and a
+`sourceContract` with `messageId`, `revision`, `fingerprint`, and `format: "plain"`.
+Its exact text is `sourceValue`, represented once per item. No target or review
+claim is implied.
 
-```json
-{ "q": "", "localeCode": "fr-FR", "searchIn": "source", "quality": "all", "limit": 50 }
+Through the [HTTP helper](transport.md#bounded-scans):
+
+```text
+node <agent-helper> scan GET /workspace/strings --query <query-file> --profile <translator> --max-pages 4
 ```
 
-Use `scan GET /workspace/search --query <query-file>` through the
-[HTTP helper](transport.md#bounded-scans). Keep tag and key-prefix filters absent
-for the complete workspace. Record each returned `messageId`, `name`, and
-`source.value`; one target locale avoids repeating each source across languages.
-Resume bounded scans with the returned cursor until `complete: true`. A short or
-empty page with a continuation still has unscanned scope.
+Put `{ "limit": 16 }` in the query file. Save the returned continuation and repeat with that `cursor` until `complete:true`.
+Keep `q` absent for a complete inventory. Consume empty pages with continuation;
+archived or filtered rows can fill a scanned page. Cursors bind the project’s
+workspace and normalized query; changed queries or another workspace require a
+new scan. Target-language edits do not invalidate source browsing. Pages are
+creation-ordered, at most 16 scanned rows and 1 MiB, with `consistency: "live"`:
+source edits can occur between pages, so rescan to verify after changes. For an
+oversized page, retry the same cursor with a smaller limit. Exact-key lookup
+remains `GET /workspace/strings?key=...` and cannot combine with list parameters.
 
-With no enabled targets, search returns no pairs even when source strings exist.
-Use [the exact source read](#read-a-source-string) for known keys. If the assignment
-includes language setup, enable its target through the [Language API](languages-api.md)
-before inventorying; otherwise report that complete source enumeration is unavailable
-through the current Agent API. An empty pair search does not prove the project has
-no source strings.
+Pair search remains useful for translation evidence. Its `localeCode` selects an
+enabled target even when `searchIn: "source"`; the Source code returns `NOT_FOUND`.
+An empty pair search with no targets says nothing about Source inventory.
 
 ## Exact context
 

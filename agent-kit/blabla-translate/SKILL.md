@@ -42,6 +42,9 @@ when requested. Repository source authoring stays in its source checkout.
    Existing repository and Basic targets need one task per language and at most
    32 keys; configured new repository languages use complete-catalog tasks.
    Track every requested key/language pair across tasks. The server owns the basis.
+   For explicitly assigned reuse of reviewed text, run
+   [reuse reviewed authorship](../_blabla/references/workflow.md#reuse-reviewed-authorship)
+   into the intended destination task, then continue ordinary review and coverage.
 4. For broad work, establish a versioned brief and complete the representative
    pilot described in the workflow before expanding. Read one task page with
    `blabla-workflow.mjs task read TASK_ID --state DIRECTORY`,

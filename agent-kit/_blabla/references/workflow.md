@@ -63,6 +63,33 @@ Pacing is shared across local workflow workers using the same API credential.
 Do not evade rate limits with extra tokens. Workers on different machines require
 host-level coordination; the local scheduler does not claim distributed ownership.
 
+## Reuse reviewed authorship
+
+When assigned to reuse exact reviewed text, select an accessible source task and
+an open destination task with the intended Locale and current Source. Create or
+resume the destination through the ordinary task API first. Review does not
+transfer between tasks or Locale identities; the new candidates need independent
+assessment under the destination’s guidance.
+
+```text
+node <workflow> task reuse DESTINATION_TASK_ID --source SOURCE_TASK_ID --state <reuse-state> --profile <translator>
+```
+
+Use a separate state directory for this task pair. Each invocation consumes up to
+four source pages (`--max-pages` 1–32); repeat the same command until `complete:true`.
+The runner saves the request key before writing, exact page receipts, skip results,
+and `reuse-handoff-CURSOR.json` files containing the new revision IDs. Resume the
+same state after an interrupted or unknown write: the server returns its durable
+receipt. Keep skip results for reconciliation; `complete` means source scanning
+finished, not every destination candidate exists or has been reviewed. Resolve
+changed/incompatible/occupied scope with ordinary task reads and the assignment.
+A new explicitly assigned reuse pass uses a new state directory.
+
+Give each nonempty handoff to the separate reviewer. Then use ordinary `task read`
+and `task status` state for destination work and coverage. See the
+[reuse endpoint contract](translation-api.md#post-translation-tasksdestinationidreuse)
+for eligibility, drift checks, blanks, provenance and result meanings.
+
 ## Independently review and record
 
 The host launches a separate reviewer with its dedicated profile. The translator

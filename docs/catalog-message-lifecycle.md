@@ -112,6 +112,14 @@ acceptance can create a Translator Confirmation or complete First Review;
 submission and rejection cannot. See [Agent Review](agent-review.md) for the
 permission, concurrency, and evidence contract.
 
+Explicit task reuse retains reviewed authorship as new agent candidates. Original
+revisions, reviews and task identities remain historical evidence. Reuse requires
+matching complete Source Contracts, destination validation and unoccupied targets;
+it never copies acceptance, review authorization, Translator Confirmation or human
+authorship. Every copied revision needs fresh review under the destination Locale
+and guidance. The [task reuse workflow](../agent-kit/_blabla/references/workflow.md#reuse-reviewed-authorship)
+owns bounded paging, retry receipts and independent review handoffs.
+
 ## Working presentation
 
 | Facts | Presentation | Required action |

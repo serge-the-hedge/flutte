@@ -40,6 +40,159 @@ async function setup() {
 }
 
 describe("agent Basic string creation", () => {
+	test("inventories a maximum-size escaped source once at limit 1 and continues", async () => {
+		const s = await setup();
+		const reader = await s.createToken(["read"]);
+		const sourceValue = '"'.repeat(256 * 1024);
+		for (const [key, value] of [
+			["quoted", sourceValue],
+			["next", "Next source"],
+		] as const)
+			await s.owner.mutation(api.managedContent.createMessage, {
+				projectId: s.projectId,
+				collectionId: s.collectionId,
+				key,
+				sourceValue: value,
+			});
+		const get = (query: string) =>
+			s.t.fetch(`/api/agent/v1/workspace/strings?${query}`, {
+				headers: { Authorization: `Bearer ${reader.token}` },
+			});
+		const exact = await get("key=quoted");
+		expect(exact.status).toBe(200);
+		expect(await exact.json()).toMatchObject({ string: { sourceValue } });
+		const response = await get("limit=1");
+		expect(response.status, await response.clone().text()).toBe(200);
+		const encoded = await response.text();
+		expect(new TextEncoder().encode(encoded).byteLength).toBeLessThan(
+			1024 * 1024,
+		);
+		const page: {
+			items: Array<{
+				sourceValue: string;
+				sourceContract: Record<string, unknown>;
+			}>;
+			nextCursor: string;
+		} = JSON.parse(encoded);
+		expect(page.items).toHaveLength(1);
+		expect(page.items[0]?.sourceValue).toBe(sourceValue);
+		expect(page.items[0]?.sourceContract).toMatchObject({
+			messageId: "quoted",
+			revision: 1,
+			format: "plain",
+		});
+		expect(page.items[0]?.sourceContract).not.toHaveProperty("value");
+		expect(page.nextCursor).toBeTruthy();
+		expect(
+			await (
+				await get(`limit=1&cursor=${encodeURIComponent(page.nextCursor)}`)
+			).json(),
+		).toMatchObject({
+			items: [{ messageId: "next", sourceValue: "Next source" }],
+			nextCursor: null,
+		});
+	});
+
+	test("inventories plain Unicode source without any target languages, including empty continuation pages", async () => {
+		const s = await setup();
+		const writer = await s.createToken(["read", "strings-write"]);
+		for (let i = 0; i < 18; i++) {
+			await s.owner.mutation(api.managedContent.createMessage, {
+				projectId: s.projectId,
+				collectionId: s.collectionId,
+				key: `item.${i}`,
+				sourceValue: "你好 {literal}",
+				name: `Name ${i}`,
+				context: "Synthetic",
+				characterLimit: 40,
+			});
+		}
+		const get = (query = "") =>
+			s.t.fetch(`/api/agent/v1/workspace/strings${query}`, {
+				headers: { Authorization: `Bearer ${writer.token}` },
+			});
+		const response = await get("?limit=16");
+		expect(response.status).toBe(200);
+		const first: { items: Array<{ messageId: string }>; nextCursor: string } =
+			await response.json();
+		expect(first.items).toHaveLength(16);
+		expect(first.items[0]).toMatchObject({
+			messageId: "item.0",
+			name: "Name 0",
+			sourceValue: "你好 {literal}",
+			context: "Synthetic",
+			characterLimit: 40,
+			sourceContract: { format: "plain" },
+		});
+		const last = await get(
+			`?limit=16&cursor=${encodeURIComponent(first.nextCursor)}`,
+		);
+		expect(await last.json()).toMatchObject({
+			items: [{ messageId: "item.16" }, { messageId: "item.17" }],
+			nextCursor: null,
+			consistency: "live",
+		});
+		const filtered = await get("?q=absent&limit=16");
+		const empty: { items: unknown[]; nextCursor: string } =
+			await filtered.json();
+		expect(empty.items).toEqual([]);
+		expect(empty.nextCursor).toBeTruthy();
+		expect(
+			await (
+				await get(`?q=absent&cursor=${encodeURIComponent(empty.nextCursor)}`)
+			).json(),
+		).toMatchObject({ items: [], nextCursor: null });
+		expect(
+			(await get(`?q=different&cursor=${encodeURIComponent(empty.nextCursor)}`))
+				.status,
+		).toBe(400);
+	});
+	test("source inventory requires read scope and rejects foreign workspace continuations", async () => {
+		const s = await setup();
+		for (const key of ["one", "two"])
+			await s.owner.mutation(api.managedContent.createMessage, {
+				projectId: s.projectId,
+				collectionId: s.collectionId,
+				key,
+				sourceValue: "Source",
+			});
+		const reader = await s.createToken(["read"]);
+		const get = (token: string | undefined, query = "") =>
+			s.t.fetch(`/api/agent/v1/workspace/strings${query}`, {
+				headers: token ? { Authorization: `Bearer ${token}` } : {},
+			});
+		expect((await get(undefined)).status).toBe(401);
+		const proposer = await s.createToken(["propose"]);
+		expect((await get(proposer.token)).status).toBe(401);
+		const first: { nextCursor: string } = await (
+			await get(reader.token, "?limit=1")
+		).json();
+		const otherProject = await s.owner.mutation(api.projects.create, {
+			name: "Other Basic",
+			type: "basic",
+			sourceLocaleCode: "en",
+			sourceLocaleLabel: "English",
+		});
+		const other = await s.owner.mutation(api.apiTokens.create, {
+			projectId: otherProject,
+			name: "Reader",
+			scopes: ["read"],
+		});
+		expect(await (await get(other.token)).json()).toMatchObject({
+			items: [],
+			nextCursor: null,
+		});
+		expect(
+			(
+				await get(
+					other.token,
+					`?cursor=${encodeURIComponent(first.nextCursor)}`,
+				)
+			).status,
+		).toBe(400);
+		expect((await get(reader.token, "?limit=17")).status).toBe(400);
+	});
+
 	test("creates source text with agent attribution, names and limits; retries cannot overwrite", async () => {
 		const s = await setup();
 		const writer = await s.createToken(["read", "strings-write"]);
@@ -161,7 +314,6 @@ describe("agent Basic string creation", () => {
 			await (await get(other.token, "?key=store.subtitle")).json(),
 		).toEqual({ string: null });
 		for (const query of [
-			"",
 			"?key=",
 			`?key=${"a".repeat(257)}`,
 			"?key=one&key=two",

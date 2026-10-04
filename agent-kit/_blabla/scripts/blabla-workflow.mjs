@@ -907,14 +907,120 @@ async function reviewSubmit(api, directory, body) {
 	};
 }
 
+/** Reuse receipts are server-owned. Persist the request key before the first
+ * POST and advance only after saving the exact receipt and review handoff.
+ * @param {Client} api @param {string} taskId @param {string} sourceTaskId @param {string} directory @param {number} maxPages */
+async function taskReuse(api, taskId, sourceTaskId, directory, maxPages) {
+	const checkpointPath = join(directory, "reuse.json");
+	const saved = await optional(checkpointPath);
+	const progress =
+		saved === null
+			? {
+					clientReuseKey: `workflow-reuse:${randomUUID()}`,
+					cursor: 0,
+					complete: false,
+					sourceTaskId,
+					destinationTaskId: taskId,
+				}
+			: record(saved, "Reuse checkpoint");
+	if (
+		progress.sourceTaskId !== sourceTaskId ||
+		progress.destinationTaskId !== taskId ||
+		typeof progress.complete !== "boolean" ||
+		!Number.isSafeInteger(progress.cursor) ||
+		Number(progress.cursor) < 0
+	)
+		throw new Failure(
+			"IDENTITY_MISMATCH",
+			"Reuse state belongs to another task pair or has an invalid cursor.",
+		);
+	const clientReuseKey = string(progress.clientReuseKey, "clientReuseKey");
+	await save(checkpointPath, progress);
+	const pages = [];
+	for (
+		let pageIndex = 0;
+		pageIndex < maxPages && !progress.complete;
+		pageIndex++
+	) {
+		const position = Number(progress.cursor);
+		const receipt = record(
+			await api("POST", `/translation-tasks/${taskId}/reuse`, undefined, {
+				sourceTaskId,
+				clientReuseKey,
+				cursor: position,
+			}),
+			"Reuse receipt",
+		);
+		const items = array(receipt.items, "Reuse items").map((item) =>
+			record(item, "Reuse item"),
+		);
+		if (
+			receipt.sourceTaskId !== sourceTaskId ||
+			receipt.destinationTaskId !== taskId ||
+			receipt.clientReuseKey !== clientReuseKey ||
+			items.length > PAGE_SIZE ||
+			new Set(items.map((item) => string(item.messageId, "messageId"))).size !==
+				items.length ||
+			!(
+				receipt.nextCursor === null ||
+				(Number.isSafeInteger(receipt.nextCursor) &&
+					Number(receipt.nextCursor) > position)
+			)
+		)
+			throw new Failure(
+				"INVALID_RESPONSE",
+				"Invalid reuse receipt or continuation.",
+			);
+		const revisions = [];
+		for (const item of items) {
+			if (
+				![
+					"copied",
+					"alreadyCopied",
+					"unreviewed",
+					"sourceChanged",
+					"incompatibleSource",
+					"outsideDestination",
+					"occupiedDestination",
+					"invalidDestination",
+				].includes(string(item.status, "reuse status"))
+			)
+				throw new Failure("INVALID_RESPONSE", "Unknown reuse result.");
+			if (["copied", "alreadyCopied"].includes(String(item.status)))
+				revisions.push({ revisionId: id(item.revisionId, "revisionId") });
+		}
+		const receiptPath = join(directory, `reuse-page-${position}.json`);
+		const handoffPath = join(directory, `reuse-handoff-${position}.json`);
+		await save(receiptPath, receipt);
+		await save(handoffPath, { revisions });
+		progress.cursor = receipt.nextCursor ?? position;
+		progress.complete = receipt.nextCursor === null;
+		await save(checkpointPath, progress);
+		pages.push({ receipt: receiptPath, reviewHandoff: handoffPath, items });
+	}
+	return {
+		taskId,
+		sourceTaskId,
+		clientReuseKey,
+		pages,
+		complete: progress.complete,
+		next: progress.complete
+			? "Independently review copied revisions; task status observes coverage."
+			: "Repeat task reuse with the same state and source to continue.",
+	};
+}
+
 const help = `Blabla resumable workflow (Node.js 22+)
 node blabla-workflow.mjs task read|submit|status TASK_ID --state DIRECTORY [--profile NAME]
+node blabla-workflow.mjs task reuse DESTINATION_TASK_ID --source SOURCE_TASK_ID --state DIRECTORY [--profile NAME]
 node blabla-workflow.mjs review read|submit --state DIRECTORY --body FILE [--profile NAME]
 
 task read returns at most 16 targets with live guidance; submit takes the ordinary
 {items:[{messageId,candidate:{kind:"value",value:"..."}}]} body (--body FILE).
 The cursor advances only when the page has candidates; repeated reads preserve work.
 Submissions use the server's ICU and character-limit validation and save review handoffs.
+task reuse copies exact reviewed authorship as fresh pending candidates, saves receipts
+and review handoffs, and scans 4 source pages per call. Use separate reuse state.
 task status scans 4 pages per call (--max-pages 1..32), checkpoints, and resumes.
 Use --restart to start a fresh status scan after edits/reviews; old observations are dated.
 review read takes {revisions:[{revisionId:"..."}]} (max 16) and writes authoritative
@@ -934,19 +1040,26 @@ export async function main(argv) {
 	const [role, command, ...rest] = argv;
 	if (
 		!(
-			(role === "task" && ["read", "submit", "status"].includes(command)) ||
+			(role === "task" &&
+				["read", "submit", "status", "reuse"].includes(command)) ||
 			(role === "review" && ["read", "submit"].includes(command))
 		)
 	)
 		throw new Failure("USAGE", help);
 	const taskId = role === "task" ? id(rest.shift(), "taskId") : null;
+	const stateRole = command === "reuse" ? "reuse" : role;
 	const flags = new Map(/** @type {[string, string][]} */ ([]));
 	for (let index = 0; index < rest.length; index++) {
 		const flag = rest[index];
 		if (
-			!["--state", "--profile", "--body", "--max-pages", "--restart"].includes(
-				flag,
-			) ||
+			![
+				"--state",
+				"--profile",
+				"--body",
+				"--max-pages",
+				"--restart",
+				"--source",
+			].includes(flag) ||
 			flags.has(flag)
 		)
 			throw new Failure(
@@ -957,14 +1070,25 @@ export async function main(argv) {
 		else flags.set(flag, string(rest[++index], flag));
 	}
 	if (
-		(flags.has("--max-pages") && !(role === "task" && command === "status")) ||
+		(flags.has("--max-pages") &&
+			!(role === "task" && ["status", "reuse"].includes(command))) ||
 		(flags.has("--restart") &&
 			!(role === "task" && ["read", "status"].includes(command)))
 	)
 		throw new Failure(
 			"INVALID_ARGUMENT",
-			"--max-pages is for task status; --restart is for task read or status.",
+			"--max-pages is for task status or reuse; --restart is for task read or status.",
 		);
+	if (
+		flags.has("--source") !== (command === "reuse") ||
+		(command === "reuse" && flags.has("--body"))
+	)
+		throw new Failure(
+			"INVALID_ARGUMENT",
+			"task reuse requires --source and does not take --body.",
+		);
+	const sourceTaskId =
+		command === "reuse" ? id(flags.get("--source"), "--source taskId") : null;
 	const directory = resolve(string(flags.get("--state"), "--state directory"));
 	const auth = await resolveConnection(process.env, flags.get("--profile"));
 	const api = client(auth);
@@ -978,7 +1102,7 @@ export async function main(argv) {
 				!object(binding) ||
 				binding.version !== 1 ||
 				binding.credential !== fingerprint ||
-				binding.role !== role ||
+				binding.role !== stateRole ||
 				binding.taskId !== taskId
 			)
 				throw new Failure(
@@ -1006,7 +1130,7 @@ export async function main(argv) {
 				credential: fingerprint,
 				origin: auth.origin.origin,
 				projectId: project.projectId,
-				role,
+				role: stateRole,
 				taskId,
 			});
 		}
@@ -1020,17 +1144,25 @@ export async function main(argv) {
 					: await reviewSubmit(api, directory, body)
 				: taskId === null
 					? null
-					: command === "read"
-						? await taskRead(api, taskId, directory, flags.has("--restart"))
-						: command === "submit"
-							? await taskSubmit(api, taskId, directory, body)
-							: await taskStatus(
-									api,
-									taskId,
-									directory,
-									boundedNumber(flags.get("--max-pages"), 4, 32),
-									flags.has("--restart"),
-								);
+					: command === "reuse" && sourceTaskId !== null
+						? await taskReuse(
+								api,
+								taskId,
+								sourceTaskId,
+								directory,
+								boundedNumber(flags.get("--max-pages"), 4, 32),
+							)
+						: command === "read"
+							? await taskRead(api, taskId, directory, flags.has("--restart"))
+							: command === "submit"
+								? await taskSubmit(api, taskId, directory, body)
+								: await taskStatus(
+										api,
+										taskId,
+										directory,
+										boundedNumber(flags.get("--max-pages"), 4, 32),
+										flags.has("--restart"),
+									);
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 		if (
 			result &&

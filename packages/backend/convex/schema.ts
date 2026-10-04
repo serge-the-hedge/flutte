@@ -8,6 +8,7 @@ import { managedBasisValidator } from "./contentModel";
 import { tokenScopeValidator } from "./lib";
 import { releaseAssessmentFields } from "./releaseRecordModel";
 import { syncSummaryValidator } from "./syncSummary";
+import { reusedCandidateOrigin, reusePage } from "./taskReuseModel";
 import {
 	guidanceAuthorshipFields,
 	guidanceContentValidator,
@@ -350,6 +351,11 @@ export default defineSchema({
 		archivedAt: v.optional(v.number()),
 	})
 		.index("by_message", ["collectionId", "messageId"])
+		.index("by_collectionId_and_messageId_and_sourceRevision", [
+			"collectionId",
+			"messageId",
+			"sourceRevision",
+		])
 		.index("by_collection", ["collectionId"]),
 	managedTargets: defineTable({
 		projectId: v.id("projects"),
@@ -2210,6 +2216,20 @@ export default defineSchema({
 			"localeProposalId",
 		]),
 
+	translationTaskReusePages: defineTable({
+		projectId: v.id("projects"),
+		createdByTokenId: v.id("apiTokens"),
+		clientReuseKey: v.string(),
+		cursor: v.number(),
+		result: reusePage,
+		createdAt: v.number(),
+	}).index("by_projectId_and_createdByTokenId_and_clientReuseKey_and_cursor", [
+		"projectId",
+		"createdByTokenId",
+		"clientReuseKey",
+		"cursor",
+	]),
+
 	agentTranslationCandidateRevisions: defineTable({
 		projectId: v.id("projects"),
 		proposalId: v.id("agentTranslationProposals"),
@@ -2220,6 +2240,7 @@ export default defineSchema({
 		revision: v.number(),
 		clientRevisionKey: v.string(),
 		value: v.string(),
+		reusedFrom: v.optional(reusedCandidateOrigin),
 		// An agent may propose an Intentional Blank and explain why, but only a
 		// human or authorized independent review can apply it to either task adapter.
 		intentionalBlankReason: v.optional(v.string()),
