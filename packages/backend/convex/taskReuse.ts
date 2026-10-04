@@ -1,4 +1,4 @@
-import { ConvexError, type Infer, v } from "convex/values";
+import { ConvexError, getConvexSize, type Infer, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -23,7 +23,7 @@ import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget } from "./catalogWorkspaceRead";
 import { completeSourceContractsMatch } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
-import { type reuseOutcome, reusePage } from "./taskReuseModel";
+import { reuseOutcome, reusePage } from "./taskReuseModel";
 
 const address = {
 	token: v.string(),
@@ -38,12 +38,54 @@ type ReadCtx = QueryCtx | MutationCtx;
 type Task = Doc<"agentTranslationProposals">;
 type Outcome = Infer<typeof reuseOutcome>;
 
-// One item can reread 256 KiB origin/source values through ordinary submission,
-// a 512 KiB edited review, and workspace overlays. Reserve half the 16 MiB read
-// budget (well above those repeated payloads) plus write/receipt headroom before
-// starting another item. Small values still share a full 16-item transaction.
+// Stop normal pages with room for another item. The full item also runs under
+// an actual remaining-budget cap, including its first attempt and nested writes.
+// Two MiB of read headroom covers a maximum 1 MiB document overshoot plus the
+// receipt; supporting metadata is not assumed to be small.
 const NEXT_ITEM_READ_RESERVE = 8 * 1024 * 1024;
 const NEXT_ITEM_WRITE_RESERVE = 1024 * 1024;
+const MEMBERSHIP_READ_BYTES = 1024 * 1024;
+const ITEM_READ_HEADROOM = 2 * 1024 * 1024;
+// Keep the receipt comfortably below the 1 MiB document and write reserves.
+const RECEIPT_ITEM_BYTES = 512 * 1024;
+
+function capacityFailure(): never {
+	fail(
+		"LIMIT_EXCEEDED",
+		"Task reuse cannot fit one complete item with receipt headroom. Shorten unusually large project, token, task, Locale or collection metadata, or submit this item through the ordinary candidate workflow. No empty receipt was recorded.",
+	);
+}
+
+async function requirePlanningHeadroom(ctx: ReadCtx, bytes: number) {
+	if ((await ctx.meta.getTransactionMetrics()).bytesRead.remaining < bytes)
+		capacityFailure();
+}
+
+/** Stream actual stored rows: repository task rows retain both Source and
+ * target text. At most 1 MiB plus one maximum-size lookahead row is read. */
+async function boundedMembership(
+	ctx: ReadCtx,
+	query: AsyncIterable<{ messageId: string; catalogIndex: number }>,
+) {
+	const initial = (await ctx.meta.getTransactionMetrics()).bytesRead.used;
+	const messages: string[] = [];
+	const catalogIndices: number[] = [];
+	let nextCursor: number | null = null;
+	for await (const row of query) {
+		const used =
+			(await ctx.meta.getTransactionMetrics()).bytesRead.used - initial;
+		if (
+			messages.length === 16 ||
+			(messages.length > 0 && used > MEMBERSHIP_READ_BYTES)
+		) {
+			nextCursor = row.catalogIndex;
+			break;
+		}
+		messages.push(row.messageId);
+		catalogIndices.push(row.catalogIndex);
+	}
+	return { messages, catalogIndices, nextCursor };
+}
 
 function fail(code: string, message: string): never {
 	throw new ConvexError({ code, message });
@@ -193,17 +235,12 @@ async function sourceFile(
 
 async function frozenSourcePage(ctx: ReadCtx, source: Task, cursor: number) {
 	if (source.taskScope) {
-		const rows = await ctx.db
+		const rows = ctx.db
 			.query("translationTaskTargets")
 			.withIndex("by_proposal_and_catalogIndex", (q) =>
 				q.eq("proposalId", source._id).gte("catalogIndex", cursor),
-			)
-			.take(17);
-		return {
-			messages: rows.slice(0, 16).map((row) => row.messageId),
-			catalogIndices: rows.slice(0, 16).map((row) => row.catalogIndex),
-			nextCursor: rows[16]?.catalogIndex ?? null,
-		};
+			);
+		return await boundedMembership(ctx, rows);
 	}
 	if (source.target.kind !== "localeProposal")
 		fail("INTEGRITY", "Source task lost its scope.");
@@ -220,20 +257,15 @@ async function frozenSourcePage(ctx: ReadCtx, source: Task, cursor: number) {
 		.first();
 	if (!publication)
 		fail("INTEGRITY", "Source task lost its frozen projection.");
-	const rows = await ctx.db
+	const rows = ctx.db
 		.query("catalogProjectionMessages")
 		.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
 			q
 				.eq("projectionId", publication.projectionId)
 				.eq("isSource", true)
 				.gte("catalogIndex", cursor),
-		)
-		.take(17);
-	return {
-		messages: rows.slice(0, 16).map((row) => row.messageId),
-		catalogIndices: rows.slice(0, 16).map((row) => row.catalogIndex),
-		nextCursor: rows[16]?.catalogIndex ?? null,
-	};
+		);
+	return await boundedMembership(ctx, rows);
 }
 
 /** Managed metadata is mutable. Compare the captured source revision with the
@@ -286,6 +318,18 @@ export const plan = internalQuery({
 		if (destination.status !== "open")
 			fail("BAD_STATE", "The destination task is closed.");
 		const page = await frozenSourcePage(ctx, source, args.cursor);
+		if (page.messages.length === 0)
+			return {
+				kind: "plan" as const,
+				items: [],
+				nextCursor: null,
+				destinationSnapshotId: null,
+				destinationStorageId: null,
+			};
+		// Projection + legacy Source file references require at most five maximum-size
+		// documents. Each origin head/revision + legacy file path requires at most five.
+		// The larger guards leave headroom even when these metadata records are huge.
+		await requirePlanningHeadroom(ctx, 7 * 1024 * 1024);
 		const projection =
 			source.target.kind === "managedCollection"
 				? null
@@ -295,7 +339,16 @@ export const plan = internalQuery({
 			? await sourceFile(ctx, source.projectId, destinationSnapshotId)
 			: null;
 		const items = [];
-		for (const messageId of page.messages) {
+		let nextCursor = page.nextCursor;
+		for (const [index, messageId] of page.messages.entries()) {
+			if (
+				(await ctx.meta.getTransactionMetrics()).bytesRead.remaining <
+				6 * 1024 * 1024
+			) {
+				if (items.length === 0) capacityFailure();
+				nextCursor = page.catalogIndices[index] ?? null;
+				break;
+			}
 			const candidate = await candidateFor(ctx, source, messageId);
 			const revision = candidate?.latestRevisionId
 				? await ctx.db.get(candidate.latestRevisionId)
@@ -312,7 +365,7 @@ export const plan = internalQuery({
 		return {
 			kind: "plan" as const,
 			items,
-			nextCursor: page.nextCursor,
+			nextCursor,
 			destinationSnapshotId: destinationSnapshotId ?? null,
 			destinationStorageId,
 		};
@@ -353,41 +406,25 @@ export const writeCandidate = internalMutation({
 	},
 });
 
-/** The consumed prefix and its receipt commit atomically. Immutable document
- * comparison happens in the action; the transaction rechecks every mutable fact. */
-export const commitPage = internalMutation({
+/** All eligibility reads and nested ordinary writes share this subtransaction
+ * cap. A failed capacity attempt cannot leave a candidate behind. Outer access
+ * and membership checks authorize these task IDs in the same transaction. */
+export const processItem = internalMutation({
 	args: {
-		...address,
+		token: v.string(),
+		sourceTaskId: v.id("agentTranslationProposals"),
+		destinationTaskId: v.id("agentTranslationProposals"),
 		destinationSnapshotId: v.union(v.id("sourceSnapshots"), v.null()),
-		checked: v.array(checkedContract),
+		checked: checkedContract,
+		receiptBytes: v.number(),
 	},
-	returns: reusePage,
-	handler: async (ctx, args): Promise<Infer<typeof reusePage>> => {
-		const { source, destination, token, receipt } = await access(ctx, args);
-		if (receipt) return receipt.result;
-		if (destination.status !== "open")
-			fail("BAD_STATE", "The destination task is closed.");
-		const page = await frozenSourcePage(ctx, source, args.cursor);
-		if (
-			page.messages.length > 16 ||
-			JSON.stringify(page.messages) !==
-				JSON.stringify(args.checked.map((item) => item.messageId))
-		)
-			fail("CONFLICT", "Source scope changed while preparing reuse.");
-		const items: Outcome[] = [];
-		let nextCursor = page.nextCursor;
-		for (const [index, checked] of args.checked.entries()) {
-			const metrics = await ctx.meta.getTransactionMetrics();
-			if (
-				index > 0 &&
-				(metrics.bytesRead.remaining < NEXT_ITEM_READ_RESERVE ||
-					metrics.bytesWritten.remaining < NEXT_ITEM_WRITE_RESERVE)
-			) {
-				// Membership was checked for the entire prepared page. Commit only
-				// its consumed prefix and resume at this exact frozen catalog index.
-				nextCursor = page.catalogIndices[index] ?? null;
-				break;
-			}
+	returns: reuseOutcome,
+	handler: async (ctx, args): Promise<Outcome> => {
+		const execute = async (): Promise<Outcome> => {
+			const source = await ctx.db.get(args.sourceTaskId);
+			const destination = await ctx.db.get(args.destinationTaskId);
+			if (!source || !destination) fail("INTEGRITY", "Reuse task disappeared.");
+			const checked = args.checked;
 			const messageId = checked.messageId;
 			const sourceCandidate = await candidateFor(ctx, source, messageId);
 			const origin = sourceCandidate?.latestRevisionId
@@ -400,12 +437,10 @@ export const commitPage = internalMutation({
 				...(reason ? { reason } : {}),
 			});
 			if (origin?._id !== (checked.originRevisionId ?? undefined)) {
-				items.push(out("sourceChanged"));
-				continue;
+				return out("sourceChanged");
 			}
 			if (!origin) {
-				items.push(out("unreviewed"));
-				continue;
+				return out("unreviewed");
 			}
 			const review = await latestCandidateReview(ctx, origin._id);
 			// Exact candidate authorship only: edited review output is separate evidence.
@@ -422,8 +457,7 @@ export const commitPage = internalMutation({
 					review.decision.kind === "intentionalBlank" &&
 					review.decision.reason !== origin.intentionalBlankReason)
 			) {
-				items.push(out("unreviewed"));
-				continue;
+				return out("unreviewed");
 			}
 			const existing = await candidateFor(ctx, destination, messageId);
 			if (existing) {
@@ -431,15 +465,13 @@ export const commitPage = internalMutation({
 					? await ctx.db.get(existing.latestRevisionId)
 					: null;
 				const sameOrigin = revision?.reusedFrom?.revisionId === origin._id;
-				items.push({
+				return {
 					...out(sameOrigin ? "alreadyCopied" : "occupiedDestination"),
 					...(sameOrigin && revision ? { revisionId: revision._id } : {}),
-				});
-				continue;
+				};
 			}
 			if (origin.basis.kind !== "managed" && !checked.compatible) {
-				items.push(out("incompatibleSource"));
-				continue;
+				return out("incompatibleSource");
 			}
 			if (destination.taskScope) {
 				const target = await ctx.db
@@ -449,8 +481,7 @@ export const commitPage = internalMutation({
 					)
 					.unique();
 				if (!target) {
-					items.push(out("outsideDestination"));
-					continue;
+					return out("outsideDestination");
 				}
 			}
 			try {
@@ -477,8 +508,7 @@ export const commitPage = internalMutation({
 					(basis.kind !== "managed" &&
 						basis.snapshotId !== args.destinationSnapshotId)
 				) {
-					items.push(out("incompatibleSource"));
-					continue;
+					return out("incompatibleSource");
 				}
 				if (
 					basis.kind === "managed" &&
@@ -490,8 +520,7 @@ export const commitPage = internalMutation({
 							current.source,
 						)))
 				) {
-					items.push(out("incompatibleSource"));
-					continue;
+					return out("incompatibleSource");
 				}
 				let occupied = false;
 				if (destination.target.kind === "localeProposal") {
@@ -536,8 +565,7 @@ export const commitPage = internalMutation({
 						decision?.kind === "intentionalBlank";
 				}
 				if (occupied) {
-					items.push(out("occupiedDestination"));
-					continue;
+					return out("occupiedDestination");
 				}
 				const result = await ctx.runMutation(
 					internal.taskReuse.writeCandidate,
@@ -561,10 +589,10 @@ export const commitPage = internalMutation({
 						},
 					},
 				);
-				items.push({
+				return {
 					...out("copied"),
 					revisionId: result.revisions[0]?.revisionId,
-				});
+				};
 			} catch (error) {
 				if (
 					!(error instanceof ConvexError) ||
@@ -580,14 +608,102 @@ export const commitPage = internalMutation({
 					].includes(String(error.data.code))
 				)
 					throw error;
-				items.push(
-					out(
-						"invalidDestination",
-						"message" in error.data
-							? String(error.data.message)
-							: String(error.data.code),
-					),
+				return out(
+					"invalidDestination",
+					"message" in error.data
+						? String(error.data.message)
+						: String(error.data.code),
 				);
+			}
+		};
+		const result = await execute();
+		if (getConvexSize(result) > args.receiptBytes) capacityFailure();
+		return result;
+	},
+});
+
+/** The consumed prefix and its receipt commit atomically. Immutable document
+ * comparison happens in the action; the transaction rechecks every mutable fact. */
+export const commitPage = internalMutation({
+	args: {
+		...address,
+		destinationSnapshotId: v.union(v.id("sourceSnapshots"), v.null()),
+		checked: v.array(checkedContract),
+	},
+	returns: reusePage,
+	handler: async (ctx, args): Promise<Infer<typeof reusePage>> => {
+		const { source, destination, token, receipt } = await access(ctx, args);
+		if (receipt) return receipt.result;
+		if (destination.status !== "open")
+			fail("BAD_STATE", "The destination task is closed.");
+		const page = await frozenSourcePage(ctx, source, args.cursor);
+		if (
+			page.messages.length > 16 ||
+			args.checked.length > page.messages.length ||
+			(args.checked.length === 0 && page.messages.length > 0) ||
+			JSON.stringify(page.messages.slice(0, args.checked.length)) !==
+				JSON.stringify(args.checked.map((item) => item.messageId))
+		)
+			fail("CONFLICT", "Source scope changed while preparing reuse.");
+		const items: Outcome[] = [];
+		let nextCursor =
+			page.catalogIndices[args.checked.length] ?? page.nextCursor;
+		for (const [index, checked] of args.checked.entries()) {
+			const metrics = await ctx.meta.getTransactionMetrics();
+			if (
+				index > 0 &&
+				(metrics.bytesRead.remaining < NEXT_ITEM_READ_RESERVE ||
+					metrics.bytesWritten.remaining < NEXT_ITEM_WRITE_RESERVE)
+			) {
+				// Membership was checked for the entire prepared page. Commit only
+				// its consumed prefix and resume at this exact frozen catalog index.
+				nextCursor = page.catalogIndices[index] ?? null;
+				break;
+			}
+
+			const bytesRead = metrics.bytesRead.remaining - ITEM_READ_HEADROOM;
+			const bytesWritten =
+				metrics.bytesWritten.remaining - NEXT_ITEM_WRITE_RESERVE;
+			if (bytesRead <= 0 || bytesWritten <= 0) {
+				if (items.length === 0) capacityFailure();
+				nextCursor = page.catalogIndices[index] ?? null;
+				break;
+			}
+			try {
+				const outcome: Outcome = await ctx.runMutation(
+					internal.taskReuse.processItem,
+					{
+						token: args.token,
+						sourceTaskId: source._id,
+						destinationTaskId: destination._id,
+						destinationSnapshotId: args.destinationSnapshotId,
+						checked,
+						receiptBytes: RECEIPT_ITEM_BYTES - getConvexSize(items),
+					},
+					{ transactionLimits: { bytesRead, bytesWritten } },
+				);
+				items.push(outcome);
+			} catch (error) {
+				const after = await ctx.meta.getTransactionMetrics();
+				const hitReadCap =
+					after.bytesRead.used - metrics.bytesRead.used >= bytesRead ||
+					(error instanceof Error &&
+						error.message.includes("Read too much data"));
+				const hitWriteCap =
+					error instanceof Error &&
+					error.message.includes("Wrote too much data");
+				const oversizedReceipt =
+					error instanceof ConvexError &&
+					typeof error.data === "object" &&
+					error.data !== null &&
+					"message" in error.data &&
+					String(error.data.message).startsWith(
+						"Task reuse cannot fit one complete item",
+					);
+				if (!hitReadCap && !hitWriteCap && !oversizedReceipt) throw error;
+				if (items.length === 0) capacityFailure();
+				nextCursor = page.catalogIndices[index] ?? null;
+				break;
 			}
 		}
 		const result = {

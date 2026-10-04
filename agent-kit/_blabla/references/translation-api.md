@@ -142,6 +142,17 @@ retry the exact request after an unknown response. A completed page’s outcomes
 stay fixed even if later review or source changes occur. A new explicit pass needs
 a new key; existing destination work remains protected.
 
+Frozen membership reads are byte bounded, including captured Source and target
+text. Each complete item, its supporting records and its receipt must fit one
+transaction. Extremely large project, token, task, Locale or collection metadata
+can exceed this reuse envelope even when other APIs accept those records. A page
+also bounds its outcome payload to 512 KiB. If even the first item cannot fit, the server
+returns actionable `LIMIT_EXCEEDED` without a candidate or empty receipt for that
+item; an earlier successful prefix keeps its receipt and continuation. Reduce the
+unusually large metadata or use ordinary candidate submission, then resume the
+same request and state directory. Retrying unchanged or choosing a new reuse key
+does not increase capacity.
+
 `status` is `copied`, `alreadyCopied`, `unreviewed`, `sourceChanged`,
 `incompatibleSource`, `outsideDestination`, `occupiedDestination`, or
 `invalidDestination`; validation failures include a reason. Successful items

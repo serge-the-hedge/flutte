@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
 	authenticatedBackend,
 	createBackend,
@@ -1127,3 +1127,348 @@ test.each([
 		expect(stored.receipts).toEqual(receipts);
 	},
 );
+
+test("bounds heavy frozen repository membership and copies the first item with large project metadata", async () => {
+	const t = createBackend({ transactionLimits: true });
+	const owner = await authenticatedBackend(
+		t,
+		"repository-reuse-capacity",
+		60 * 60_000,
+	);
+	const projectId = await createProject(owner);
+	const en = required(
+		(await owner.query(api.locales.list, { projectId }))[0],
+	)._id;
+	const fr = await owner.mutation(api.locales.create, {
+		projectId,
+		code: "fr",
+	});
+	const de = await owner.mutation(api.locales.create, {
+		projectId,
+		code: "de",
+	});
+	for (const [localeId, code] of [
+		[en, "en"],
+		[fr, "fr"],
+		[de, "de"],
+	] as const)
+		await owner.action(api.locales.bind, {
+			localeId,
+			catalogPath: `${code}.arb`,
+		});
+	const messageIds = Array.from({ length: 17 }, (_, i) => `k${i}`);
+	const sourceValue = "s".repeat(240 * 1024);
+	const frozenTargetValue = "x".repeat(255 * 1024);
+	const candidateValue = "v".repeat(256 * 1024);
+	const files = (targetValue: string) =>
+		["en", "fr", "de"].map((code) => ({
+			catalogPath: `${code}.arb`,
+			content: JSON.stringify({
+				"@@locale": code,
+				...Object.fromEntries(
+					messageIds.map((id) => [
+						id,
+						code === "en" ? sourceValue : targetValue,
+					]),
+				),
+			}),
+		}));
+	expect(required(files("initial")[0]).content.length).toBeLessThan(
+		4 * 1024 * 1024,
+	);
+	await owner.action(api.snapshots.ingest, {
+		projectId,
+		repository: "repo",
+		commit: "baseline",
+		files: files("initial"),
+	});
+	const navigation = await owner.query(
+		api.catalogWorkspaceNavigation.navigation,
+		{ projectId },
+	);
+	if (navigation.kind !== "ready") throw Error("Expected projection");
+	for (const messageId of messageIds) {
+		const [card] = await owner.query(api.catalogWorkspaceNavigation.window, {
+			projectId,
+			expectedProjectionId: navigation.projectionId,
+			messageIds: [messageId],
+		});
+		for (const localeId of [fr, de]) {
+			const target = required(
+				required(card).values.find((value) => value.localeId === localeId),
+			);
+			await owner.mutation(api.catalogWorkspace.commit, {
+				projectId,
+				messageId,
+				localeId,
+				intent: { kind: "save", value: frozenTargetValue },
+				expectedGitValueFingerprint: required(target.gitValueFingerprint),
+				expectedGitValueRevision: required(target.gitValueRevision),
+				expectedWorkspaceRevision: target.workspaceRevision,
+				expectedSourceFingerprint: required(target.expectedSourceFingerprint),
+			});
+		}
+	}
+	const task = (localeId: Id<"locales">) =>
+		owner.mutation(api.agentTranslationProposals.createTask, {
+			projectId,
+			title: "Heavy frozen repository",
+			target: { kind: "existingLocale", localeId },
+			scope: { kind: "selectedMessages", messageIds },
+		});
+	const from = await task(fr);
+	const to = await task(de);
+	const frozenBytes = await t.run(async (ctx) => {
+		const rows = await ctx.db
+			.query("translationTaskTargets")
+			.withIndex("by_proposal_and_catalogIndex", (q) =>
+				q.eq("proposalId", from.taskId),
+			)
+			.take(18);
+		return rows.reduce(
+			(sum, row) =>
+				sum + (row.sourceValue?.length ?? 0) + (row.targetValue?.length ?? 0),
+			0,
+		);
+	});
+	expect(frozenBytes).toBeGreaterThan(8 * 1024 * 1024);
+	await owner.action(api.snapshots.ingest, {
+		projectId,
+		repository: "repo",
+		commit: "next",
+		files: files(""),
+		lineage: {
+			baselineCommit: "baseline",
+			relationship: "descendant",
+			mergeBase: "baseline",
+		},
+	});
+	const token = await owner.mutation(api.apiTokens.create, {
+		projectId,
+		name: "Capacity author",
+		scopes: ["read", "propose"],
+	});
+	for (const messageId of messageIds) {
+		const [context] = await t.query(
+			internal.agentTranslationProposals.taskSubmissionContext,
+			{
+				token: token.token,
+				taskId: from.taskId,
+				messageIds: [messageId],
+			},
+		);
+		const submitted = await t.mutation(
+			internal.agentTranslationProposals.submitRevisions,
+			{
+				token: token.token,
+				proposalId: from.taskId,
+				items: [
+					{
+						messageId,
+						localeId: fr,
+						value: candidateValue,
+						clientRevisionKey: messageId,
+						expectedCandidateRevision: 0,
+						basis: required(context).basis,
+					},
+				],
+			},
+		);
+		await owner.mutation(api.agentTranslationProposals.reviewCandidate, {
+			candidateRevisionId: required(submitted.revisions[0]).revisionId,
+			decision: { kind: "acceptWithEdits", value: candidateValue },
+		});
+	}
+	await owner.mutation(api.projects.update, {
+		projectId,
+		name: "p".repeat(800 * 1024),
+	});
+	const args = {
+		token: token.token,
+		sourceTaskId: from.taskId,
+		destinationTaskId: to.taskId,
+		clientReuseKey: "repository-capacity",
+		cursor: 0,
+	};
+	const prepared = await t.query(internal.taskReuse.plan, args);
+	if (prepared.kind !== "plan") throw Error("Expected plan");
+	expect(prepared.items.length).toBeGreaterThan(0);
+	expect(prepared.items.length).toBeLessThan(16);
+	const commitArgs = {
+		...args,
+		destinationSnapshotId: prepared.destinationSnapshotId,
+		checked: prepared.items.map((item) => ({
+			messageId: item.messageId,
+			originRevisionId: required(item.revision)._id,
+			compatible: true,
+		})),
+	};
+	// Public token names also have no app byte cap. Combined oversized supporting
+	// records can exceed even a one-item budget: reject explicitly, then prove that
+	// the same content remains reusable with ordinary-size credential metadata.
+	const heavyToken = await owner.mutation(api.apiTokens.create, {
+		projectId,
+		name: "t".repeat(900 * 1024),
+		scopes: ["read", "propose"],
+	});
+	const refused = await t.run(async (ctx) => {
+		try {
+			await ctx.runMutation(internal.taskReuse.commitPage, {
+				...commitArgs,
+				token: heavyToken.token,
+			});
+			return {
+				message: "unexpected success",
+				metrics: await ctx.meta.getTransactionMetrics(),
+			};
+		} catch (error) {
+			return {
+				message: error instanceof Error ? error.message : String(error),
+				metrics: await ctx.meta.getTransactionMetrics(),
+			};
+		}
+	});
+	expect(refused.message).toContain("Task reuse cannot fit one complete item");
+	expect(refused.metrics.bytesRead.used).toBeLessThan(16 * 1024 * 1024);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const refusedHttp = await t.fetch(
+			`/api/agent/v1/translation-tasks/${to.taskId}/reuse`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${heavyToken.token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					sourceTaskId: from.taskId,
+					clientReuseKey: args.clientReuseKey,
+					cursor: 0,
+				}),
+			},
+		);
+		expect(refusedHttp.status).toBe(413);
+		expect(await refusedHttp.json()).toMatchObject({
+			code: "LIMIT_EXCEEDED",
+			error: expect.stringContaining("Task reuse cannot fit one complete item"),
+		});
+	}
+
+	// A deliberately tighter parent budget must refuse before the first write,
+	// without a misleading skip, an empty receipt or an unrecoverable checkpoint.
+	await expect(
+		t.run((ctx) =>
+			ctx.runMutation(internal.taskReuse.commitPage, commitArgs, {
+				transactionLimits: { bytesRead: 4 * 1024 * 1024 },
+			}),
+		),
+	).rejects.toThrow("Task reuse cannot fit one complete item");
+	const counts = () =>
+		t.run(async (ctx) => ({
+			candidates: (
+				await ctx.db
+					.query("agentTranslationCandidates")
+					.withIndex("by_proposal", (q) => q.eq("proposalId", to.taskId))
+					.take(18)
+			).length,
+			receipts: (
+				await ctx.db
+					.query("translationTaskReusePages")
+					.withIndex(
+						"by_projectId_and_createdByTokenId_and_clientReuseKey_and_cursor",
+						(q) => q.eq("projectId", projectId),
+					)
+					.take(18)
+			).length,
+		}));
+	expect(await counts()).toEqual({ candidates: 0, receipts: 0 });
+
+	// Measure the actual registered mutation, including outer setup, nested
+	// eligibility/ordinary submission and receipt persistence. Roll back only the
+	// test wrapper afterward so the first real POST still performs a fresh commit.
+	let firstReadBytes = 0;
+	let firstWriteBytes = 0;
+	let firstMessageIds: string[] = [];
+	let firstNextCursor: number | null = null;
+	await expect(
+		t.run(async (ctx) => {
+			const receipt = await ctx.runMutation(
+				internal.taskReuse.commitPage,
+				commitArgs,
+			);
+			expect(receipt.items.every((item) => item.status === "copied")).toBe(
+				true,
+			);
+			const metrics = await ctx.meta.getTransactionMetrics();
+			firstReadBytes = metrics.bytesRead.used;
+			firstWriteBytes = metrics.bytesWritten.used;
+			firstMessageIds = receipt.items.map((item) => item.messageId);
+			firstNextCursor = receipt.nextCursor;
+			throw Error("rollback measured capacity transaction");
+		}),
+	).rejects.toThrow("rollback measured capacity transaction");
+
+	expect(firstMessageIds.length).toBeGreaterThan(0);
+	expect(firstReadBytes).toBeLessThan(16 * 1024 * 1024);
+	expect(firstWriteBytes).toBeLessThan(16 * 1024 * 1024);
+	expect(await counts()).toEqual({ candidates: 0, receipts: 0 });
+
+	let clock = Date.now();
+	const time = vi.spyOn(Date, "now").mockImplementation(() => clock);
+	const reuse = (cursor: number) => {
+		clock += 3_000; // Pace synthetic POSTs through the real HTTP rate limiter.
+		return t.fetch(`/api/agent/v1/translation-tasks/${to.taskId}/reuse`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token.token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				sourceTaskId: from.taskId,
+				clientReuseKey: args.clientReuseKey,
+				cursor,
+			}),
+		});
+	};
+	try {
+		const visited: string[] = [];
+		const revisions = new Set<string>();
+		let cursor: number | null = 0;
+		let pages = 0;
+		while (cursor !== null) {
+			const response = await reuse(cursor);
+			expect(response.status, await response.clone().text()).toBe(200);
+			const receipt: {
+				items: Array<{ messageId: string; status: string; revisionId: string }>;
+				nextCursor: number | null;
+			} = await response.json();
+			if (cursor === 0) {
+				expect(receipt.items.map((item) => item.messageId)).toEqual(
+					firstMessageIds,
+				);
+				expect(receipt.nextCursor).toBe(firstNextCursor);
+			}
+			expect(receipt.items.length).toBeGreaterThan(0);
+			expect(receipt.items.every((item) => item.status === "copied")).toBe(
+				true,
+			);
+			expect(receipt.items.map((item) => item.messageId)).toEqual(
+				messageIds.slice(visited.length, visited.length + receipt.items.length),
+			);
+			visited.push(...receipt.items.map((item) => item.messageId));
+			for (const item of receipt.items) revisions.add(item.revisionId);
+			const replay = await reuse(cursor);
+			expect(replay.status, await replay.clone().text()).toBe(200);
+			expect(await replay.json()).toEqual(receipt);
+			expect(receipt.nextCursor).toBe(
+				visited.length === 17 ? null : visited.length,
+			);
+			cursor = receipt.nextCursor;
+			pages++;
+		}
+		expect(visited).toEqual(messageIds);
+		expect(revisions.size).toBe(17);
+		expect(await counts()).toEqual({ candidates: 17, receipts: pages });
+	} finally {
+		time.mockRestore();
+	}
+}, 60_000);
