@@ -788,7 +788,7 @@ export async function reuseTaskPage(
 		if (
 			error instanceof Error &&
 			!(error instanceof ConvexError) &&
-			/Documents read from or written to the table "[^"\r\n]+" changed while this mutation was being run and on every subsequent retry\./.test(
+			/Documents read from or written to the (?:"[^"\r\n]+" table|table "[^"\r\n]+") changed while this mutation was being run and on every subsequent retry\./.test(
 				error.message,
 			)
 		) {

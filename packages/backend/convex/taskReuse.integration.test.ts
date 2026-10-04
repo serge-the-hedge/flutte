@@ -135,10 +135,21 @@ async function setup(count = 4, definitions: Record<string, unknown> = {}) {
 }
 
 describe("explicit Translation Task authorship reuse", () => {
+	// Observed platform wording, with the document identifier made synthetic.
 	const writeConflict =
-		'Documents read from or written to the table "agentTranslationProposals" changed while this mutation was being run and on every subsequent retry. A call to "agentTranslationProposals:reviewCandidateForAgent" changed the document with ID "synthetic-task".';
+		'Documents read from or written to the "agentTranslationProposals" table changed while this mutation was being run and on every subsequent retry. A call to "agentTranslationProposals.js:reviewCandidateForAgent" changed the document with ID "synthetic-task". See https://docs.convex.dev/error#1';
 	test.each([
 		{ error: new Error(writeConflict), status: 503, code: "WRITE_CONTENTION" },
+		{
+			error: new Error(
+				writeConflict.replace(
+					'"agentTranslationProposals" table',
+					'table "agentTranslationProposals"',
+				),
+			),
+			status: 503,
+			code: "WRITE_CONTENTION",
+		},
 		{
 			error: new ConvexError({ code: "CONFLICT", message: writeConflict }),
 			status: 409,
