@@ -42,6 +42,8 @@ do not grant permissions. Use a separate name for each project and role. Verify
 | Assignment | Scopes |
 | --- | --- |
 | Translation with example lookup | `read`, `search`, `propose` |
+| Basic source inventory | `read` |
+| Reviewed task authorship reuse | `read`, `propose`; fresh independent review required |
 | Basic source authoring | `read`, `strings-write`; add `search`, `propose` for translations |
 | Tag organization | `read`, `search`, `tags-write` |
 | Language setup or editing | `read`, `languages-write`; add `propose` for translation tasks |
@@ -112,8 +114,8 @@ See [scan/resume](transport.md#bounded-scans) for bounded terminal execution.
 | [Context](context-api.md) | Project discovery, search, guidance, or work queues |
 | [Tags](tags-api.md) | Tag discovery, assignment, or filtered search |
 | [Languages](languages-api.md) | Adding languages or editing their code/name |
-| [Basic projects](collection-api.md) | Plain-text source creation, search/context or downloads |
-| [Translation Tasks](translation-api.md) | Task creation, pages, and candidates |
+| [Basic projects](collection-api.md) | Plain-text source creation/inventory, search/context or downloads |
+| [Translation Tasks](translation-api.md) | Task creation, pages, candidates and explicit reviewed authorship reuse |
 | [Review](review-api.md) | Exact-revision review reads and decisions |
 | [Dictionary](dictionary-api.md) | Term reads, replacements, or removals |
 | [Lower-level/compatibility](advanced-api.md) | Explicit-basis proposals, artifacts, or legacy endpoints |

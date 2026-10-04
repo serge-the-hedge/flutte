@@ -13,6 +13,7 @@ import type * as messageConstraints from "../messageConstraints.js";
 import type * as contentModel from "../contentModel.js";
 import type * as contentCollections from "../contentCollections.js";
 import type * as managedContent from "../managedContent.js";
+import type * as taskReuse from "../taskReuse.js";
 import type * as agentContent from "../agentContent.js";
 import type * as catalogBrowseIndex from "../catalogBrowseIndex.js";
 import type * as catalogBrowse from "../catalogBrowse.js";
@@ -92,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   contentModel: typeof contentModel;
   contentCollections: typeof contentCollections;
   managedContent: typeof managedContent;
+  taskReuse: typeof taskReuse;
   agentContent: typeof agentContent;
 
   catalogBrowse: typeof catalogBrowse;

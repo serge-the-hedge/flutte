@@ -53,6 +53,7 @@ import {
 	readCharacterLimit,
 } from "./messageConstraints";
 import { requireEditor, requireViewer } from "./permissions";
+import { reusedCandidateOrigin } from "./taskReuseModel";
 import { guidanceContextValidator, readGuidance } from "./translationGuidance";
 
 const MAX_PROPOSAL_CLIENT_KEY_BYTES = 256;
@@ -70,7 +71,7 @@ const MAX_TASK_PAGE_BYTES = 1024 * 1024;
 const MAX_TASK_TITLE_BYTES = 256;
 const MAX_TRANSLATION_TASKS_PER_OWNER = 128;
 
-async function latestCandidateReview(
+export async function latestCandidateReview(
 	ctx: QueryCtx | MutationCtx,
 	revisionId: Id<"agentTranslationCandidateRevisions">,
 ) {
@@ -93,7 +94,7 @@ const targetValidator = v.union(
 	}),
 );
 
-const candidateRevisionInputValidator = v.object({
+export const candidateRevisionInputValidator = v.object({
 	messageId: v.string(),
 	localeId: v.optional(v.id("locales")),
 	value: v.string(),
@@ -178,6 +179,7 @@ const reviewSummaryValidator = v.object({
 });
 
 const taskCandidateValidator = v.object({
+	reusedFrom: v.optional(reusedCandidateOrigin),
 	messageId: v.string(),
 	revisionId: v.id("agentTranslationCandidateRevisions"),
 	revision: v.number(),
@@ -201,6 +203,7 @@ async function taskCandidateFeedback(
 		messageId: revision.messageId,
 		revisionId: revision._id,
 		revision: revision.revision,
+		reusedFrom: revision.reusedFrom,
 		value: revision.value,
 		intentionalBlankReason: revision.intentionalBlankReason,
 		latestReview: review ? reviewSummary(review) : null,
@@ -320,7 +323,7 @@ function assertNonNegativeInteger(value: number, name: string): void {
 	}
 }
 
-async function proposalForToken(
+export async function proposalForToken(
 	ctx: QueryCtx | MutationCtx,
 	proposalId: Id<"agentTranslationProposals">,
 	tokenId: Id<"apiTokens">,
@@ -420,7 +423,7 @@ async function newLocaleTaskForOwner(
 		.unique();
 }
 
-async function currentLocaleProposalTarget(
+export async function currentLocaleProposalTarget(
 	ctx: QueryCtx | MutationCtx,
 	proposal: {
 		projectId: Id<"projects">;
@@ -512,7 +515,7 @@ function managedSourceContext(source: {
 	};
 }
 
-async function selectedTaskCurrent(
+export async function selectedTaskCurrent(
 	ctx: QueryCtx | MutationCtx,
 	proposal: { projectId: Id<"projects">; target: ProposalTarget },
 	messageId: string,
@@ -1770,6 +1773,7 @@ function revisionByteLength(input: {
 	intentionalBlankReason?: string;
 	clientRevisionKey: string;
 	basis: CandidateRevisionInput["basis"];
+	reusedFrom?: Infer<typeof reusedCandidateOrigin>;
 }): number {
 	return byteLength(input);
 }
@@ -1907,6 +1911,364 @@ export const create = internalMutation({
 	},
 });
 
+/** Shared candidate write boundary. Only trusted task reuse supplies origin evidence. */
+export async function submitCandidateRevisions(
+	ctx: MutationCtx,
+	args: {
+		token: string;
+		proposalId: Id<"agentTranslationProposals">;
+		items: Infer<typeof candidateRevisionInputValidator>[];
+	},
+	reusedFrom?: Infer<typeof reusedCandidateOrigin>,
+) {
+	const token = await authenticate(ctx, args.token, "propose");
+	const proposal = await proposalForToken(ctx, args.proposalId, token._id);
+	if (args.items.length === 0 || args.items.length > MAX_SUBMISSION_ITEMS) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: `A candidate revision batch must contain 1–${MAX_SUBMISSION_ITEMS} items.`,
+		});
+	}
+	if (proposal.status !== "open") {
+		throw new ConvexError({
+			code: "BAD_STATE",
+			message: "A closed translation proposal cannot receive revisions.",
+		});
+	}
+	if (byteLength(args.items) > MAX_SUBMISSION_BYTES) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message: "A candidate revision batch exceeds its byte envelope.",
+		});
+	}
+	const results = [];
+	const identities = new Set<string>();
+	let addedBytes = 0;
+	let addedCandidates = 0;
+	let addedRevisions = 0;
+	for (const item of args.items) {
+		assertBoundedString(
+			item.clientRevisionKey,
+			"clientRevisionKey",
+			MAX_REVISION_CLIENT_KEY_BYTES,
+		);
+		const intentionalBlankReason = item.intentionalBlankReason?.trim();
+		if (item.value.trim().length === 0) {
+			if (item.value.length !== 0 || !intentionalBlankReason) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"An empty candidate must be an Intentional Blank with a reason.",
+				});
+			}
+			assertBoundedString(
+				intentionalBlankReason,
+				"intentionalBlankReason",
+				MAX_INTENTIONAL_BLANK_REASON_BYTES,
+			);
+		} else if (intentionalBlankReason !== undefined) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message:
+					"Only an empty candidate can carry an Intentional Blank reason.",
+			});
+		}
+		if (
+			new TextEncoder().encode(item.value).byteLength >
+			MAX_CANDIDATE_VALUE_BYTES
+		) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "One candidate value exceeds its byte envelope.",
+			});
+		}
+		assertNonNegativeInteger(
+			item.expectedCandidateRevision,
+			"expectedCandidateRevision",
+		);
+		const identity =
+			item.basis.kind === "localeProposal"
+				? `${item.messageId}\u0000localeProposal:${item.basis.localeProposalId}`
+				: `${item.messageId}\u0000${item.localeId}`;
+		if (identities.has(identity)) {
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A revision batch contains a duplicate target.",
+			});
+		}
+		identities.add(identity);
+		if (proposal.taskScope) {
+			const taskTarget = await ctx.db
+				.query("translationTaskTargets")
+				.withIndex("by_proposal_and_messageId", (q) =>
+					q.eq("proposalId", proposal._id).eq("messageId", item.messageId),
+				)
+				.unique();
+			if (
+				!taskTarget ||
+				item.localeId !== taskTarget.localeId ||
+				item.basis.kind !== taskTarget.basis.kind
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"This candidate is outside the Translation Task's frozen target scope.",
+				});
+			}
+		}
+		let candidate: Doc<"agentTranslationCandidates"> | null = null;
+		if (proposal.target.kind !== "localeProposal") {
+			if (
+				item.localeId === undefined ||
+				(proposal.target.kind === "managedCollection"
+					? item.basis.kind !== "managed" ||
+						item.basis.collectionId !== proposal.target.collectionId
+					: item.basis.kind !== "catalogWorkspace")
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"Catalog Workspace candidates need a Locale and workspace basis.",
+				});
+			}
+			candidate = await ctx.db
+				.query("agentTranslationCandidates")
+				.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
+					q
+						.eq("proposalId", proposal._id)
+						.eq("messageId", item.messageId)
+						.eq("localeId", item.localeId),
+				)
+				.unique();
+		} else {
+			const localeProposalId = proposal.target.localeProposalId;
+			if (
+				item.localeId !== undefined ||
+				item.basis.kind !== "localeProposal" ||
+				item.basis.localeProposalId !== proposal.target.localeProposalId
+			) {
+				throw new ConvexError({
+					code: "VALIDATION",
+					message:
+						"Locale Proposal candidates need their proposal source basis.",
+				});
+			}
+			candidate = await ctx.db
+				.query("agentTranslationCandidates")
+				.withIndex("by_proposal_and_messageId_and_localeProposalId", (q) =>
+					q
+						.eq("proposalId", proposal._id)
+						.eq("messageId", item.messageId)
+						.eq("localeProposalId", localeProposalId),
+				)
+				.unique();
+		}
+		const existingRevision = candidate
+			? await ctx.db
+					.query("agentTranslationCandidateRevisions")
+					.withIndex("by_candidate_and_clientRevisionKey", (q) =>
+						q
+							.eq("candidateId", candidate._id)
+							.eq("clientRevisionKey", item.clientRevisionKey),
+					)
+					.unique()
+			: null;
+		if (existingRevision) {
+			if (
+				existingRevision.value !== item.value ||
+				existingRevision.intentionalBlankReason !== intentionalBlankReason ||
+				JSON.stringify(existingRevision.basis) !== JSON.stringify(item.basis)
+			) {
+				throw new ConvexError({
+					code: "IDEMPOTENCY_KEY_REUSED",
+					message:
+						"clientRevisionKey is already bound to different candidate evidence.",
+				});
+			}
+			results.push({
+				candidateId: existingRevision.candidateId,
+				revisionId: existingRevision._id,
+				revision: existingRevision.revision,
+				status: "open" as const,
+			});
+			continue;
+		}
+		await assertMessageCharacterLimit(
+			ctx,
+			messageConstraintAddress(proposal, item.messageId),
+			item.value,
+		);
+		if (proposal.target.kind === "managedCollection") {
+			if (!item.localeId)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "Managed candidates need a Locale.",
+				});
+			const current = await selectedTaskCurrent(
+				ctx,
+				proposal,
+				item.messageId,
+				item.localeId,
+			);
+			if (!sameSelectedBasis(item.basis, current.basis))
+				throw new ConvexError({
+					code: "STALE_BASIS",
+					message: "Managed content changed; refresh before proposing.",
+				});
+		} else if (proposal.target.kind === "catalogWorkspace") {
+			const current = await currentWorkspaceTarget(
+				ctx,
+				proposal.projectId,
+				item.messageId,
+				item.localeId as Id<"locales">,
+			);
+			assertBasisMatches(item, current);
+			if (intentionalBlankReason === undefined) {
+				assertTargetValueContract({
+					messageId: item.messageId,
+					localeCode: current.target.localeCode,
+					value: item.value,
+					source: current.source,
+				});
+			}
+		} else {
+			const current = await currentLocaleProposalTarget(
+				ctx,
+				proposal,
+				item.messageId,
+			);
+			if (
+				item.basis.kind !== "localeProposal" ||
+				item.basis.snapshotId !== current.source.sourceSnapshotId ||
+				item.basis.sourceFingerprint !== current.source.sourceFingerprint
+			) {
+				throw new ConvexError({
+					code: "STALE_BASIS",
+					message:
+						"The Locale Proposal source basis changed; refresh before proposing.",
+				});
+			}
+			if (intentionalBlankReason === undefined) {
+				assertTargetValueContract({
+					messageId: item.messageId,
+					localeCode: current.localeProposal.localeCode,
+					value: item.value,
+					source: current.source.source,
+				});
+			}
+		}
+		const currentRevision = candidate?.currentRevision ?? 0;
+		if (item.expectedCandidateRevision !== currentRevision) {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"The proposal target has a newer candidate revision; submit a correction against it.",
+			});
+		}
+		if (
+			!candidate &&
+			proposal.candidateCount + addedCandidates >= MAX_CANDIDATES
+		) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "This proposal has reached its candidate target limit.",
+			});
+		}
+		const revision = currentRevision + 1;
+		if (proposal.revisionCount + addedRevisions >= MAX_REVISIONS) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "This proposal has reached its revision limit.",
+			});
+		}
+		const valueFingerprint = await sha256Hex(item.value);
+		const retainedBytes = revisionByteLength({
+			...(reusedFrom ? { reusedFrom } : {}),
+			value: item.value,
+			...(intentionalBlankReason === undefined
+				? {}
+				: { intentionalBlankReason }),
+			clientRevisionKey: item.clientRevisionKey,
+			basis: item.basis,
+		});
+		addedBytes += retainedBytes;
+		if (proposal.retainedByteLength + addedBytes > MAX_RETAINED_BYTES) {
+			throw new ConvexError({
+				code: "LIMIT_EXCEEDED",
+				message: "This proposal has reached its retained evidence limit.",
+			});
+		}
+		const timestamp = now();
+		const candidateId =
+			candidate?._id ??
+			(await ctx.db.insert("agentTranslationCandidates", {
+				projectId: proposal.projectId,
+				proposalId: proposal._id,
+				messageId: item.messageId,
+				...(item.localeId === undefined ? {} : { localeId: item.localeId }),
+				...(item.basis.kind === "localeProposal"
+					? { localeProposalId: item.basis.localeProposalId }
+					: {}),
+				currentRevision: 0,
+				createdAt: timestamp,
+				updatedAt: timestamp,
+			}));
+		const revisionId = await ctx.db.insert(
+			"agentTranslationCandidateRevisions",
+			{
+				projectId: proposal.projectId,
+				proposalId: proposal._id,
+				candidateId,
+				messageId: item.messageId,
+				...(item.localeId === undefined ? {} : { localeId: item.localeId }),
+				...(item.basis.kind === "localeProposal"
+					? { localeProposalId: item.basis.localeProposalId }
+					: {}),
+				revision,
+				clientRevisionKey: item.clientRevisionKey,
+				value: item.value,
+				...(intentionalBlankReason === undefined
+					? {}
+					: { intentionalBlankReason }),
+				valueFingerprint,
+				basis: item.basis,
+				...(reusedFrom ? { reusedFrom } : {}),
+				createdBy: { kind: "agent", id: token._id },
+				createdAt: timestamp,
+			},
+		);
+		await ctx.db.patch(candidateId, {
+			currentRevision: revision,
+			latestRevisionId: revisionId,
+			updatedAt: timestamp,
+		});
+		addedCandidates += candidate ? 0 : 1;
+		addedRevisions += 1;
+		results.push({
+			candidateId,
+			revisionId,
+			revision,
+			status: "open" as const,
+		});
+	}
+	await ctx.db.patch(proposal._id, {
+		candidateCount: proposal.candidateCount + addedCandidates,
+		revisionCount: proposal.revisionCount + addedRevisions,
+		retainedByteLength: proposal.retainedByteLength + addedBytes,
+		updatedAt: now(),
+	});
+	return {
+		proposal: proposalSummary({
+			...proposal,
+			candidateCount: proposal.candidateCount + addedCandidates,
+			revisionCount: proposal.revisionCount + addedRevisions,
+			retainedByteLength: proposal.retainedByteLength + addedBytes,
+			updatedAt: now(),
+		}),
+		revisions: results,
+	};
+}
+
 export const submitRevisions = internalMutation({
 	args: {
 		token: v.string(),
@@ -1914,350 +2276,7 @@ export const submitRevisions = internalMutation({
 		items: v.array(candidateRevisionInputValidator),
 	},
 	handler: async (ctx, args) => {
-		const token = await authenticate(ctx, args.token, "propose");
-		const proposal = await proposalForToken(ctx, args.proposalId, token._id);
-		if (args.items.length === 0 || args.items.length > MAX_SUBMISSION_ITEMS) {
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: `A candidate revision batch must contain 1–${MAX_SUBMISSION_ITEMS} items.`,
-			});
-		}
-		if (proposal.status !== "open") {
-			throw new ConvexError({
-				code: "BAD_STATE",
-				message: "A closed translation proposal cannot receive revisions.",
-			});
-		}
-		if (byteLength(args.items) > MAX_SUBMISSION_BYTES) {
-			throw new ConvexError({
-				code: "LIMIT_EXCEEDED",
-				message: "A candidate revision batch exceeds its byte envelope.",
-			});
-		}
-		const results = [];
-		const identities = new Set<string>();
-		let addedBytes = 0;
-		let addedCandidates = 0;
-		let addedRevisions = 0;
-		for (const item of args.items) {
-			assertBoundedString(
-				item.clientRevisionKey,
-				"clientRevisionKey",
-				MAX_REVISION_CLIENT_KEY_BYTES,
-			);
-			const intentionalBlankReason = item.intentionalBlankReason?.trim();
-			if (item.value.trim().length === 0) {
-				if (item.value.length !== 0 || !intentionalBlankReason) {
-					throw new ConvexError({
-						code: "VALIDATION",
-						message:
-							"An empty candidate must be an Intentional Blank with a reason.",
-					});
-				}
-				assertBoundedString(
-					intentionalBlankReason,
-					"intentionalBlankReason",
-					MAX_INTENTIONAL_BLANK_REASON_BYTES,
-				);
-			} else if (intentionalBlankReason !== undefined) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message:
-						"Only an empty candidate can carry an Intentional Blank reason.",
-				});
-			}
-			if (
-				new TextEncoder().encode(item.value).byteLength >
-				MAX_CANDIDATE_VALUE_BYTES
-			) {
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message: "One candidate value exceeds its byte envelope.",
-				});
-			}
-			assertNonNegativeInteger(
-				item.expectedCandidateRevision,
-				"expectedCandidateRevision",
-			);
-			const identity =
-				item.basis.kind === "localeProposal"
-					? `${item.messageId}\u0000localeProposal:${item.basis.localeProposalId}`
-					: `${item.messageId}\u0000${item.localeId}`;
-			if (identities.has(identity)) {
-				throw new ConvexError({
-					code: "VALIDATION",
-					message: "A revision batch contains a duplicate target.",
-				});
-			}
-			identities.add(identity);
-			if (proposal.taskScope) {
-				const taskTarget = await ctx.db
-					.query("translationTaskTargets")
-					.withIndex("by_proposal_and_messageId", (q) =>
-						q.eq("proposalId", proposal._id).eq("messageId", item.messageId),
-					)
-					.unique();
-				if (
-					!taskTarget ||
-					item.localeId !== taskTarget.localeId ||
-					item.basis.kind !== taskTarget.basis.kind
-				) {
-					throw new ConvexError({
-						code: "VALIDATION",
-						message:
-							"This candidate is outside the Translation Task's frozen target scope.",
-					});
-				}
-			}
-			let candidate: Doc<"agentTranslationCandidates"> | null = null;
-			if (proposal.target.kind !== "localeProposal") {
-				if (
-					item.localeId === undefined ||
-					(proposal.target.kind === "managedCollection"
-						? item.basis.kind !== "managed" ||
-							item.basis.collectionId !== proposal.target.collectionId
-						: item.basis.kind !== "catalogWorkspace")
-				) {
-					throw new ConvexError({
-						code: "VALIDATION",
-						message:
-							"Catalog Workspace candidates need a Locale and workspace basis.",
-					});
-				}
-				candidate = await ctx.db
-					.query("agentTranslationCandidates")
-					.withIndex("by_proposal_and_messageId_and_localeId", (q) =>
-						q
-							.eq("proposalId", proposal._id)
-							.eq("messageId", item.messageId)
-							.eq("localeId", item.localeId),
-					)
-					.unique();
-			} else {
-				const localeProposalId = proposal.target.localeProposalId;
-				if (
-					item.localeId !== undefined ||
-					item.basis.kind !== "localeProposal" ||
-					item.basis.localeProposalId !== proposal.target.localeProposalId
-				) {
-					throw new ConvexError({
-						code: "VALIDATION",
-						message:
-							"Locale Proposal candidates need their proposal source basis.",
-					});
-				}
-				candidate = await ctx.db
-					.query("agentTranslationCandidates")
-					.withIndex("by_proposal_and_messageId_and_localeProposalId", (q) =>
-						q
-							.eq("proposalId", proposal._id)
-							.eq("messageId", item.messageId)
-							.eq("localeProposalId", localeProposalId),
-					)
-					.unique();
-			}
-			const existingRevision = candidate
-				? await ctx.db
-						.query("agentTranslationCandidateRevisions")
-						.withIndex("by_candidate_and_clientRevisionKey", (q) =>
-							q
-								.eq("candidateId", candidate._id)
-								.eq("clientRevisionKey", item.clientRevisionKey),
-						)
-						.unique()
-				: null;
-			if (existingRevision) {
-				if (
-					existingRevision.value !== item.value ||
-					existingRevision.intentionalBlankReason !== intentionalBlankReason ||
-					JSON.stringify(existingRevision.basis) !== JSON.stringify(item.basis)
-				) {
-					throw new ConvexError({
-						code: "IDEMPOTENCY_KEY_REUSED",
-						message:
-							"clientRevisionKey is already bound to different candidate evidence.",
-					});
-				}
-				results.push({
-					candidateId: existingRevision.candidateId,
-					revisionId: existingRevision._id,
-					revision: existingRevision.revision,
-					status: "open" as const,
-				});
-				continue;
-			}
-			await assertMessageCharacterLimit(
-				ctx,
-				messageConstraintAddress(proposal, item.messageId),
-				item.value,
-			);
-			if (proposal.target.kind === "managedCollection") {
-				if (!item.localeId)
-					throw new ConvexError({
-						code: "VALIDATION",
-						message: "Managed candidates need a Locale.",
-					});
-				const current = await selectedTaskCurrent(
-					ctx,
-					proposal,
-					item.messageId,
-					item.localeId,
-				);
-				if (!sameSelectedBasis(item.basis, current.basis))
-					throw new ConvexError({
-						code: "STALE_BASIS",
-						message: "Managed content changed; refresh before proposing.",
-					});
-			} else if (proposal.target.kind === "catalogWorkspace") {
-				const current = await currentWorkspaceTarget(
-					ctx,
-					proposal.projectId,
-					item.messageId,
-					item.localeId as Id<"locales">,
-				);
-				assertBasisMatches(item, current);
-				if (intentionalBlankReason === undefined) {
-					assertTargetValueContract({
-						messageId: item.messageId,
-						localeCode: current.target.localeCode,
-						value: item.value,
-						source: current.source,
-					});
-				}
-			} else {
-				const current = await currentLocaleProposalTarget(
-					ctx,
-					proposal,
-					item.messageId,
-				);
-				if (
-					item.basis.kind !== "localeProposal" ||
-					item.basis.snapshotId !== current.source.sourceSnapshotId ||
-					item.basis.sourceFingerprint !== current.source.sourceFingerprint
-				) {
-					throw new ConvexError({
-						code: "STALE_BASIS",
-						message:
-							"The Locale Proposal source basis changed; refresh before proposing.",
-					});
-				}
-				if (intentionalBlankReason === undefined) {
-					assertTargetValueContract({
-						messageId: item.messageId,
-						localeCode: current.localeProposal.localeCode,
-						value: item.value,
-						source: current.source.source,
-					});
-				}
-			}
-			const currentRevision = candidate?.currentRevision ?? 0;
-			if (item.expectedCandidateRevision !== currentRevision) {
-				throw new ConvexError({
-					code: "CONFLICT",
-					message:
-						"The proposal target has a newer candidate revision; submit a correction against it.",
-				});
-			}
-			if (
-				!candidate &&
-				proposal.candidateCount + addedCandidates >= MAX_CANDIDATES
-			) {
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message: "This proposal has reached its candidate target limit.",
-				});
-			}
-			const revision = currentRevision + 1;
-			if (proposal.revisionCount + addedRevisions >= MAX_REVISIONS) {
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message: "This proposal has reached its revision limit.",
-				});
-			}
-			const valueFingerprint = await sha256Hex(item.value);
-			const retainedBytes = revisionByteLength({
-				value: item.value,
-				...(intentionalBlankReason === undefined
-					? {}
-					: { intentionalBlankReason }),
-				clientRevisionKey: item.clientRevisionKey,
-				basis: item.basis,
-			});
-			addedBytes += retainedBytes;
-			if (proposal.retainedByteLength + addedBytes > MAX_RETAINED_BYTES) {
-				throw new ConvexError({
-					code: "LIMIT_EXCEEDED",
-					message: "This proposal has reached its retained evidence limit.",
-				});
-			}
-			const timestamp = now();
-			const candidateId =
-				candidate?._id ??
-				(await ctx.db.insert("agentTranslationCandidates", {
-					projectId: proposal.projectId,
-					proposalId: proposal._id,
-					messageId: item.messageId,
-					...(item.localeId === undefined ? {} : { localeId: item.localeId }),
-					...(item.basis.kind === "localeProposal"
-						? { localeProposalId: item.basis.localeProposalId }
-						: {}),
-					currentRevision: 0,
-					createdAt: timestamp,
-					updatedAt: timestamp,
-				}));
-			const revisionId = await ctx.db.insert(
-				"agentTranslationCandidateRevisions",
-				{
-					projectId: proposal.projectId,
-					proposalId: proposal._id,
-					candidateId,
-					messageId: item.messageId,
-					...(item.localeId === undefined ? {} : { localeId: item.localeId }),
-					...(item.basis.kind === "localeProposal"
-						? { localeProposalId: item.basis.localeProposalId }
-						: {}),
-					revision,
-					clientRevisionKey: item.clientRevisionKey,
-					value: item.value,
-					...(intentionalBlankReason === undefined
-						? {}
-						: { intentionalBlankReason }),
-					valueFingerprint,
-					basis: item.basis,
-					createdBy: { kind: "agent", id: token._id },
-					createdAt: timestamp,
-				},
-			);
-			await ctx.db.patch(candidateId, {
-				currentRevision: revision,
-				latestRevisionId: revisionId,
-				updatedAt: timestamp,
-			});
-			addedCandidates += candidate ? 0 : 1;
-			addedRevisions += 1;
-			results.push({
-				candidateId,
-				revisionId,
-				revision,
-				status: "open" as const,
-			});
-		}
-		await ctx.db.patch(proposal._id, {
-			candidateCount: proposal.candidateCount + addedCandidates,
-			revisionCount: proposal.revisionCount + addedRevisions,
-			retainedByteLength: proposal.retainedByteLength + addedBytes,
-			updatedAt: now(),
-		});
-		return {
-			proposal: proposalSummary({
-				...proposal,
-				candidateCount: proposal.candidateCount + addedCandidates,
-				revisionCount: proposal.revisionCount + addedRevisions,
-				retainedByteLength: proposal.retainedByteLength + addedBytes,
-				updatedAt: now(),
-			}),
-			revisions: results,
-		};
+		return await submitCandidateRevisions(ctx, args);
 	},
 });
 
@@ -3160,6 +3179,7 @@ const agentReviewContextValidator = v.object({
 		intentionalBlankReason: v.optional(v.string()),
 	}),
 	candidate: v.object({
+		reusedFrom: v.optional(reusedCandidateOrigin),
 		value: v.string(),
 		intentionalBlankReason: v.optional(v.string()),
 		createdBy: v.object({
@@ -3241,6 +3261,7 @@ async function contextForAgentReviewer(
 		candidateRevisionId: revision._id,
 		messageId: revision.messageId,
 		candidate: {
+			reusedFrom: revision.reusedFrom,
 			value: revision.value,
 			intentionalBlankReason: revision.intentionalBlankReason,
 			createdBy: revision.createdBy,

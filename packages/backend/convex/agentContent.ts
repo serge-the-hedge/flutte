@@ -492,3 +492,44 @@ export const readString = internalQuery({
 		return { string: page.items[0] ?? null };
 	},
 });
+
+/** Source-only Basic browse reuses the editor's source pagination; target
+ * membership is irrelevant and filtered empty pages retain their continuation. */
+export const listStrings = internalQuery({
+	args: {
+		token: v.string(),
+		cursor: v.optional(v.string()),
+		q: v.optional(v.string()),
+		limit: v.number(),
+	},
+	handler: async (ctx, args) => {
+		const token = await authenticateAgent(ctx, args.token, "read");
+		if (token.projectType !== "basic")
+			fail("UNSUPPORTED", "Source inventory here is for Basic projects.");
+		if (!token.managedCollectionId)
+			fail("BAD_STATE", "The Basic project has no content workspace.");
+		if (!Number.isSafeInteger(args.limit) || args.limit < 1 || args.limit > 16)
+			fail("VALIDATION", "Choose a source page limit of 1–16.");
+		const page = await readManagedPage(ctx, {
+			projectId: token.projectId,
+			collectionId: token.managedCollectionId,
+			cursor: args.cursor,
+			q: args.q,
+			limit: args.limit,
+		});
+		return boundedResponse({
+			...page,
+			items: page.items.map((item) => ({
+				...item,
+				sourceContract: {
+					messageId: item.messageId,
+					value: item.sourceValue,
+					fingerprint: item.sourceFingerprint,
+					revision: item.sourceRevision,
+					format: "plain" as const,
+				},
+			})),
+			consistency: "live" as const,
+		});
+	},
+});

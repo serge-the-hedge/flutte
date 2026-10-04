@@ -96,7 +96,11 @@ test("request preserves exact writes and successful JSON; credentials stay in Au
 	assert.equal(result.stderr, "");
 });
 
-for (const path of ["/workspace/search", "/collections/managed-1/search"])
+for (const path of [
+	"/workspace/search",
+	"/workspace/strings",
+	"/collections/managed-1/search",
+])
 	test(`GET scans ${path} continue empty pages and preserve whole evidence pages`, async (t) => {
 		/** @type {(string | null)[]} */ const cursors = [];
 		const server = await fixture((request, response) => {

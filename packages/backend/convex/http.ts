@@ -6,7 +6,6 @@ import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, httpAction } from "./_generated/server";
 import { tokenUsageNeedsRefresh } from "./agentApi";
 import type { TranslationWorkReason } from "./agentRetrieval";
-
 import { authComponent, createAuth, getTrustedOrigins } from "./auth";
 import { resend } from "./emails";
 import { sha256Hex, type TokenScope } from "./lib";
@@ -21,7 +20,6 @@ import {
 	taskProposalPage,
 	templateProposal,
 } from "./localeProposals";
-
 import {
 	applyStoredReleaseTree,
 	downloadReleaseFile,
@@ -34,6 +32,7 @@ import {
 	startUploadFinalization,
 	uploadFile,
 } from "./snapshotUploads";
+import { reuseTaskPage } from "./taskReuse";
 
 function searchChoice<T extends string>(
 	params: URLSearchParams,
@@ -1478,11 +1477,27 @@ http.route({
 			return agentJson(
 				await withAgent(ctx, request, "read", "agentRead", async (token) => {
 					const params = new URL(request.url).searchParams;
-					if (params.size !== 1 || !params.has("key"))
-						throw new Error("Provide exactly one key query parameter.");
-					return ctx.runQuery(internalApi.agentContent.readString, {
+					if (params.has("key")) {
+						if (params.size !== 1)
+							throw new Error("Provide exactly one key query parameter.");
+						return ctx.runQuery(internalApi.agentContent.readString, {
+							token,
+							key: params.get("key") ?? "",
+						});
+					}
+					const seen = new Set<string>();
+					for (const key of params.keys()) {
+						if (!["cursor", "q", "limit"].includes(key) || seen.has(key))
+							throw new Error(
+								"Use cursor, q, and limit once each for source inventory.",
+							);
+						seen.add(key);
+					}
+					return ctx.runQuery(internalApi.agentContent.listStrings, {
 						token,
-						key: params.get("key") ?? "",
+						cursor: params.get("cursor") ?? undefined,
+						q: params.get("q") ?? undefined,
+						limit: Number(params.get("limit") ?? 16),
 					});
 				}),
 			);
@@ -2202,6 +2217,37 @@ http.route({
 				"/api/agent/v1/translation-tasks/",
 				"",
 			);
+			if (suffix.endsWith("/reuse")) {
+				const taskId = suffix.slice(
+					0,
+					-"/reuse".length,
+				) as Id<"agentTranslationProposals">;
+				if (!taskId || taskId.includes("/"))
+					throw new Error("Missing Translation Task id.");
+				const body = await jsonObject(request);
+				return agentJson(
+					await withAgent(
+						ctx,
+						request,
+						["read", "propose"],
+						"agentTranslationProposal",
+						async (token) =>
+							reuseTaskPage(ctx, {
+								token,
+								sourceTaskId: requiredJsonString(
+									body,
+									"sourceTaskId",
+								) as Id<"agentTranslationProposals">,
+								destinationTaskId: taskId,
+								clientReuseKey: requiredJsonString(body, "clientReuseKey"),
+								cursor:
+									body.cursor === undefined
+										? 0
+										: requiredJsonNumber(body, "cursor"),
+							}),
+					),
+				);
+			}
 			const marker = "/candidates";
 			if (!suffix.endsWith(marker)) {
 				throw new Error("Expected /candidates.");

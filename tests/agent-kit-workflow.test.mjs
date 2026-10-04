@@ -482,3 +482,77 @@ test("candidate submissions stop on changed source, enforce Unicode limits, and 
 		"message",
 	]);
 });
+
+test("task reuse resumes a lost response with the same request key and saves exact pending-review handoffs", async () => {
+	const requests = /** @type {Row[]} */ ([]);
+	let loseResponse = true;
+	const f = await fixture("task", async (request, response) => {
+		assert.equal(
+			request.url,
+			"/api/agent/v1/translation-tasks/destination/reuse",
+		);
+		const input = await body(request);
+		requests.push(input);
+		if (loseResponse) {
+			loseResponse = false;
+			response.destroy();
+			return;
+		}
+		json(response, {
+			sourceTaskId: "source",
+			destinationTaskId: "destination",
+			clientReuseKey: input.clientReuseKey,
+			items:
+				Number(input.cursor) === 0
+					? [
+							{
+								messageId: "first",
+								status: "copied",
+								originRevisionId: "origin",
+								revisionId: "fresh",
+							},
+						]
+					: [{ messageId: "last", status: "unreviewed" }],
+			nextCursor: Number(input.cursor) === 0 ? 16 : null,
+		});
+	});
+	try {
+		const args = [
+			"task",
+			"reuse",
+			"destination",
+			"--source",
+			"source",
+			"--max-pages",
+			"1",
+		];
+		const failed = await f.run(args);
+		assert.equal(failed.code, 1);
+		const resumed = ok(await f.run(args));
+		assert.equal(resumed.complete, false);
+		assert.deepEqual(requests[0], requests[1]);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					join(f.directory, "state", "reuse-handoff-0.json"),
+					"utf8",
+				),
+			),
+			{ revisions: [{ revisionId: "fresh" }] },
+		);
+		const completed = ok(await f.run(args));
+		assert.equal(completed.complete, true);
+		assert.equal(requests[2].cursor, 16);
+		assert.equal(requests[2].clientReuseKey, requests[0].clientReuseKey);
+		assert.equal(ok(await f.run(args)).complete, true);
+		assert.equal(requests.length, 3);
+		assert.equal(
+			(await f.run(["task", "reuse", "destination", "--source", "different"]))
+				.code,
+			1,
+		);
+		assert.equal((await f.run(["task", "read", "destination"])).code, 1);
+	} finally {
+		await f.close();
+	}
+});

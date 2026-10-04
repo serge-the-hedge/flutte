@@ -121,6 +121,48 @@ Candidates remain inert until authorized review. Intentional Blanks require a
 reason and individual review; they cannot use exact-batch acceptance. Human
 review behavior is defined in the [review contract](https://github.com/serge-the-hedge/flutte/blob/main/docs/catalog-message-lifecycle.md).
 
+### `POST /translation-tasks/:destinationId/reuse`
+
+Explicitly requests reviewed candidate text from one accessible task as **fresh
+pending candidates** in another. Both tasks must be in the credential’s project
+and obey normal task visibility; Basic tasks must share a source workspace.
+Requires `read` and `propose`. The destination must be open and editable. This
+works across the same or different Locale identities and asserts no equivalence.
+
+```json
+{"sourceTaskId":"SOURCE_TASK_ID","clientReuseKey":"assigned-reuse-v1","cursor":0}
+```
+
+Each page scans at most 16 messages in the source task’s frozen scope and returns
+`items` plus numeric `nextCursor` or null. Use one `clientReuseKey` per task pair
+and pass the returned cursor unchanged. Page receipts are durable and replayable:
+retry the exact request after an unknown response. A completed page’s outcomes
+stay fixed even if later review or source changes occur. A new explicit pass needs
+a new key; existing destination work remains protected.
+
+`status` is `copied`, `alreadyCopied`, `unreviewed`, `sourceChanged`,
+`incompatibleSource`, `outsideDestination`, `occupiedDestination`, or
+`invalidDestination`; validation failures include a reason. Successful items
+identify the new exact `revisionId`. Reuse reads the latest source revision, whose
+recorded authorized review must preserve its exact value and blank reason.
+Rejected/pending revisions and edited review output are skipped. Original and
+destination Source must match in text and executable placeholder metadata;
+Snapshot comparisons read immutable complete Catalog Documents (up to 4 MiB).
+If a historical basis cannot be reconstructed exactly (including a retained
+semantic fingerprint that differs from its raw Snapshot text), reuse conservatively
+reports `incompatibleSource`. The server rechecks Source/target drift and ordinary destination ICU, placeholder,
+and character-limit rules before writing. Existing candidates or applied values,
+including reasoned blanks, are never replaced. Item validation failure does not
+undo successful items; unexpected failures roll back the page and its receipt.
+
+The new revision records the initiating agent and `reusedFrom` containing the
+historical task, revision and review IDs. Task reads and independent review
+context expose this pointer. It supplies provenance only: acceptance, reviewer
+authorization, Translator Confirmation and human authorship are not copied.
+Ordinary task read/status/review paths apply; hand off the new exact revisions.
+Use the [resumable reuse command](workflow.md#reuse-reviewed-authorship) for paging,
+receipts and review handoffs instead of writing a bulk posting script.
+
 ### New-Locale Translation Task
 
 Use [Translation Tasks](#post-translation-tasks) for agent work. A changed
