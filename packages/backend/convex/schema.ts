@@ -351,6 +351,11 @@ export default defineSchema({
 		archivedAt: v.optional(v.number()),
 	})
 		.index("by_message", ["collectionId", "messageId"])
+		.index("by_collectionId_and_messageId_and_sourceRevision", [
+			"collectionId",
+			"messageId",
+			"sourceRevision",
+		])
 		.index("by_collection", ["collectionId"]),
 	managedTargets: defineTable({
 		projectId: v.id("projects"),

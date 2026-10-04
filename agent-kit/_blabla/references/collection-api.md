@@ -79,7 +79,9 @@ languages. Use `limit` 1–16 (default 16), optional literal `q` over key/name/s
 and the returned opaque `cursor`. Braces are plain text and Unicode is preserved.
 Each item includes stable `messageId`/`key`, nullable `name`, exact `sourceValue`,
 source revision/fingerprint, optional context/character limit, and a
-`sourceContract` with `format: "plain"`. No target or review claim is implied.
+`sourceContract` with `messageId`, `revision`, `fingerprint`, and `format: "plain"`.
+Its exact text is `sourceValue`, represented once per item. No target or review
+claim is implied.
 
 Through the [HTTP helper](transport.md#bounded-scans):
 

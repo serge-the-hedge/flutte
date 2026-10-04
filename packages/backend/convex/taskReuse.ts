@@ -21,7 +21,7 @@ import { type CatalogMessage, parse } from "./catalogDocument";
 import { activeProjectionFor } from "./catalogProjection";
 import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget } from "./catalogWorkspaceRead";
-import { sourceContractsMatch } from "./contractTransforms";
+import { completeSourceContractsMatch } from "./contractTransforms";
 import { now, sha256Hex } from "./lib";
 import { type reuseOutcome, reusePage } from "./taskReuseModel";
 
@@ -227,6 +227,47 @@ async function frozenSourcePage(ctx: ReadCtx, source: Task, cursor: number) {
 	};
 }
 
+/** Managed metadata is mutable. Compare the captured source revision with the
+ * current source inside the write transaction; missing history cannot qualify. */
+async function managedSourceMatches(
+	ctx: MutationCtx,
+	origin: Doc<"agentTranslationCandidateRevisions">,
+	collectionId: Id<"contentCollections">,
+	current: { value: string; name?: string | null; context?: string },
+) {
+	const basis = origin.basis;
+	if (basis.kind !== "managed" || basis.collectionId !== collectionId)
+		return false;
+	const previous = await ctx.db
+		.query("managedSourceRevisions")
+		.withIndex("by_collectionId_and_messageId_and_sourceRevision", (q) =>
+			q
+				.eq("collectionId", collectionId)
+				.eq("messageId", origin.messageId)
+				.eq("sourceRevision", basis.sourceRevision),
+		)
+		.unique();
+	return (
+		!!previous &&
+		previous.projectId === origin.projectId &&
+		previous.archivedAt === undefined &&
+		previous.sourceFingerprint === basis.sourceFingerprint &&
+		completeSourceContractsMatch(
+			{
+				value: previous.sourceValue,
+				metadata: {
+					name: previous.name === undefined ? origin.messageId : previous.name,
+					context: previous.context,
+				},
+			},
+			{
+				value: current.value,
+				metadata: { name: current.name, context: current.context },
+			},
+		)
+	);
+}
+
 /** Read immutable file references only after checking both task access boundaries. */
 export const plan = internalQuery({
 	args: address,
@@ -375,7 +416,7 @@ export const commitPage = internalMutation({
 				});
 				continue;
 			}
-			if (!checked.compatible) {
+			if (origin.basis.kind !== "managed" && !checked.compatible) {
 				items.push(out("incompatibleSource"));
 				continue;
 			}
@@ -414,6 +455,19 @@ export const commitPage = internalMutation({
 					basis.sourceFingerprint !== origin.basis.sourceFingerprint ||
 					(basis.kind !== "managed" &&
 						basis.snapshotId !== args.destinationSnapshotId)
+				) {
+					items.push(out("incompatibleSource"));
+					continue;
+				}
+				if (
+					basis.kind === "managed" &&
+					(!("value" in current.source) ||
+						!(await managedSourceMatches(
+							ctx,
+							origin,
+							basis.collectionId,
+							current.source,
+						)))
 				) {
 					items.push(out("incompatibleSource"));
 					continue;
@@ -568,7 +622,7 @@ export async function reuseTaskPage(
 	const checked = [];
 	for (const item of page.items) {
 		const origin = item.revision;
-		let compatible = origin?.basis.kind === "managed";
+		let compatible = false;
 		if (origin && item.storageId && destination) {
 			const previous = (await document(item.storageId)).get(item.messageId);
 			const current = destination.get(item.messageId);
@@ -576,7 +630,7 @@ export async function reuseTaskPage(
 				!!previous &&
 				!!current &&
 				(await sha256Hex(previous.value)) === origin.basis.sourceFingerprint &&
-				sourceContractsMatch(previous, current);
+				completeSourceContractsMatch(previous, current);
 		}
 		checked.push({
 			messageId: item.messageId,

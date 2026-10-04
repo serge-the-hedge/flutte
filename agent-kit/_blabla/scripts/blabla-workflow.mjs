@@ -959,7 +959,7 @@ async function taskReuse(api, taskId, sourceTaskId, directory, maxPages) {
 			receipt.destinationTaskId !== taskId ||
 			receipt.clientReuseKey !== clientReuseKey ||
 			items.length > PAGE_SIZE ||
-			new Set(items.map((item) => id(item.messageId, "messageId"))).size !==
+			new Set(items.map((item) => string(item.messageId, "messageId"))).size !==
 				items.length ||
 			!(
 				receipt.nextCursor === null ||

@@ -40,6 +40,59 @@ async function setup() {
 }
 
 describe("agent Basic string creation", () => {
+	test("inventories a maximum-size escaped source once at limit 1 and continues", async () => {
+		const s = await setup();
+		const reader = await s.createToken(["read"]);
+		const sourceValue = '"'.repeat(256 * 1024);
+		for (const [key, value] of [
+			["quoted", sourceValue],
+			["next", "Next source"],
+		] as const)
+			await s.owner.mutation(api.managedContent.createMessage, {
+				projectId: s.projectId,
+				collectionId: s.collectionId,
+				key,
+				sourceValue: value,
+			});
+		const get = (query: string) =>
+			s.t.fetch(`/api/agent/v1/workspace/strings?${query}`, {
+				headers: { Authorization: `Bearer ${reader.token}` },
+			});
+		const exact = await get("key=quoted");
+		expect(exact.status).toBe(200);
+		expect(await exact.json()).toMatchObject({ string: { sourceValue } });
+		const response = await get("limit=1");
+		expect(response.status, await response.clone().text()).toBe(200);
+		const encoded = await response.text();
+		expect(new TextEncoder().encode(encoded).byteLength).toBeLessThan(
+			1024 * 1024,
+		);
+		const page: {
+			items: Array<{
+				sourceValue: string;
+				sourceContract: Record<string, unknown>;
+			}>;
+			nextCursor: string;
+		} = JSON.parse(encoded);
+		expect(page.items).toHaveLength(1);
+		expect(page.items[0]?.sourceValue).toBe(sourceValue);
+		expect(page.items[0]?.sourceContract).toMatchObject({
+			messageId: "quoted",
+			revision: 1,
+			format: "plain",
+		});
+		expect(page.items[0]?.sourceContract).not.toHaveProperty("value");
+		expect(page.nextCursor).toBeTruthy();
+		expect(
+			await (
+				await get(`limit=1&cursor=${encodeURIComponent(page.nextCursor)}`)
+			).json(),
+		).toMatchObject({
+			items: [{ messageId: "next", sourceValue: "Next source" }],
+			nextCursor: null,
+		});
+	});
+
 	test("inventories plain Unicode source without any target languages, including empty continuation pages", async () => {
 		const s = await setup();
 		const writer = await s.createToken(["read", "strings-write"]);

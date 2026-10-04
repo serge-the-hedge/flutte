@@ -485,6 +485,8 @@ test("candidate submissions stop on changed source, enforce Unicode limits, and 
 
 test("task reuse resumes a lost response with the same request key and saves exact pending-review handoffs", async () => {
 	const requests = /** @type {Row[]} */ ([]);
+	const receipts = /** @type {Map<unknown, Row>} */ (new Map());
+	const longKey = `店铺.${"标题".repeat(100)}`;
 	let loseResponse = true;
 	const f = await fixture("task", async (request, response) => {
 		assert.equal(
@@ -493,12 +495,7 @@ test("task reuse resumes a lost response with the same request key and saves exa
 		);
 		const input = await body(request);
 		requests.push(input);
-		if (loseResponse) {
-			loseResponse = false;
-			response.destroy();
-			return;
-		}
-		json(response, {
+		const receipt = receipts.get(input.cursor) ?? {
 			sourceTaskId: "source",
 			destinationTaskId: "destination",
 			clientReuseKey: input.clientReuseKey,
@@ -506,15 +503,32 @@ test("task reuse resumes a lost response with the same request key and saves exa
 				Number(input.cursor) === 0
 					? [
 							{
-								messageId: "first",
+								messageId: "store.subtitle",
 								status: "copied",
 								originRevisionId: "origin",
 								revisionId: "fresh",
 							},
+							{
+								messageId: longKey,
+								status: "alreadyCopied",
+								revisionId: "recovered",
+							},
+							{
+								messageId: `跳过.${"長".repeat(200)}`,
+								status: "incompatibleSource",
+							},
 						]
-					: [{ messageId: "last", status: "unreviewed" }],
+					: [{ messageId: "store.last", status: "unreviewed" }],
 			nextCursor: Number(input.cursor) === 0 ? 16 : null,
-		});
+		};
+		// The server commits its exact receipt before the response is lost.
+		receipts.set(input.cursor, receipt);
+		if (loseResponse) {
+			loseResponse = false;
+			response.destroy();
+			return;
+		}
+		json(response, receipt);
 	});
 	try {
 		const args = [
@@ -528,9 +542,27 @@ test("task reuse resumes a lost response with the same request key and saves exa
 		];
 		const failed = await f.run(args);
 		assert.equal(failed.code, 1);
+		assert.equal(
+			JSON.parse(
+				await readFile(join(f.directory, "state", "reuse.json"), "utf8"),
+			).cursor,
+			0,
+		);
 		const resumed = ok(await f.run(args));
 		assert.equal(resumed.complete, false);
 		assert.deepEqual(requests[0], requests[1]);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(join(f.directory, "state", "reuse-page-0.json"), "utf8"),
+			),
+			receipts.get(0),
+		);
+		assert.equal(
+			JSON.parse(
+				await readFile(join(f.directory, "state", "reuse.json"), "utf8"),
+			).cursor,
+			16,
+		);
 		assert.deepEqual(
 			JSON.parse(
 				await readFile(
@@ -538,12 +570,30 @@ test("task reuse resumes a lost response with the same request key and saves exa
 					"utf8",
 				),
 			),
-			{ revisions: [{ revisionId: "fresh" }] },
+			{ revisions: [{ revisionId: "fresh" }, { revisionId: "recovered" }] },
 		);
 		const completed = ok(await f.run(args));
 		assert.equal(completed.complete, true);
 		assert.equal(requests[2].cursor, 16);
 		assert.equal(requests[2].clientReuseKey, requests[0].clientReuseKey);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					join(f.directory, "state", "reuse-page-16.json"),
+					"utf8",
+				),
+			),
+			receipts.get(16),
+		);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					join(f.directory, "state", "reuse-handoff-16.json"),
+					"utf8",
+				),
+			),
+			{ revisions: [] },
+		);
 		assert.equal(ok(await f.run(args)).complete, true);
 		assert.equal(requests.length, 3);
 		assert.equal(

@@ -164,6 +164,19 @@ function stableJson(value: unknown): string {
 	return JSON.stringify(value);
 }
 
+/** Explicit authorship reuse requires exact text and all captured metadata,
+ * including descriptions, examples and unknown attributes. Object key order
+ * carries no meaning; array order and absent metadata remain significant. */
+export function completeSourceContractsMatch(
+	left: Pick<CatalogMessage, "value" | "metadata">,
+	right: Pick<CatalogMessage, "value" | "metadata">,
+): boolean {
+	return (
+		left.value === right.value &&
+		stableJson(left.metadata) === stableJson(right.metadata)
+	);
+}
+
 /** Compare the executable portion of two source messages. Source text owns ICU
  * shape; Flutter's placeholder declaration owns runtime type and formatting.
  * Human-facing examples and descriptions do not invalidate reviewed work. */

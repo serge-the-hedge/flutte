@@ -146,7 +146,10 @@ a new key; existing destination work remains protected.
 identify the new exact `revisionId`. Reuse reads the latest source revision, whose
 recorded authorized review must preserve its exact value and blank reason.
 Rejected/pending revisions and edited review output are skipped. Original and
-destination Source must match in text and executable placeholder metadata;
+destination Source must match in exact text and complete message metadata,
+including descriptions, placeholder examples and unknown attributes (object key
+order is ignored). Basic Source name and context are reconstructed from the
+origin's captured source revision and rechecked in the write transaction;
 Snapshot comparisons read immutable complete Catalog Documents (up to 4 MiB).
 If a historical basis cannot be reconstructed exactly (including a retained
 semantic fingerprint that differs from its raw Snapshot text), reuse conservatively

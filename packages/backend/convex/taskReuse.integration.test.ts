@@ -335,7 +335,7 @@ describe("explicit Translation Task authorship reuse", () => {
 		});
 	});
 
-	test("compares the complete executable Source Contract across snapshots and reports source text drift", async () => {
+	test("compares Source text and runtime placeholder declarations across snapshots and reports source text drift", async () => {
 		const f = await setup(2, {
 			m0: "{count} items",
 			"@m0": { placeholders: { count: { type: "int" } } },
@@ -381,6 +381,86 @@ describe("explicit Translation Task authorship reuse", () => {
 			items: [
 				{ messageId: "m0", status: "incompatibleSource" },
 				{ messageId: "m1", status: "incompatibleSource" },
+			],
+		});
+	});
+
+	test("requires complete Snapshot metadata while ignoring object key order", async () => {
+		const f = await setup(7, {
+			m0: "Open",
+			"@m0": { description: "Open a document" },
+			m1: "{count} items",
+			"@m1": { placeholders: { count: { type: "int", example: "2" } } },
+			"@m2": { custom: { placement: "heading", labels: ["a", "b"] } },
+			m3: "{count} items",
+			"@m3": { placeholders: { count: { type: "int", custom: "original" } } },
+			m4: "{count} items",
+			"@m4": {
+				description: "Same",
+				custom: { a: 1, b: 2 },
+				placeholders: { count: { type: "int", example: "2" } },
+			},
+			"@m5": { labels: ["first", "second"] },
+		});
+		const revisions = await f.submit(
+			f.from.taskId,
+			Array.from({ length: 7 }, (_, i) => ({
+				messageId: `m${i}`,
+				value: [1, 3, 4].includes(i) ? "{count} coisas" : "Translated",
+			})),
+		);
+		for (const revision of revisions)
+			await f.owner.mutation(api.agentTranslationProposals.reviewCandidate, {
+				candidateRevisionId: revision.revisionId,
+				decision: { kind: "accept" },
+			});
+		await f.owner.action(api.snapshots.ingest, {
+			projectId: f.projectId,
+			repository: "repo",
+			commit: "metadata-only",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "descendant",
+				mergeBase: "baseline",
+			},
+			files: [
+				{
+					catalogPath: "en.arb",
+					content: JSON.stringify({
+						...f.source,
+						"@m0": { description: "The store is open" },
+						"@m1": { placeholders: { count: { type: "int", example: "3" } } },
+						"@m2": { custom: { placement: "button", labels: ["a", "b"] } },
+						"@m3": {
+							placeholders: { count: { type: "int", custom: "changed" } },
+						},
+						"@m4": {
+							placeholders: { count: { example: "2", type: "int" } },
+							custom: { b: 2, a: 1 },
+							description: "Same",
+						},
+						"@m5": { labels: ["second", "first"] },
+					}),
+				},
+			],
+		});
+		const destination = await f.makeTask("fr");
+		const response = await f.reuse(
+			"metadata",
+			0,
+			f.from.taskId,
+			destination.taskId,
+		);
+		expect(response.status, await response.clone().text()).toBe(200);
+		expect(await response.json()).toMatchObject({
+			items: [
+				{ messageId: "m0", status: "incompatibleSource" },
+				{ messageId: "m1", status: "incompatibleSource" },
+				{ messageId: "m2", status: "incompatibleSource" },
+				{ messageId: "m3", status: "incompatibleSource" },
+				{ messageId: "m4", status: "copied" },
+				{ messageId: "m5", status: "incompatibleSource" },
+				{ messageId: "m6", status: "copied" },
 			],
 		});
 	});
@@ -473,7 +553,7 @@ describe("explicit Translation Task authorship reuse", () => {
 	});
 });
 
-test("Basic reuse preserves plain text and blanks, skips occupied/outside scope, and rejects changed source", async () => {
+test("Basic reuse reconstructs captured source metadata, preserves text and blanks, and rechecks after preparation", async () => {
 	const t = createBackend({ transactionLimits: true });
 	const owner = await authenticatedBackend(t, "basic-reuse");
 	const projectId = await owner.mutation(api.projects.create, {
@@ -499,12 +579,14 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 		expectedMembershipRevision: 1,
 		localeIds: [sourceLocaleId, destinationLocaleId],
 	});
-	for (let i = 0; i < 5; i++)
+	for (let i = 0; i < 9; i++)
 		await owner.mutation(api.managedContent.createMessage, {
 			projectId,
 			collectionId,
 			key: `m${i}`,
 			sourceValue: "Literal {braces}",
+			name: `Name ${i}`,
+			context: "Original context",
 			...(i === 2
 				? {
 						translations: [
@@ -520,8 +602,12 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 			target: { kind: "existingLocale", localeId },
 			scope: { kind: "selectedMessages", messageIds },
 		});
-	const from = await task(sourceLocaleId, ["m0", "m1", "m2", "m3", "m4"]);
-	const to = await task(destinationLocaleId, ["m0", "m1", "m2", "m4"]);
+	const messageIds = Array.from({ length: 9 }, (_, i) => `m${i}`);
+	const from = await task(sourceLocaleId, messageIds);
+	const to = await task(
+		destinationLocaleId,
+		messageIds.filter((id) => id !== "m3"),
+	);
 	const token = await owner.mutation(api.apiTokens.create, {
 		projectId,
 		name: "Author",
@@ -532,7 +618,7 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 		{
 			token: token.token,
 			taskId: from.taskId,
-			messageIds: ["m0", "m1", "m2", "m3", "m4"],
+			messageIds,
 		},
 	);
 	const submitted = await t.mutation(
@@ -558,12 +644,65 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 			candidateRevisionId: revision.revisionId,
 			decision: { kind: "accept" },
 		});
+	const args = {
+		token: token.token,
+		sourceTaskId: from.taskId,
+		destinationTaskId: to.taskId,
+		clientReuseKey: "plain",
+		cursor: 0,
+	};
+	const prepared = await t.query(internal.taskReuse.plan, args);
+	if (prepared.kind !== "plan") throw Error("Expected plan");
 	await owner.mutation(api.managedContent.saveSource, {
 		projectId,
 		collectionId,
 		messageId: "m4",
 		sourceValue: "Changed source",
 		expectedSourceRevision: 1,
+	});
+	for (const [messageId, change] of [
+		["m5", { context: "Changed context" }],
+		["m6", { name: "Changed name" }],
+		["m8", { context: "Temporary context" }],
+	] as const)
+		await owner.mutation(api.managedContent.saveSource, {
+			projectId,
+			collectionId,
+			messageId,
+			sourceValue: "Literal {braces}",
+			expectedSourceRevision: 1,
+			...change,
+		});
+	await owner.mutation(api.managedContent.saveSource, {
+		projectId,
+		collectionId,
+		messageId: "m8",
+		sourceValue: "Literal {braces}",
+		context: "Original context",
+		expectedSourceRevision: 2,
+	});
+	await t.run(async (ctx) => {
+		const history = await ctx.db
+			.query("managedSourceRevisions")
+			.withIndex("by_collectionId_and_messageId_and_sourceRevision", (q) =>
+				q
+					.eq("collectionId", collectionId)
+					.eq("messageId", "m7")
+					.eq("sourceRevision", 1),
+			)
+			.unique();
+		await ctx.db.delete(required(history)._id);
+	});
+	// Prepared flags predate the context edits. The mutation must reconstruct
+	// and compare current Basic source rather than trusting these flags.
+	const committed = await t.mutation(internal.taskReuse.commitPage, {
+		...args,
+		destinationSnapshotId: prepared.destinationSnapshotId,
+		checked: prepared.items.map((item) => ({
+			messageId: item.messageId,
+			originRevisionId: item.revision?._id ?? null,
+			compatible: true,
+		})),
 	});
 	const response = await t.fetch(
 		`/api/agent/v1/translation-tasks/${to.taskId}/reuse`,
@@ -580,13 +719,19 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 		},
 	);
 	expect(response.status, await response.clone().text()).toBe(200);
-	expect(await response.json()).toMatchObject({
+	const receipt = await response.json();
+	expect(receipt).toEqual(committed);
+	expect(receipt).toMatchObject({
 		items: [
 			{ status: "copied" },
 			{ status: "copied" },
 			{ status: "occupiedDestination" },
 			{ status: "outsideDestination" },
 			{ status: "incompatibleSource" },
+			{ status: "incompatibleSource" },
+			{ status: "incompatibleSource" },
+			{ status: "incompatibleSource" },
+			{ status: "copied" },
 		],
 	});
 	const page = await t.query(internal.agentTranslationProposals.taskForAgent, {
@@ -603,6 +748,36 @@ test("Basic reuse preserves plain text and blanks, skips occupied/outside scope,
 		value: "",
 		intentionalBlankReason: "Intentional plain blank",
 		latestReview: null,
+	});
+	// Exercise the action's managed path independently of the saved receipt.
+	const matching = await task(destinationLocaleId, ["m8"]);
+	const matchingPage = await t.fetch(
+		`/api/agent/v1/translation-tasks/${matching.taskId}/reuse`,
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token.token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				sourceTaskId: from.taskId,
+				clientReuseKey: "matching-restored",
+			}),
+		},
+	);
+	expect(matchingPage.status, await matchingPage.clone().text()).toBe(200);
+	expect(await matchingPage.json()).toMatchObject({
+		items: [
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ status: "outsideDestination" },
+			{ messageId: "m8", status: "copied" },
+		],
 	});
 });
 

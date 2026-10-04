@@ -523,7 +523,6 @@ export const listStrings = internalQuery({
 				...item,
 				sourceContract: {
 					messageId: item.messageId,
-					value: item.sourceValue,
 					fingerprint: item.sourceFingerprint,
 					revision: item.sourceRevision,
 					format: "plain" as const,
