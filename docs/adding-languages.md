@@ -19,12 +19,22 @@ path, and explicit Runtime Locale Mapping. For example:
 | `it` | Italian | `packages/brickit_generated/lib/l10n/intl_it.arb` | `it-IT` |
 | `ja` | Japanese | `packages/brickit_generated/lib/l10n/intl_ja.arb` | `ja` |
 | `sr` | Serbian | `packages/brickit_generated/lib/l10n/intl_sr.arb` | `sr-Latn-RS` |
+| `zh-Hant-TW` | Traditional Chinese (Taiwan) | `packages/brickit_generated/lib/l10n/intl_zh_Hant_TW.arb` | `zh-Hant-TW` |
 
 The current adapter targets Brickit’s Flutter repository layout. New ARB files
-must use the Source catalog’s directory. The Flutter adapter introduces
-language-level catalog codes of two or three letters. Runtime mappings can
-include a script and region. Separate regional or script **content variants** need additional catalog-format support;
-do not encode one by changing the runtime mapping alone.
+must use the Source catalog’s directory. Catalog codes have a two- or three-letter
+language base and optional script and region subtags. A script or region variant
+requires its language base catalog to be bound first: introduce `zh` before
+`zh-Hant-TW`. Each content variant has its own code, ARB path, and complete
+translation task. Its runtime mapping must match the language and any script or
+region specified in its catalog code. A language-level catalog can use a more
+specific runtime mapping, such as `sr` with `sr-Latn-RS`.
+
+For the Traditional Chinese example, configure `zh-Hant-TW`; agent discovery
+returns the normalized API code `zh-HANT-TW`, which agents use verbatim for tasks.
+The artifact’s Flutter `@@locale` is `zh_Hant_TW`. Use the Chinese language base
+`zh` with its `Hant` script subtag rather than inventing a language code for the
+script. Changing only a runtime mapping does not create a separate content variant.
 
 In **Translation tasks**, select the configured language and choose **Prepare
 language**. The task pins its source evidence and delivery configuration. Later
@@ -67,6 +77,14 @@ The CLI verifies the artifact and pinned source, writes the configured ARB file,
 registers the explicit runtime mapping, regenerates Flutter output, and creates
 a local review branch. You push, review, and merge that branch under your Git
 identity. Blabla holds no Git credentials.
+
+For script or region variants, the adapter also updates Brickit’s supported
+startup and saved-preference handling to preserve all locale subtags. It accepts
+legacy underscore tags and saves BCP-47 tags, so `zh-Hant-TW` retains its script
+and region after restart. Unrecognized app integration code stops delivery with
+guidance for an explicit integration fix. Verify selection on the intended device
+and saved-preference round-tripping before shipping; artifact readiness alone
+does not establish that the app selects the new locale.
 
 After merging, check out the integration branch and run `blabla sync`. A later
 accepted Baseline can record a **Locale Delivery Observation** only when the
