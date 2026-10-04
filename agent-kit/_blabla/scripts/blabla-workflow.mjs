@@ -163,8 +163,8 @@ async function locked(path, action, waitMs = 0) {
 }
 
 /** Aggregate pacing is shared by all local workers using the same credential.
- * Only 429 (a rejected request) retries automatically. Unknown writes are recovered
- * through task/review reads, never blindly repeated here.
+ * Rate limits and explicit contention on receipt-backed task reuse retry within
+ * a bound. Unknown writes are recovered through task/review reads.
  * @param {Connection} auth */
 function client(auth) {
 	const directory = join(
@@ -224,9 +224,16 @@ function client(auth) {
 					})
 				).value;
 			} catch (error) {
-				if (!(error instanceof Failure) || error.info.status !== 429)
-					throw error;
-				const delay = Math.max(error.info.retryAfterMs ?? 2000, interval);
+				if (!(error instanceof Failure)) throw error;
+				const reuseContention =
+					method === "POST" &&
+					/^\/translation-tasks\/[^/]+\/reuse$/.test(path) &&
+					error.info.status === 503 &&
+					error.info.code === "WRITE_CONTENTION";
+				if (error.info.status !== 429 && !reuseContention) throw error;
+				const delay =
+					Math.max(error.info.retryAfterMs ?? 2000, interval) *
+					(reuseContention ? 2 ** attempt : 1);
 				await locked(
 					join(directory, `${bucket}.lock`),
 					async () => {

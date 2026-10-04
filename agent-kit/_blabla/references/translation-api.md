@@ -142,6 +142,13 @@ retry the exact request after an unknown response. A completed page’s outcomes
 stay fixed even if later review or source changes occur. A new explicit pass needs
 a new key; existing destination work remains protected.
 
+Exhausted database write contention while committing reuse returns HTTP 503 with
+`code: "WRITE_CONTENTION"` and `Retry-After`. The workflow runner retries the exact
+saved key and cursor with increasing delays, at most four attempts using the
+30-second scheduling budget. If it still fails, resume the same state later.
+Application `CONFLICT` errors still require inspecting the changed source or
+task state; other failures are not automatically retried by this rule.
+
 Frozen membership reads are byte bounded, including captured Source and target
 text. Each complete item, its supporting records and its receipt must fit one
 transaction. Extremely large project, token, task, Locale or collection metadata

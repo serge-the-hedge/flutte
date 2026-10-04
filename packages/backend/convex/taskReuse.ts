@@ -775,9 +775,30 @@ export async function reuseTaskPage(
 			compatible,
 		});
 	}
-	return await ctx.runMutation(internal.taskReuse.commitPage, {
-		...args,
-		destinationSnapshotId: page.destinationSnapshotId,
-		checked,
-	});
+	try {
+		return await ctx.runMutation(internal.taskReuse.commitPage, {
+			...args,
+			destinationSnapshotId: page.destinationSnapshotId,
+			checked,
+		});
+	} catch (error) {
+		// Convex exhausts its own OCC retries before throwing this system error.
+		// Only this atomic, receipt-backed commit is safe to classify for replay;
+		// application conflicts and unknown failures keep their original meaning.
+		if (
+			error instanceof Error &&
+			!(error instanceof ConvexError) &&
+			/Documents read from or written to the (?:"[^"\r\n]+" table|table "[^"\r\n]+") changed while this mutation was being run and on every subsequent retry\./.test(
+				error.message,
+			)
+		) {
+			throw new ConvexError({
+				code: "WRITE_CONTENTION",
+				message:
+					"Task reuse is temporarily busy with another write. Resume the same reuse key and cursor after the retry delay.",
+				retryAfter: 1000,
+			});
+		}
+		throw error;
+	}
 }

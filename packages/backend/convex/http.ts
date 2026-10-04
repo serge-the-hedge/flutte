@@ -668,9 +668,11 @@ function routeError(
 					? 429
 					: code === "REPOSITORY_MISMATCH" || code === "CONFLICT"
 						? 409
-						: code === "LIMIT_EXCEEDED"
-							? 413
-							: 400);
+						: code === "WRITE_CONTENTION"
+							? 503
+							: code === "LIMIT_EXCEEDED"
+								? 413
+								: 400);
 	return json(
 		{
 			error: message,
