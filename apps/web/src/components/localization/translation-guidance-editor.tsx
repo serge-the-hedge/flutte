@@ -604,7 +604,6 @@ function SavedVoice({
 			<p className="whitespace-pre-wrap">{guide.text}</p>
 			{guide.examples.map((example, index) => (
 				<dl
-					// biome-ignore lint/suspicious/noArrayIndexKey: Immutable saved examples have no local state.
 					key={`${guide.revisionId}-${index}`}
 					className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
 				>

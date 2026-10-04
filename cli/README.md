@@ -150,15 +150,15 @@ and Brickit's named `supportedLocales` and `supportedLanguageCodes` lists; it
 does not depend on a particular existing language or its position. Unfamiliar
 registration expressions and duplicate runtime mappings stop delivery.
 
-For local CLI development, use Dart **3.13.3**, matching the pinned CI and
+For local CLI development, use Dart **3.13.5**, matching the pinned CI and
 release toolchain. Download that exact version and your platform from the
 [official SDK archive](https://dart.dev/get-dart/archive), verify the archive's
 SHA-256 checksum, and extract it to a versioned directory. Keep this standalone
 SDK separate from Flutter's bundled Dart. For example, with the SDK extracted
-under `~/.local/share/blabla/dart-3.13.3/`, select it for the current shell:
+under `~/.local/share/blabla/dart-3.13.5/`, select it for the current shell:
 
 ```sh
-export PATH="$HOME/.local/share/blabla/dart-3.13.3/dart-sdk/bin:$PATH"
+export PATH="$HOME/.local/share/blabla/dart-3.13.5/dart-sdk/bin:$PATH"
 dart --version
 ```
 
@@ -247,7 +247,7 @@ For normal updates, prefer the published release so everyone gets the same build
 3. Publish a GitHub Release with a new `vX.Y.Z` tag targeting the verified commit
    on `main`. Include the CLI changes since the previous release in its notes.
 4. Wait for **Release CLI** to succeed and attach both platform binaries. It builds
-   the tagged source using Dart 3.13.3 and stamps the tag version into the executable.
+   the tagged source using Dart 3.13.5 and stamps the tag version into the executable.
 5. Run the installer and verify `blabla --version`. Reusing a tag or replacing a
    published release is unnecessary; fixes get a new version.
 

@@ -24,7 +24,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: 3.13.3
+          sdk: 3.13.5
       - working-directory: cli
         run: dart pub get --enforce-lockfile
       - working-directory: cli
