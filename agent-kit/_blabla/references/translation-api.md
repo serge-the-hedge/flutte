@@ -134,7 +134,9 @@ works across the same or different Locale identities and asserts no equivalence.
 ```
 
 Each page scans at most 16 messages in the source task’s frozen scope and returns
-`items` plus numeric `nextCursor` or null. Use one `clientReuseKey` per task pair
+`items` plus numeric `nextCursor` or null. Large values produce smaller pages to
+preserve transaction read/write headroom; the cursor identifies the first
+unprocessed message. Use one `clientReuseKey` per task pair
 and pass the returned cursor unchanged. Page receipts are durable and replayable:
 retry the exact request after an unknown response. A completed page’s outcomes
 stay fixed even if later review or source changes occur. A new explicit pass needs

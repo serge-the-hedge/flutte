@@ -519,7 +519,7 @@ test("task reuse resumes a lost response with the same request key and saves exa
 							},
 						]
 					: [{ messageId: "store.last", status: "unreviewed" }],
-			nextCursor: Number(input.cursor) === 0 ? 16 : null,
+			nextCursor: Number(input.cursor) === 0 ? 3 : null,
 		};
 		// The server commits its exact receipt before the response is lost.
 		receipts.set(input.cursor, receipt);
@@ -561,7 +561,7 @@ test("task reuse resumes a lost response with the same request key and saves exa
 			JSON.parse(
 				await readFile(join(f.directory, "state", "reuse.json"), "utf8"),
 			).cursor,
-			16,
+			3,
 		);
 		assert.deepEqual(
 			JSON.parse(
@@ -574,21 +574,18 @@ test("task reuse resumes a lost response with the same request key and saves exa
 		);
 		const completed = ok(await f.run(args));
 		assert.equal(completed.complete, true);
-		assert.equal(requests[2].cursor, 16);
+		assert.equal(requests[2].cursor, 3);
 		assert.equal(requests[2].clientReuseKey, requests[0].clientReuseKey);
 		assert.deepEqual(
 			JSON.parse(
-				await readFile(
-					join(f.directory, "state", "reuse-page-16.json"),
-					"utf8",
-				),
+				await readFile(join(f.directory, "state", "reuse-page-3.json"), "utf8"),
 			),
-			receipts.get(16),
+			receipts.get(3),
 		);
 		assert.deepEqual(
 			JSON.parse(
 				await readFile(
-					join(f.directory, "state", "reuse-handoff-16.json"),
+					join(f.directory, "state", "reuse-handoff-3.json"),
 					"utf8",
 				),
 			),

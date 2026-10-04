@@ -943,3 +943,187 @@ test("commits a full 16-candidate page within real transaction limits", async ()
 		status: "open",
 	});
 });
+
+test.each([
+	{ count: 16, sourceBytes: 128 * 1024, editedReview: false },
+	{ count: 8, sourceBytes: 256 * 1024, editedReview: true },
+])(
+	"traverses $count large Basic values with $sourceBytes-byte Source and durable bounded receipts",
+	async ({ count, sourceBytes, editedReview }) => {
+		const t = createBackend({ transactionLimits: true });
+		const owner = await authenticatedBackend(t, `reuse-capacity-${count}`);
+		const projectId = await owner.mutation(api.projects.create, {
+			name: "Capacity fixture",
+			type: "basic",
+			sourceLocaleCode: "en",
+			sourceLocaleLabel: "English",
+		});
+		const collectionId = required(
+			(await owner.query(api.projects.get, { projectId })).managedCollectionId,
+		);
+		const fromLocaleId = await owner.mutation(api.locales.create, {
+			projectId,
+			code: "fr",
+		});
+		const toLocaleId = await owner.mutation(api.locales.create, {
+			projectId,
+			code: "de",
+		});
+		await owner.mutation(api.contentCollections.setLocales, {
+			projectId,
+			collectionId,
+			expectedMembershipRevision: 1,
+			localeIds: [fromLocaleId, toLocaleId],
+		});
+		const messageIds = Array.from(
+			{ length: count },
+			(_, index) => `large.${index}`,
+		);
+		const candidateValue = "v".repeat(256 * 1024);
+		for (const key of messageIds)
+			await owner.mutation(api.managedContent.createMessage, {
+				projectId,
+				collectionId,
+				key,
+				name: "n".repeat(256),
+				sourceValue: "s".repeat(sourceBytes),
+				context: "c".repeat(8192),
+			});
+		const task = (localeId: Id<"locales">) =>
+			owner.mutation(api.agentTranslationProposals.createTask, {
+				projectId,
+				title: "Capacity",
+				target: { kind: "existingLocale", localeId },
+				scope: { kind: "selectedMessages", messageIds },
+			});
+		const from = await task(fromLocaleId);
+		const to = await task(toLocaleId);
+		const token = await owner.mutation(api.apiTokens.create, {
+			projectId,
+			name: "Capacity author",
+			scopes: ["read", "propose"],
+		});
+		// Individual ordinary submissions and reviews prove that these payloads are
+		// legal; the maximum-Source case also exercises a review storing value twice.
+		for (const messageId of messageIds) {
+			const [context] = await t.query(
+				internal.agentTranslationProposals.taskSubmissionContext,
+				{ token: token.token, taskId: from.taskId, messageIds: [messageId] },
+			);
+			const submitted = await t.mutation(
+				internal.agentTranslationProposals.submitRevisions,
+				{
+					token: token.token,
+					proposalId: from.taskId,
+					items: [
+						{
+							messageId,
+							localeId: fromLocaleId,
+							value: candidateValue,
+							clientRevisionKey: messageId,
+							expectedCandidateRevision: 0,
+							basis: required(context).basis,
+						},
+					],
+				},
+			);
+			await owner.mutation(api.agentTranslationProposals.reviewCandidate, {
+				candidateRevisionId: required(submitted.revisions[0]).revisionId,
+				decision: editedReview
+					? { kind: "acceptWithEdits", value: candidateValue }
+					: { kind: "accept" },
+			});
+		}
+		const reuse = (cursor: number) =>
+			t.fetch(`/api/agent/v1/translation-tasks/${to.taskId}/reuse`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token.token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					sourceTaskId: from.taskId,
+					clientReuseKey: "capacity",
+					cursor,
+				}),
+			});
+		const visited: string[] = [];
+		const revisionIds = new Set<string>();
+		const receipts = [];
+		let cursor: number | null = 0;
+		while (cursor !== null) {
+			const response = await reuse(cursor);
+			expect(response.status, await response.clone().text()).toBe(200);
+			const receipt: {
+				items: Array<{ messageId: string; status: string; revisionId: string }>;
+				nextCursor: number | null;
+			} = await response.json();
+			expect(receipt.items.length).toBeGreaterThan(0);
+			expect(receipt.items.length).toBeLessThanOrEqual(16);
+			expect(receipt.items.every((item) => item.status === "copied")).toBe(
+				true,
+			);
+			expect(receipt.items.map((item) => item.messageId)).toEqual(
+				messageIds.slice(visited.length, visited.length + receipt.items.length),
+			);
+			visited.push(...receipt.items.map((item) => item.messageId));
+			for (const item of receipt.items) revisionIds.add(item.revisionId);
+			const replay = await reuse(cursor);
+			expect(replay.status, await replay.clone().text()).toBe(200);
+			expect(await replay.json()).toEqual(receipt);
+			receipts.push(receipt);
+			expect(receipt.nextCursor).toBe(
+				visited.length === count ? null : visited.length,
+			);
+			cursor = receipt.nextCursor;
+		}
+		expect(receipts.length).toBeGreaterThan(1);
+		expect(visited).toEqual(messageIds);
+		expect(revisionIds.size).toBe(count);
+		const stored = await t.run(async (ctx) => {
+			const task = await ctx.db.get(to.taskId);
+			const revisions = await ctx.db
+				.query("agentTranslationCandidateRevisions")
+				.withIndex("by_proposal", (q) => q.eq("proposalId", to.taskId))
+				.take(count + 1);
+			const pages = await ctx.db
+				.query("translationTaskReusePages")
+				.withIndex(
+					"by_projectId_and_createdByTokenId_and_clientReuseKey_and_cursor",
+					(q) =>
+						q
+							.eq("projectId", projectId)
+							.eq("createdByTokenId", token.tokenId)
+							.eq("clientReuseKey", "capacity"),
+				)
+				.take(count + 1);
+			return {
+				task,
+				revisions: revisions.map((revision) => ({
+					valueMatches: revision.value === candidateValue,
+					revision: revision.revision,
+					sourceRevision:
+						revision.basis.kind === "managed"
+							? revision.basis.sourceRevision
+							: null,
+					origin: revision.reusedFrom,
+				})),
+				receipts: pages.map((page) => page.result),
+			};
+		});
+		expect(stored.task).toMatchObject({
+			candidateCount: count,
+			revisionCount: count,
+			status: "open",
+		});
+		expect(stored.revisions).toHaveLength(count);
+		for (const revision of stored.revisions)
+			expect(revision).toMatchObject({
+				valueMatches: true,
+				revision: 1,
+				sourceRevision: 1,
+				origin: { taskId: from.taskId },
+			});
+		expect(stored.receipts).toEqual(receipts);
+	},
+);

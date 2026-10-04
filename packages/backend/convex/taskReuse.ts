@@ -38,6 +38,13 @@ type ReadCtx = QueryCtx | MutationCtx;
 type Task = Doc<"agentTranslationProposals">;
 type Outcome = Infer<typeof reuseOutcome>;
 
+// One item can reread 256 KiB origin/source values through ordinary submission,
+// a 512 KiB edited review, and workspace overlays. Reserve half the 16 MiB read
+// budget (well above those repeated payloads) plus write/receipt headroom before
+// starting another item. Small values still share a full 16-item transaction.
+const NEXT_ITEM_READ_RESERVE = 8 * 1024 * 1024;
+const NEXT_ITEM_WRITE_RESERVE = 1024 * 1024;
+
 function fail(code: string, message: string): never {
 	throw new ConvexError({ code, message });
 }
@@ -194,6 +201,7 @@ async function frozenSourcePage(ctx: ReadCtx, source: Task, cursor: number) {
 			.take(17);
 		return {
 			messages: rows.slice(0, 16).map((row) => row.messageId),
+			catalogIndices: rows.slice(0, 16).map((row) => row.catalogIndex),
 			nextCursor: rows[16]?.catalogIndex ?? null,
 		};
 	}
@@ -223,6 +231,7 @@ async function frozenSourcePage(ctx: ReadCtx, source: Task, cursor: number) {
 		.take(17);
 	return {
 		messages: rows.slice(0, 16).map((row) => row.messageId),
+		catalogIndices: rows.slice(0, 16).map((row) => row.catalogIndex),
 		nextCursor: rows[16]?.catalogIndex ?? null,
 	};
 }
@@ -344,7 +353,7 @@ export const writeCandidate = internalMutation({
 	},
 });
 
-/** The whole bounded page and its receipt commit atomically. Immutable document
+/** The consumed prefix and its receipt commit atomically. Immutable document
  * comparison happens in the action; the transaction rechecks every mutable fact. */
 export const commitPage = internalMutation({
 	args: {
@@ -366,7 +375,19 @@ export const commitPage = internalMutation({
 		)
 			fail("CONFLICT", "Source scope changed while preparing reuse.");
 		const items: Outcome[] = [];
-		for (const checked of args.checked) {
+		let nextCursor = page.nextCursor;
+		for (const [index, checked] of args.checked.entries()) {
+			const metrics = await ctx.meta.getTransactionMetrics();
+			if (
+				index > 0 &&
+				(metrics.bytesRead.remaining < NEXT_ITEM_READ_RESERVE ||
+					metrics.bytesWritten.remaining < NEXT_ITEM_WRITE_RESERVE)
+			) {
+				// Membership was checked for the entire prepared page. Commit only
+				// its consumed prefix and resume at this exact frozen catalog index.
+				nextCursor = page.catalogIndices[index] ?? null;
+				break;
+			}
 			const messageId = checked.messageId;
 			const sourceCandidate = await candidateFor(ctx, source, messageId);
 			const origin = sourceCandidate?.latestRevisionId
@@ -574,7 +595,7 @@ export const commitPage = internalMutation({
 			destinationTaskId: destination._id,
 			clientReuseKey: args.clientReuseKey,
 			items,
-			nextCursor: page.nextCursor,
+			nextCursor,
 		};
 		await ctx.db.insert("translationTaskReusePages", {
 			projectId: token.projectId,
