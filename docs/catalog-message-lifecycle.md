@@ -191,6 +191,10 @@ may precede the delivery in a separate commit on that branch; it changes no
 catalog values or review evidence. Git review, push, merge, and application release remain developer
 or application-CI actions.
 
+Combined delivery also checks the final Source catalog against the new Locale's
+pinned Source. A Release Delta that changes Source cannot carry along an artifact
+reviewed against the older Source, even when its placeholder signature is unchanged.
+
 Returning to previously confirmed target bytes makes the historical affirmation
 relevant again, but does not transfer it across Source Contracts. The value is
 settled only when a decision matches both its current content and current Source

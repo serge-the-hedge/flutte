@@ -143,6 +143,9 @@ any remaining prepared tasks against the current Baseline before delivering
 them. A ready existing-Locale release can include one new language pinned to
 the release’s same Baseline Snapshot, using the Release screen’s optional
 language selector or `deliver --release <id> --locale-proposal <proposal-id>`.
+The Release Delta must leave the proposal's Source catalog unchanged. A pending
+Source edit needs a proposal reviewed against that updated Source before the two
+can be delivered together; matching placeholders alone are insufficient.
 
 The working catalog no longer has a 10- or 16-language ceiling. Ingestion
 processes bounded groups of keys. Strings defaults to all active, bound languages

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'command_runner.dart';
@@ -260,6 +261,30 @@ class ReleaseRepositoryAdapter {
         inputFiles,
       );
       _validateDelivery(summary, delivery);
+      if (localeArtifact != null) {
+        // The checkout check proves the input matches the proposal's Source.
+        // The Release Delta can itself change it without changing placeholders.
+        final sourcePath = localeArtifact.sourceSnapshot.catalogPath;
+        final sourceBefore = await (await _regularFile(
+          staging.root,
+          sourcePath,
+        )).readAsBytes();
+        final sourceAfter = utf8.encode(
+          delivery.files
+              .singleWhere((file) => file.catalogPath == sourcePath)
+              .content,
+        );
+        final sourceUnchanged =
+            sourceBefore.length == sourceAfter.length &&
+            sourceBefore.indexed.every(
+              (entry) => entry.$2 == sourceAfter[entry.$1],
+            );
+        if (!sourceUnchanged) {
+          throw RepositoryAdapterException(
+            'The Release changes the Source catalog used to review this Locale Proposal. Prepare and review a proposal against the updated Source before combining them. No local branch was created.',
+          );
+        }
+      }
       if (delivery.applied.isEmpty && localeArtifact == null) {
         final detail = delivery.skipped.isEmpty
             ? 'The Release Bundle contains no applicable catalog changes.'

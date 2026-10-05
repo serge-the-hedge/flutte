@@ -83,6 +83,9 @@ For combined delivery it validates that both immutable artifacts share the
 same repository, Baseline/Source Snapshot, and integration branch; applies the
 reviewed Release Delta; and adds the complete configured Catalog Document. Flutter generation
 runs first to assess the existing generated output and again over the combined candidate.
+The final Source catalog must still match the new Locale's reviewed Source.
+A Release Delta that changes Source cannot be combined with a proposal reviewed
+against the earlier Source; delivery stops before creating a local branch.
 Blabla supplies the catalog bytes and provenance; the adapter owns only local
 Git and Flutter toolchain I/O.
 
