@@ -620,13 +620,6 @@ export async function applyAgentTargetValue(
 	const isIntentionalBlank = input.intentionalBlankReason !== undefined;
 	const intentionalBlankReason = input.intentionalBlankReason;
 	if (isIntentionalBlank) {
-		if (effectiveSource.value.length === 0) {
-			throw new ConvexError({
-				code: "VALIDATION",
-				message:
-					"An Intentional Blank is only meaningful for a non-empty source value.",
-			});
-		}
 		if (intentionalBlankReason === undefined) {
 			throw new ConvexError({
 				code: "VALIDATION",
@@ -1077,13 +1070,6 @@ async function commitCatalogWorkspaceValue(
 		};
 	}
 
-	if (effectiveSource.value.length === 0) {
-		throw new ConvexError({
-			code: "VALIDATION",
-			message:
-				"An Intentional Blank is only meaningful for a non-empty source value.",
-		});
-	}
 	const reason = assertIntentionalBlankReason(args.intent.reason);
 	const nextRevision = (head?.revision ?? 0) + 1;
 	const valueFingerprint = await sha256Hex("");

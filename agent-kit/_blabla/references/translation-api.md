@@ -118,7 +118,9 @@ basis create a new immutable revision, even if the text is unchanged. The server
 resolves task-owned evidence.
 
 Candidates remain inert until authorized review. Intentional Blanks require a
-reason and individual review; they cannot use exact-batch acceptance. Human
+reason and individual review, including when the Source itself is empty; an empty
+Source never supplies a target decision automatically. They cannot use exact-batch
+acceptance. Human
 review behavior is defined in the [review contract](https://github.com/serge-the-hedge/flutte/blob/main/docs/catalog-message-lifecycle.md).
 
 ### `POST /translation-tasks/:destinationId/reuse`
