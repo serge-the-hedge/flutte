@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, type Infer, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -99,7 +99,11 @@ import {
 	supportsRestoreProposalMessageId,
 } from "./restoreProposals";
 import { sourceProposalSetRevision } from "./sourceProposalState";
-import { readSyncSummary, sourceSyncSummary } from "./syncSummary";
+import {
+	readSyncSummary,
+	sourceSyncSummary,
+	syncSummaryValidator,
+} from "./syncSummary";
 import {
 	translationResidueBatches,
 	translationResidueEnvelope,
@@ -142,14 +146,15 @@ type StoredUnboundSnapshotFile = Omit<UnboundSnapshotFile, "content"> & {
 	byteLength: number;
 };
 
-type IngestionResult = {
-	runId: Id<"snapshotIngestionRuns">;
-	snapshotId: Id<"sourceSnapshots"> | null;
-	reused: boolean;
-	publishedProjection: boolean;
-	needsProjection: boolean;
-	advancedBaseline: boolean;
-};
+const ingestionResultValidator = v.object({
+	runId: v.id("snapshotIngestionRuns"),
+	snapshotId: v.union(v.id("sourceSnapshots"), v.null()),
+	reused: v.boolean(),
+	publishedProjection: v.boolean(),
+	needsProjection: v.boolean(),
+	advancedBaseline: v.boolean(),
+});
+type IngestionResult = Infer<typeof ingestionResultValidator>;
 
 const diagnosticValidator = v.object({
 	catalogPath: v.optional(v.string()),
@@ -450,6 +455,40 @@ export const repositoryAdapterContext = internalQuery({
 		projectId: v.id("projects"),
 		actor: repositoryAdapterActorValidator,
 	},
+	returns: v.object({
+		version: v.number(),
+		supportsPreviewSnapshots: v.boolean(),
+		integrationBranch: v.string(),
+		canSubmit: v.boolean(),
+		setupIssues: v.array(v.string()),
+		repository: v.union(v.string(), v.null()),
+		bindings: v.array(
+			v.object({
+				localeCode: v.string(),
+				catalogPath: v.string(),
+				isSource: v.boolean(),
+			}),
+		),
+		baseline: v.union(
+			v.object({
+				id: v.id("sourceSnapshots"),
+				repository: v.string(),
+				commit: v.string(),
+				manifestHash: v.string(),
+				kind: v.union(v.literal("baseline"), v.literal("preview")),
+			}),
+			v.null(),
+		),
+		limits: v.object({
+			maxFiles: v.number(),
+			maxBytes: v.number(),
+			maxFileBytes: v.number(),
+			uploadProtocol: v.literal("file-manifest-v1"),
+			maxBoundLocales: v.number(),
+			maxWorkingCatalogRows: v.number(),
+			maxWorkingCatalogBytes: v.number(),
+		}),
+	}),
 	handler: async (ctx, args) => {
 		await authorizeIngestion(ctx, args.projectId, args.actor);
 		const project = await ctx.db.get(args.projectId);
@@ -520,6 +559,7 @@ export const repositoryAdapterContext = internalQuery({
 			);
 		return {
 			version: 1,
+			supportsPreviewSnapshots: true,
 			integrationBranch:
 				project.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH,
 			canSubmit: setupIssues.length === 0,
@@ -543,7 +583,7 @@ export const repositoryAdapterContext = internalQuery({
 				maxFiles: MAX_SNAPSHOT_FILES,
 				maxBytes: MAX_SNAPSHOT_BYTES,
 				maxFileBytes: MAX_SNAPSHOT_BYTES,
-				uploadProtocol: "file-manifest-v1",
+				uploadProtocol: "file-manifest-v1" as const,
 				maxBoundLocales: MAX_PROJECTED_LOCALES,
 				maxWorkingCatalogRows: MAX_WORKING_CATALOG_ROWS,
 				maxWorkingCatalogBytes: MAX_WORKING_CATALOG_BYTES,
@@ -581,9 +621,22 @@ type Identity = {
 	commit: string;
 	manifestHash: string;
 	lineage?: Lineage;
+	previewOnly?: boolean;
 	projectionId?: Id<"catalogProjections">;
 	actor?: RepositoryAdapterActor;
 };
+
+function assertAdapterRepository(project: Doc<"projects">, identity: Identity) {
+	if (
+		identity.actor?.kind === "repositoryAdapter" &&
+		project.repository !== undefined &&
+		project.repository !== identity.repository
+	)
+		throw new ConvexError({
+			code: "REPOSITORY_MISMATCH",
+			message: `This project is already connected to ${project.repository}; sync the matching checkout.`,
+		});
+}
 
 type StagedProjection = {
 	projectionId: Id<"catalogProjections">;
@@ -601,6 +654,7 @@ type IngestArgs = {
 	commit: string;
 	files: SubmittedFile[];
 	lineage?: Lineage;
+	previewOnly?: boolean;
 	actor?: RepositoryAdapterActor;
 };
 
@@ -910,6 +964,7 @@ async function reuseExistingSnapshot(
 	project: Doc<"projects">,
 	run: Doc<"snapshotIngestionRuns">,
 ): Promise<IngestionResult> {
+	assertAdapterRepository(project, identity);
 	if (!run.snapshotId) {
 		throw new ConvexError({
 			code: "INTEGRITY",
@@ -928,6 +983,17 @@ async function reuseExistingSnapshot(
 			code: "INTEGRITY",
 			message: "A successful ingestion run points outside its project.",
 		});
+	}
+	// Reusing accepted evidence must not repair, promote or rewrite its lineage.
+	if (identity.previewOnly) {
+		return {
+			runId: run._id,
+			snapshotId: snapshot._id,
+			reused: true,
+			publishedProjection: false,
+			needsProjection: false,
+			advancedBaseline: false,
+		};
 	}
 	const baseline = await baselineFor(ctx, project);
 	const isCurrentBaseline = project.baselineSnapshotId === snapshot._id;
@@ -968,6 +1034,16 @@ async function reuseExistingSnapshot(
 		advancesBaseline: shouldAdvance,
 		timestamp: now(),
 	});
+	// A bootstrap preview deliberately did not connect the project. Its later
+	// normal publication owns setup just as a fresh normal ingestion would.
+	if (
+		identity.actor?.kind === "repositoryAdapter" &&
+		project.repository === undefined
+	)
+		await ctx.db.patch(project._id, {
+			repository: identity.repository,
+			updatedAt: now(),
+		});
 	return {
 		runId: run._id,
 		snapshotId: snapshot._id,
@@ -985,8 +1061,10 @@ export const shouldStageProjection = internalQuery({
 	args: {
 		projectId: v.id("projects"),
 		lineage: v.optional(lineageValidator),
+		previewOnly: v.optional(v.boolean()),
 		actor: v.optional(repositoryAdapterActorValidator),
 	},
+	returns: v.boolean(),
 	handler: async (ctx, args): Promise<boolean> => {
 		await authorizeIngestion(ctx, args.projectId, args.actor);
 		const project = await ctx.db.get(args.projectId);
@@ -996,6 +1074,7 @@ export const shouldStageProjection = internalQuery({
 				message: "Project not found.",
 			});
 		}
+		if (args.previewOnly) return false;
 		if (!project.baselineSnapshotId) return true;
 		const baseline = await ctx.db.get(project.baselineSnapshotId);
 		return baseline !== null && advancesBaseline(baseline, args.lineage);
@@ -1015,8 +1094,10 @@ export const reusePublished = internalMutation({
 		manifestHash: v.string(),
 		lineage: v.optional(lineageValidator),
 		projectionId: v.optional(v.id("catalogProjections")),
+		previewOnly: v.optional(v.boolean()),
 		actor: v.optional(repositoryAdapterActorValidator),
 	},
+	returns: v.union(ingestionResultValidator, v.null()),
 	handler: async (ctx, args): Promise<IngestionResult | null> => {
 		await authorizeIngestion(ctx, args.projectId, args.actor);
 		const run = await findRun(ctx, args);
@@ -1181,6 +1262,7 @@ export const finalizeIngestion = internalMutation({
 		manifestHash: v.string(),
 		lineage: v.optional(lineageValidator),
 		projectionId: v.optional(v.id("catalogProjections")),
+		previewOnly: v.optional(v.boolean()),
 		actor: v.optional(repositoryAdapterActorValidator),
 		diagnostics: v.array(diagnosticValidator),
 		absentTargetLocales: v.array(absentTargetLocaleValidator),
@@ -1196,6 +1278,7 @@ export const finalizeIngestion = internalMutation({
 			}),
 		),
 	},
+	returns: ingestionResultValidator,
 	handler: async (ctx, args): Promise<IngestionResult> => {
 		const createdBy = await authorizeIngestion(ctx, args.projectId, args.actor);
 		const project = await ctx.db.get(args.projectId);
@@ -1205,16 +1288,12 @@ export const finalizeIngestion = internalMutation({
 				message: "Project not found.",
 			});
 		}
-		if (
-			args.actor?.kind === "repositoryAdapter" &&
-			project.repository !== undefined &&
-			project.repository !== args.repository
-		) {
+		assertAdapterRepository(project, args);
+		if (args.previewOnly && args.projectionId)
 			throw new ConvexError({
-				code: "REPOSITORY_MISMATCH",
-				message: `This project is already connected to ${project.repository}; sync the matching checkout.`,
+				code: "VALIDATION",
+				message: "A preview-only capture cannot publish a catalog projection.",
 			});
-		}
 		const existing = await findRun(ctx, args);
 		if (existing?.status === "succeeded") {
 			return await reuseExistingSnapshot(ctx, args, project, existing);
@@ -1255,6 +1334,7 @@ export const finalizeIngestion = internalMutation({
 		// fact. It remains a Preview and can safely resume through the immutable
 		// evidence path; it must never advance without a projection.
 		const publishesBaseline =
+			!args.previewOnly &&
 			!failed &&
 			args.projectionId !== undefined &&
 			advancesBaseline(baseline, args.lineage);
@@ -1273,6 +1353,7 @@ export const finalizeIngestion = internalMutation({
 				});
 		if (
 			!failed &&
+			!args.previewOnly &&
 			args.actor?.kind === "repositoryAdapter" &&
 			project.repository === undefined
 		) {
@@ -2741,7 +2822,7 @@ async function resolveProjectionNeed(
 	identity: Identity,
 	result: IngestionResult,
 ): Promise<IngestionResult> {
-	if (!result.needsProjection) return result;
+	if (identity.previewOnly || !result.needsProjection) return result;
 	if (!result.snapshotId) {
 		throw new ConvexError({
 			code: "INTEGRITY",
@@ -2824,6 +2905,7 @@ async function ingestSnapshot(
 		commit: args.commit,
 		manifestHash: await hashManifest(args.files),
 		lineage: args.lineage,
+		previewOnly: args.previewOnly,
 		actor: args.actor,
 	};
 	const reused: IngestionResult | null = await ctx.runMutation(
@@ -2881,6 +2963,7 @@ async function ingestSnapshot(
 			{
 				projectId: args.projectId,
 				lineage: args.lineage,
+				previewOnly: args.previewOnly,
 				actor: args.actor,
 			},
 		);
@@ -3010,8 +3093,43 @@ export const repositoryAdapterReceipt = internalQuery({
 	args: {
 		runId: v.id("snapshotIngestionRuns"),
 		reused: v.optional(v.boolean()),
+		previewOnly: v.optional(v.boolean()),
 		actor: repositoryAdapterActorValidator,
 	},
+	returns: v.object({
+		version: v.number(),
+		previewOnly: v.boolean(),
+		syncUrl: v.union(v.string(), v.null()),
+		run: v.object({
+			id: v.id("snapshotIngestionRuns"),
+			commit: v.string(),
+			snapshotKind: v.union(
+				v.literal("baseline"),
+				v.literal("preview"),
+				v.null(),
+			),
+			summary: v.union(
+				syncSummaryValidator.extend({
+					outcome: v.union(v.literal("initial"), v.literal("updated")),
+				}),
+				v.null(),
+			),
+			reused: v.boolean(),
+			status: v.union(v.literal("succeeded"), v.literal("failed")),
+			snapshotId: v.union(v.id("sourceSnapshots"), v.null()),
+			diagnosticCount: v.number(),
+			diagnostics: v.array(diagnosticValidator),
+			unboundLocaleFileCount: v.number(),
+			unboundLocaleFiles: v.array(
+				v.object({
+					catalogPath: v.string(),
+					declaredLocaleCode: v.union(v.string(), v.null()),
+					messageCount: v.union(v.number(), v.null()),
+				}),
+			),
+			absentTargetLocaleCount: v.number(),
+		}),
+	}),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
 		if (!run) {
@@ -3079,10 +3197,12 @@ export const repositoryAdapterReceipt = internalQuery({
 
 		return {
 			version: 1,
+			previewOnly: args.previewOnly ?? false,
 			syncUrl,
 			run: {
 				id: run._id,
 				...(await readSyncSummary(ctx, run)),
+				...(args.previewOnly ? { summary: null } : {}),
 				reused: args.reused ?? false,
 				status: run.status,
 				snapshotId: run.snapshotId ?? null,
@@ -3803,6 +3923,7 @@ export async function ingestUploadedSnapshot(
 		repository: args.repository,
 		commit: args.commit,
 		lineage: args.lineage,
+		previewOnly: args.previewOnly,
 		actor: args.actor,
 		manifestHash: bytesToHex(manifest.digest()),
 	};
@@ -3869,7 +3990,12 @@ export async function ingestUploadedSnapshot(
 	try {
 		const shouldStage: boolean = await ctx.runQuery(
 			internal.snapshots.shouldStageProjection,
-			{ projectId: args.projectId, lineage: args.lineage, actor: args.actor },
+			{
+				projectId: args.projectId,
+				lineage: args.lineage,
+				previewOnly: args.previewOnly,
+				actor: args.actor,
+			},
 		);
 		if (shouldStage)
 			stagedProjection = await stageProjection(

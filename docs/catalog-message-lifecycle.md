@@ -89,6 +89,9 @@ work remains unresolved.
 
 Preview Snapshots support provisional work but never create introductions,
 advance the Baseline, or establish delivery truth.
+`blabla sync --preview` explicitly captures a committed local branch under this
+rule, even when its commit descends from the Baseline. The operation remains
+preview-only through retries; a separate ordinary sync owns later publication.
 
 ## Human and agent decisions
 

@@ -87,6 +87,7 @@ export const begin = internalMutation({
 		projectId: v.id("projects"),
 		tokenId: v.id("apiTokens"),
 		releaseRecordId: v.optional(v.id("releaseRecords")),
+		previewOnly: v.optional(v.boolean()),
 		repository: v.string(),
 		commit: v.string(),
 		expectedFiles: v.number(),
@@ -102,7 +103,17 @@ export const begin = internalMutation({
 			}),
 		),
 	},
+	returns: v.object({
+		sessionId: v.id("snapshotUploadSessions"),
+		maxFileBytes: v.number(),
+		previewOnly: v.boolean(),
+	}),
 	handler: async (ctx, args) => {
+		if (args.previewOnly && args.releaseRecordId)
+			throw new ConvexError({
+				code: "VALIDATION",
+				message: "A Release delivery upload cannot be preview-only.",
+			});
 		if (args.releaseRecordId) {
 			const token = await ctx.db.get(args.tokenId);
 			const record = await ctx.db.get(args.releaseRecordId);
@@ -145,6 +156,7 @@ export const begin = internalMutation({
 			});
 		const sessionId = await ctx.db.insert("snapshotUploadSessions", {
 			...args,
+			previewOnly: args.previewOnly ?? false,
 			uploadedFiles: 0,
 			status: "uploading",
 			createdAt: Date.now(),
@@ -155,7 +167,11 @@ export const begin = internalMutation({
 			internal.snapshotUploads.cleanup,
 			{ sessionId },
 		);
-		return { sessionId, maxFileBytes: MAX_UPLOAD_FILE_BYTES };
+		return {
+			sessionId,
+			maxFileBytes: MAX_UPLOAD_FILE_BYTES,
+			previewOnly: args.previewOnly ?? false,
+		};
 	},
 });
 
@@ -663,6 +679,7 @@ export const processFinalization = internalAction({
 				repository: session.repository,
 				commit: session.commit,
 				lineage: session.lineage,
+				previewOnly: session.previewOnly,
 				actor,
 				files,
 				reportProgress,
@@ -694,6 +711,7 @@ export async function finalizationStatus(
 	if (session.runId) {
 		const actor = { kind: "repositoryAdapter" as const, id: args.tokenId };
 		return await ctx.runQuery(internal.snapshots.repositoryAdapterReceipt, {
+			previewOnly: session.previewOnly,
 			runId: session.runId,
 			reused: session.resultReused ?? false,
 			actor,
@@ -701,6 +719,7 @@ export async function finalizationStatus(
 	}
 	return {
 		version: 2,
+		previewOnly: session.previewOnly ?? false,
 		finalization: {
 			sessionId: session._id,
 			status:
@@ -768,6 +787,7 @@ export async function finalizeUpload(
 	const actor = { kind: "repositoryAdapter" as const, id: args.tokenId };
 	if (session.runId)
 		return await ctx.runQuery(internal.snapshots.repositoryAdapterReceipt, {
+			previewOnly: session.previewOnly,
 			runId: session.runId,
 			reused: session.resultReused ?? true,
 			actor,
@@ -778,6 +798,7 @@ export async function finalizeUpload(
 			repository: session.repository,
 			commit: session.commit,
 			lineage: session.lineage,
+			previewOnly: session.previewOnly,
 			actor,
 			files,
 		});
@@ -787,6 +808,7 @@ export async function finalizeUpload(
 			resultReused: result.reused,
 		});
 		return await ctx.runQuery(internal.snapshots.repositoryAdapterReceipt, {
+			previewOnly: session.previewOnly,
 			runId: result.runId,
 			reused: result.reused,
 			actor,

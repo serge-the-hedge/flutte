@@ -10,18 +10,33 @@ import 'package:test/test.dart';
 import '../bin/blabla.dart' show runCli;
 
 void main() {
-  for (final succeeded in [false, true]) {
+  for (final (succeeded, previewOnly) in [
+    (false, false),
+    (true, false),
+    (true, true),
+  ]) {
     test(
-      'sync CLI exits ${succeeded ? 0 : 1} for a ${succeeded ? 'published' : 'failed'} run',
+      'sync CLI exits ${succeeded ? 0 : 1} for ${previewOnly
+          ? 'explicit preview'
+          : succeeded
+          ? 'published'
+          : 'failed'} capture',
       () async {
         final fixture = await SyncFixture.create();
         addTearDown(fixture.dispose);
+        if (previewOnly) {
+          await fixture.git(['switch', '-c', 'feature/localization']);
+        }
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(server.close);
         final output = <String>[];
         final diagnostics = <String>[];
         server.listen((request) async {
-          await request.drain<void>();
+          final requestBody = await utf8.decoder.bind(request).join();
+          if (request.uri.path.endsWith('/snapshot-uploads')) {
+            final body = jsonDecode(requestBody) as Map<String, Object?>;
+            expect(body['previewOnly'], previewOnly ? true : isNull);
+          }
           request.response.headers.contentType = ContentType.json;
           request.response.write(
             jsonEncode(
@@ -29,6 +44,7 @@ void main() {
                   ? {
                       'version': 1,
                       'canSubmit': true,
+                      'supportsPreviewSnapshots': true,
                       'setupIssues': [],
                       'repository': null,
                       'integrationBranch': 'develop',
@@ -44,11 +60,16 @@ void main() {
                       'limits': {'maxFiles': 1000, 'maxBytes': 8388608},
                     }
                   : request.uri.path.endsWith('/snapshot-uploads')
-                  ? {'sessionId': 'upload_1', 'maxFileBytes': 8388608}
+                  ? {
+                      'sessionId': 'upload_1',
+                      'maxFileBytes': 8388608,
+                      'previewOnly': previewOnly,
+                    }
                   : request.uri.path.endsWith('/file')
                   ? {}
                   : {
                       'version': 1,
+                      'previewOnly': previewOnly,
                       'syncUrl':
                           'https://blabla.example/projects/project_1/sync#discovered-catalogs',
                       'run': {
@@ -91,6 +112,7 @@ void main() {
         final code = await runCli(
           [
             'sync',
+            if (previewOnly) '--preview',
             '--checkout',
             fixture.root.path,
             '--server',
@@ -106,12 +128,34 @@ void main() {
         expect(diagnostics, contains('Uploading catalogs: 3/3'));
         expect(
           diagnostics,
-          contains('Waiting for Blabla to validate and apply the snapshot…'),
+          contains(
+            previewOnly
+                ? 'Waiting for Blabla to validate and save the preview…'
+                : 'Waiting for Blabla to validate and apply the snapshot…',
+          ),
         );
         expect(code, succeeded ? 0 : 1);
         if (!succeeded)
           expect(diagnostics.join('\n'), contains('Catalog rejected'));
-        if (succeeded) {
+        if (succeeded && previewOnly) {
+          expect(output.join('\n'), contains('Preview captured'));
+          expect(output, contains('Source Snapshot: snapshot_1'));
+          expect(output.join('\n'), contains('accepted catalog is unchanged'));
+          expect(output.join('\n'), isNot(contains('120 keys')));
+          expect(
+            output.join('\n'),
+            isNot(contains('Translation values changed')),
+          );
+          expect(
+            output.join('\n'),
+            isNot(contains('Discovered catalog files')),
+          );
+          expect(
+            await fixture.git(['branch', '--show-current']),
+            'feature/localization',
+          );
+          expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        } else if (succeeded) {
           expect(output, contains('120 keys in the accepted catalog.'));
           expect(output, contains('Keys: 3 new, 2 source changed, 1 removed.'));
           expect(output, contains('Translation values changed: 7.'));
@@ -493,6 +537,74 @@ void main() {
     expect(gateway.commit, isNull);
   });
 
+  test('refuses preview capture when the server lacks support', () async {
+    final fixture = await SyncFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.git(['switch', '-c', 'feature/localization']);
+    final gateway = RecordingSnapshotGateway(_syncContext());
+
+    await expectLater(
+      RepositorySyncAdapter().sync(
+        checkout: fixture.root,
+        gateway: gateway,
+        previewOnly: true,
+        write: (_) {},
+      ),
+      throwsA(
+        isA<RepositoryAdapterException>().having(
+          (error) => error.message,
+          'message',
+          contains('does not support preview snapshots'),
+        ),
+      ),
+    );
+    expect(gateway.commit, isNull);
+  });
+
+  test(
+    'requires preview acknowledgment before uploading any catalog',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final requests = <String>[];
+      server.listen((request) async {
+        requests.add(request.uri.path);
+        final body =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, Object?>;
+        expect(body['previewOnly'], isTrue);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({'sessionId': 'upload_1', 'maxFileBytes': 8388608}),
+        );
+        await request.response.close();
+      });
+      final gateway = HttpSnapshotSyncGateway(
+        baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+        token: 'test-token',
+      );
+
+      await expectLater(
+        gateway.submit(
+          repository: 'repo',
+          commit: 'commit',
+          files: const [
+            SnapshotFile(catalogPath: 'intl_en.arb', content: '{}'),
+          ],
+          previewOnly: true,
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            contains('No catalogs were uploaded'),
+          ),
+        ),
+      );
+      expect(requests, ['/api/repository-adapter/v1/snapshot-uploads']);
+    },
+  );
+
   test(
     'refuses a modified bound catalog instead of mislabeling its bytes',
     () async {
@@ -671,54 +783,66 @@ void main() {
     expect(gateway.commit, isNull);
   });
 
-  test('derives descendant lineage from local Git history', () async {
-    final fixture = await SyncFixture.create();
-    addTearDown(fixture.dispose);
-    final baseline = await fixture.git(['rev-parse', 'HEAD']);
-    await fixture.write(
-      'packages/brickit_generated/lib/l10n/intl_en.arb',
-      '{"@@locale":"en","greeting":"Hello again"}',
-    );
-    await fixture.git(['add', '.']);
-    await fixture.git(['commit', '-m', 'next catalog']);
-    final current = await fixture.git(['rev-parse', 'HEAD']);
-    final gateway = RecordingSnapshotGateway(
-      SnapshotSyncContext(
-        version: 1,
-        canSubmit: true,
-        setupIssues: const [],
-        repository: 'github.com/brickit-app/brickit-flutter',
-        bindings: const [
-          SnapshotBinding(
-            localeCode: 'en',
-            catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
-            isSource: true,
+  for (final previewOnly in [false, true]) {
+    test(
+      'keeps truthful descendant lineage in ${previewOnly ? 'preview' : 'normal'} capture',
+      () async {
+        final fixture = await SyncFixture.create();
+        addTearDown(fixture.dispose);
+        final baseline = await fixture.git(['rev-parse', 'HEAD']);
+        if (previewOnly)
+          await fixture.git(['switch', '-c', 'feature/localization']);
+        await fixture.write(
+          'packages/brickit_generated/lib/l10n/intl_en.arb',
+          '{"@@locale":"en","greeting":"Hello again"}',
+        );
+        await fixture.git(['add', '.']);
+        await fixture.git(['commit', '-m', 'next catalog']);
+        final current = await fixture.git(['rev-parse', 'HEAD']);
+        final gateway = RecordingSnapshotGateway(
+          SnapshotSyncContext(
+            version: 1,
+            canSubmit: true,
+            supportsPreviewSnapshots: true,
+            setupIssues: const [],
+            repository: 'github.com/brickit-app/brickit-flutter',
+            bindings: const [
+              SnapshotBinding(
+                localeCode: 'en',
+                catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
+                isSource: true,
+              ),
+            ],
+            baseline: SyncBaseline(
+              id: 'baseline',
+              repository: 'github.com/brickit-app/brickit-flutter',
+              commit: baseline,
+              manifestHash: List.filled(64, 'a').join(),
+              kind: 'baseline',
+            ),
+            maxFiles: 1000,
+            maxBytes: 8 * 1024 * 1024,
           ),
-        ],
-        baseline: SyncBaseline(
-          id: 'baseline',
-          repository: 'github.com/brickit-app/brickit-flutter',
-          commit: baseline,
-          manifestHash: List.filled(64, 'a').join(),
-          kind: 'baseline',
-        ),
-        maxFiles: 1000,
-        maxBytes: 8 * 1024 * 1024,
-      ),
-    );
+        );
 
-    await RepositorySyncAdapter().sync(
-      checkout: fixture.root,
-      gateway: gateway,
-      write: (_) {},
-    );
+        await RepositorySyncAdapter().sync(
+          checkout: fixture.root,
+          gateway: gateway,
+          previewOnly: previewOnly,
+          write: (_) {},
+        );
 
-    expect(gateway.commit, current);
-    expect(gateway.lineage, isNotNull);
-    expect(gateway.lineage!.relationship, 'descendant');
-    expect(gateway.lineage!.baselineCommit, baseline);
-    expect(gateway.lineage!.mergeBase, baseline);
-  });
+        expect(gateway.previewOnly, previewOnly);
+        expect(await fixture.git(['rev-parse', 'HEAD']), current);
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        expect(gateway.commit, current);
+        expect(gateway.lineage, isNotNull);
+        expect(gateway.lineage!.relationship, 'descendant');
+        expect(gateway.lineage!.baselineCommit, baseline);
+        expect(gateway.lineage!.mergeBase, baseline);
+      },
+    );
+  }
 
   test('speaks the repository-adapter wire contract', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -845,6 +969,7 @@ class RecordingSnapshotGateway implements SnapshotSyncGateway {
   String? commit;
   List<SnapshotFile> files = const [];
   SnapshotLineage? lineage;
+  bool previewOnly = false;
 
   @override
   Future<SnapshotSyncContext> readContext() async => context;
@@ -855,13 +980,16 @@ class RecordingSnapshotGateway implements SnapshotSyncGateway {
     required String commit,
     required List<SnapshotFile> files,
     SnapshotLineage? lineage,
+    bool previewOnly = false,
   }) async {
     this.repository = repository;
     this.commit = commit;
     this.files = files;
     this.lineage = lineage;
+    this.previewOnly = previewOnly;
     return receipt ??
-        const SnapshotSyncReceipt(
+        SnapshotSyncReceipt(
+          previewOnly: previewOnly,
           version: 1,
           runId: 'run_1',
           status: 'succeeded',
