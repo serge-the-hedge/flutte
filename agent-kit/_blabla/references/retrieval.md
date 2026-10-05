@@ -38,6 +38,10 @@ observed catalog usage may conflict with them. Missing guidance remains missing.
 Code Context is unavailable until the project advertises otherwise: a suggestive
 key name is not verified UI placement.
 
+For an assigned local caller registry or related fragment group, follow
+[local evidence selection](evidence.md). Preserve its provenance and limitations
+alongside current authoritative Source reads.
+
 Workspace and new-Locale examples are separate evidence sets. Proposal searches
 use `{ "kind": "task", "taskId": "…" }` for the translating task owner, or
 `{ "kind": "review", "candidateRevisionId": "…" }` for its authorized reviewer.

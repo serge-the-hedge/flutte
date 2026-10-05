@@ -136,6 +136,55 @@ function assignment(...revisionIds) {
 	return { revisions: revisionIds.map((revisionId) => ({ revisionId })) };
 }
 
+test("review read recovers durable receipts without verdicts or writes, leaving undecided revisions pending", async (t) => {
+	const recovered = recorded("reviewed", {
+		kind: "reject",
+		reason: "Changes the scanning limit",
+	});
+	const server = await fixture("review", (request, response) => {
+		assert.equal(request.method, "GET");
+		json(
+			response,
+			request.url?.endsWith("/reviewed") ? recovered : context("pending"),
+		);
+	});
+	t.after(() => server.close());
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const result = ok(
+			await server.run(["review", "read"], assignment("reviewed", "pending")),
+		);
+		assert.deepEqual(
+			JSON.parse(
+				await readFile(
+					join(server.directory, "state/receipt-reviewed.json"),
+					"utf8",
+				),
+			),
+			{
+				revisionId: "reviewed",
+				status: "recorded",
+				review: recovered.latestReview,
+			},
+		);
+		assert.deepEqual(
+			JSON.parse(await readFile(String(result.decisionTemplate), "utf8")),
+			{
+				items: [
+					{
+						revisionId: "pending",
+						reviewToken: "token-pending",
+						decision: null,
+					},
+				],
+			},
+		);
+		await assert.rejects(
+			readFile(join(server.directory, "state/receipt-pending.json")),
+			{ code: "ENOENT" },
+		);
+	}
+});
+
 test("reviews require every exact verdict before writes; lost reject response recovers without acceptance or reposting", async (t) => {
 	/** @type {Row[]} */ const posts = [];
 	let committed = false;

@@ -21,6 +21,9 @@ evidence references, provisional wording choices, and unresolved questions. Keep
 human/project requirements distinct from translator preferences. Small assignments
 can keep this in their task notes. Resolve ambiguity with call sites or related
 messages where available; a key name alone does not establish UI placement.
+For repeated caller or fragment research, select [shared local evidence](evidence.md)
+against the current saved task or reviewer context. Keep its Source/file hash
+results and limitations with the round's briefing.
 
 Translate and review the pilot before expanding. Preserve each brief version;
 include its path in worker assignments. If policy changes, create a new version
@@ -58,7 +61,7 @@ terminal task requires an assigned correction task; do not rewrite accepted work
 
 One translator owns a task/state at a time. Parallelize independent tasks/locales;
 start with one translator and one reviewer, then at most two of each if useful.
-Keep reviewer assignments at 16 revisions or fewer, with one owner per revision.
+Keep each review round at 16 revisions or fewer, with one owner per revision.
 Pacing is shared across local workflow workers using the same API credential.
 Do not evade rate limits with extra tokens. Workers on different machines require
 host-level coordination; the local scheduler does not claim distributed ownership.
@@ -118,11 +121,19 @@ by message ID alone or transfer a verdict to a replacement revision. Missing
 verdicts remain undecided. The reviewer owns the assessment, posting and receipts;
 a coordinator may aggregate recorded receipts without becoming the reviewer.
 
+For many rounds, use a [campaign queue](campaign.md) with an immutable manifest
+and disjoint reviewer ownership. Assign the queue once; its reviewer selects each
+next bounded round and follows the same read, assessment and submit steps above.
+Use the generated campaign report for progress instead of maintaining separate
+counts. Server coverage and finalization remain separate completion steps.
+
 `submit` checks that each verdict names a context this reviewer read, rechecks its
 token, and retrieves the server's recorded result. Changed facts require a new
 read and new assessment; the command never refreshes a token and replays a verdict.
 Its output separates `recorded` and `blocked` revisions. Partial completion exits
 nonzero; successful revisions remain recoverable from their receipts.
+`read` also saves receipts for already recorded reviews, including after a lost
+local receipt, without posting a decision.
 `complete` covers the submitted verdicts; whole-task completion always requires
 the server coverage scan below, including revisions omitted from a decision file.
 
