@@ -1072,7 +1072,9 @@ review submit takes {items:[{revisionId,reviewToken,decision:{kind:"accept"}}]}.
 Rejection requires {kind:"reject",reason:"..."}. Missing verdicts never accept.
 Use a separate reviewer agent, credential, and state directory. State binds one
 credential and role. Local workers share rate pacing; one worker owns each state.
-Only rejected 429 requests retry automatically. Changed facts require reassessment.
+Rejected 429 requests retry within bounds. Task reuse also retries explicit 503
+WRITE_CONTENTION with its saved key and cursor. Other failed writes require reads
+before recovery. Changed facts require reassessment.
 No API credentials are written to workflow state. Review tokens are exact-context evidence.
 `;
 
