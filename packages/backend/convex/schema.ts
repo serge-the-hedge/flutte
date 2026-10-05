@@ -641,6 +641,8 @@ export default defineSchema({
 	snapshotUploadSessions: defineTable({
 		projectId: v.id("projects"),
 		tokenId: v.id("apiTokens"),
+		// Capture intent belongs to this operation, not the reusable Snapshot kind.
+		previewOnly: v.optional(v.boolean()),
 		releaseRecordId: v.optional(v.id("releaseRecords")),
 		deliveryCaptureId: v.optional(v.id("releaseDeliveryCaptures")),
 		repository: v.string(),

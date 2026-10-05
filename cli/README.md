@@ -38,9 +38,25 @@ Discovered catalog files** in Blabla (also available in **Settings → Languages
 to review the prefilled language and add it to Strings without another sync.
 Discovery never activates a language automatically.
 
-The current Brickit integration branch is `develop`. Sync refuses another
-branch so the accepted Source Snapshot and later delivery stay on the same
-team integration line. The Sync page shows the configured branch.
+The current Brickit integration branch is `develop`. Ordinary sync refuses
+another branch so the accepted Source Snapshot and later delivery stay on the
+same team integration line. The Sync page shows the configured branch.
+
+To capture committed catalogs from a local branch without changing the accepted
+catalog, run `blabla sync --preview`. The server records immutable snapshot
+evidence and returns its Source Snapshot ID. Even when the local commit descends
+from the accepted Baseline, this command leaves the accepted catalog unchanged.
+It never publishes a
+Workspace, confirms translations, or activates a language. Repeating a preview
+capture can reuse existing evidence; only a later ordinary, authorized sync can
+advance the Baseline. Reusing an already accepted Snapshot does not change its
+status or lineage.
+
+Preview capture requires server support and a preview-only upload acknowledgment.
+An older server causes the CLI to stop before uploading any catalog. It retains
+the same repository, committed-file and stable-HEAD checks as ordinary sync and
+never pushes a local branch. Preparing Locale Proposals from a selected preview
+is a separate workflow; capturing a preview alone does not update existing tasks.
 
 Keep the checkout current with the Brickit team's normal fast-forward pull
 before syncing. If `develop` is not present locally, `git switch develop` will

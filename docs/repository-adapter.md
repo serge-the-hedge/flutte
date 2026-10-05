@@ -11,7 +11,8 @@ Both `blabla sync` and `blabla deliver` upload one ARB file per request. The sha
 session protocol retains the `/snapshot-uploads` path:
 
 1. `POST /snapshot-uploads`: send `repository`, `commit`, and `expectedFiles`.
-   Sync may include its normal `lineage` object. Release delivery additionally
+   Sync may include its normal `lineage` object and `previewOnly: true` for an
+   explicit preview capture. Release delivery additionally
    sends `kind: "release"` and `releaseRecordId`. The response provides
    `sessionId` and `maxFileBytes`.
 2. `POST /snapshot-uploads/file`: send `sessionId`, `catalogPath`, `content`, and
@@ -41,6 +42,20 @@ runtime. Progress survives a disconnected CLI and is also visible on the web
 Sync page. A mutation watchdog restarts a worker that stops before recording an
 outcome, up to three attempts. A completed session returns its original receipt
 on retry.
+
+`GET /snapshot-context` advertises `supportsPreviewSnapshots`. Explicit preview
+clients require that capability and `previewOnly: true` in the upload-begin
+acknowledgment before uploading files. The flag is saved on the session and
+survives asynchronous finalization, retries and worker recovery. It cannot be
+combined with a release-delivery session. Completed/status receipts expose the
+same `previewOnly` operation flag independently of the Snapshot's current kind.
+
+Preview capture preserves actual Git lineage but cannot publish or repair a
+Catalog Projection or advance the accepted Baseline, including for a descendant
+commit, an empty project or reused evidence. A later ordinary sync can reuse and
+publish eligible immutable evidence. Preview captures do not activate languages,
+resolve Source Proposals or change existing review decisions. The normal sync
+and publication policy remains unchanged when the flag is omitted.
 
 Each input and delivered catalog is limited to 8 MiB. There is no combined
 catalog upload byte limit. The operational manifest limit is 1,000 files.

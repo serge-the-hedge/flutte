@@ -769,6 +769,20 @@ http.route({
 							"releaseRecordId",
 						) as Id<"releaseRecords">)
 					: undefined;
+			if (
+				body.previewOnly !== undefined &&
+				typeof body.previewOnly !== "boolean"
+			)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "previewOnly must be a boolean.",
+				});
+			const previewOnly = body.previewOnly;
+			if (previewOnly && releaseRecordId)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: "A Release delivery upload cannot be preview-only.",
+				});
 			return agentJson(
 				await withRepositoryAdapter(
 					ctx,
@@ -784,6 +798,7 @@ http.route({
 							projectId,
 							tokenId,
 							releaseRecordId,
+							previewOnly,
 							repository: requiredJsonString(body, "repository"),
 							commit: requiredJsonString(body, "commit"),
 							expectedFiles: body.expectedFiles,

@@ -51,6 +51,7 @@ class SnapshotSyncContext {
     required this.maxFiles,
     required this.maxBytes,
     this.integrationBranch = defaultIntegrationBranch,
+    this.supportsPreviewSnapshots = false,
   });
 
   final int version;
@@ -62,6 +63,7 @@ class SnapshotSyncContext {
   final int maxFiles;
   final int maxBytes;
   final String integrationBranch;
+  final bool supportsPreviewSnapshots;
 }
 
 class SnapshotSyncReceipt {
@@ -80,6 +82,7 @@ class SnapshotSyncReceipt {
     this.snapshotKind,
     this.reused = false,
     this.summary,
+    this.previewOnly = false,
   });
 
   final int version;
@@ -96,6 +99,7 @@ class SnapshotSyncReceipt {
   final String? snapshotKind;
   final bool reused;
   final SnapshotSyncSummary? summary;
+  final bool previewOnly;
 
   bool get succeeded => status == 'succeeded';
 }
@@ -153,6 +157,7 @@ abstract interface class SnapshotSyncGateway {
     required String commit,
     required List<SnapshotFile> files,
     SnapshotLineage? lineage,
+    bool previewOnly = false,
   });
 }
 
@@ -242,6 +247,9 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       baseline: baseline,
       maxFiles: _requiredInt(limits, 'maxFiles'),
       maxBytes: _requiredInt(limits, 'maxBytes'),
+      supportsPreviewSnapshots: response['supportsPreviewSnapshots'] == null
+          ? false
+          : _requiredBool(response, 'supportsPreviewSnapshots'),
     );
   }
 
@@ -251,6 +259,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     required String commit,
     required List<SnapshotFile> files,
     SnapshotLineage? lineage,
+    bool previewOnly = false,
   }) async {
     final upload = await _request(
       'POST',
@@ -260,6 +269,7 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
         'repository': repository,
         'commit': commit,
         'expectedFiles': files.length,
+        if (previewOnly) 'previewOnly': true,
         if (lineage != null)
           'lineage': {
             'baselineCommit': lineage.baselineCommit,
@@ -269,6 +279,11 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       },
     );
     final sessionId = _requiredString(upload, 'sessionId');
+    if (previewOnly && upload['previewOnly'] != true) {
+      throw RepositoryAdapterException(
+        'Blabla did not acknowledge preview-only capture. Update the server before retrying. No catalogs were uploaded.',
+      );
+    }
     onProgress?.call('Uploading catalogs: 0/${files.length}');
     for (var index = 0; index < files.length; index++) {
       final file = files[index];
@@ -286,11 +301,14 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       );
       onProgress?.call('Uploading catalogs: ${index + 1}/${files.length}');
     }
-    onProgress?.call('Waiting for Blabla to validate and apply the snapshot…');
+    final finalizing = previewOnly
+        ? 'validate and save the preview'
+        : 'validate and apply the snapshot';
+    onProgress?.call('Waiting for Blabla to $finalizing…');
     var response = await _request(
       'POST',
       '/snapshot-uploads/finalize',
-      waitingFor: 'Still waiting for Blabla to validate and apply the snapshot',
+      waitingFor: 'Still waiting for Blabla to $finalizing',
       body: {'sessionId': sessionId, 'async': true},
     );
     final elapsed = Stopwatch()..start();
@@ -307,7 +325,10 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
           'Blabla could not finish the snapshot sync. ${failure == null ? 'Retry the sync; it is safe.' : '${_requiredString(failure, 'message')} Retry the sync; it is safe.'}',
         );
       }
-      final progress = _finalizationProgress(finalization);
+      final progress = _finalizationProgress(
+        finalization,
+        previewOnly: previewOnly,
+      );
       if (progress != lastProgress ||
           elapsed.elapsed - lastProgressAt >= progressInterval) {
         onProgress?.call(progress);
@@ -326,7 +347,10 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
     return _receipt(response);
   }
 
-  String _finalizationProgress(Map<String, Object?> finalization) {
+  String _finalizationProgress(
+    Map<String, Object?> finalization, {
+    required bool previewOnly,
+  }) {
     final stage = _optionalString(finalization, 'stage') ?? 'queued';
     final progress = finalization['progress'] == null
         ? null
@@ -341,8 +365,9 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
       'staging' => 'Writing catalog changes$count…',
       'reviewing' => 'Restoring approved translations…',
       'indexing' => 'Preparing Strings$count…',
-      'publishing' => 'Publishing the snapshot…',
-      _ => 'Applying the snapshot…',
+      'publishing' =>
+        previewOnly ? 'Saving the preview…' : 'Publishing the snapshot…',
+      _ => previewOnly ? 'Saving the preview…' : 'Applying the snapshot…',
     };
   }
 
@@ -359,6 +384,9 @@ class HttpSnapshotSyncGateway implements SnapshotSyncGateway {
         .toList(growable: false);
     return SnapshotSyncReceipt(
       version: _requiredInt(response, 'version'),
+      previewOnly: response['previewOnly'] == null
+          ? false
+          : _requiredBool(response, 'previewOnly'),
       syncUrl: _optionalString(response, 'syncUrl'),
       runId: _requiredString(run, 'id'),
       status: _requiredString(run, 'status'),
@@ -475,6 +503,7 @@ class RepositorySyncAdapter {
     required void Function(String line) write,
     void Function(String line)? onProgress,
     void Function(String line)? writeError,
+    bool previewOnly = false,
   }) async {
     onProgress?.call('Checking checkout…');
     final root = await _repositoryRoot(checkout);
@@ -487,7 +516,12 @@ class RepositorySyncAdapter {
     }
     final repository = await _repository(root);
     final currentBranch = await _currentBranch(root);
-    if (currentBranch != context.integrationBranch) {
+    if (previewOnly && !context.supportsPreviewSnapshots) {
+      throw RepositoryAdapterException(
+        'This Blabla server does not support preview snapshots. Update the server before capturing a local branch.',
+      );
+    }
+    if (!previewOnly && currentBranch != context.integrationBranch) {
       throw RepositoryAdapterException(
         'This checkout is on $currentBranch, but this project syncs from ${context.integrationBranch}. Check out ${context.integrationBranch} and retry.',
       );
@@ -516,7 +550,15 @@ class RepositorySyncAdapter {
       commit: commit,
       files: files,
       lineage: lineage,
+      previewOnly: previewOnly,
     );
+    if (previewOnly &&
+        (!receipt.previewOnly ||
+            (receipt.succeeded && receipt.snapshotId == null))) {
+      throw RepositoryAdapterException(
+        'Blabla did not confirm preview-only completion. Inspect the saved run before retrying.',
+      );
+    }
     final summary = receipt.summary;
     final shortCommit = commit.substring(
       0,
@@ -526,6 +568,11 @@ class RepositorySyncAdapter {
       (writeError ?? write)(
         'Sync failed at $shortCommit (run ${receipt.runId}).',
       );
+    } else if (previewOnly) {
+      write(
+        'Preview captured at $shortCommit; the accepted catalog is unchanged.',
+      );
+      write('Source Snapshot: ${receipt.snapshotId}');
     } else if (receipt.snapshotKind == 'preview') {
       write(
         'Snapshot saved as a preview at $shortCommit; the accepted catalog is unchanged.',
@@ -576,7 +623,9 @@ class RepositorySyncAdapter {
         );
       }
       write(
-        'Open Blabla → Sync → Discovered catalog files to review and add each language. No new sync is needed for files in the accepted catalog.',
+        previewOnly || receipt.snapshotKind == 'preview'
+            ? 'Preview files do not activate languages or change the accepted catalog.'
+            : 'Open Blabla → Sync → Discovered catalog files to review and add each language. No new sync is needed for files in the accepted catalog.',
       );
     }
     if (receipt.syncUrl != null) write('Sync details: ${receipt.syncUrl}');

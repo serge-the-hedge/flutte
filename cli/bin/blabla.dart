@@ -207,12 +207,11 @@ Future<int> _sync(
   required void Function(String line) writeError,
 }) async {
   try {
-    final options = _options(arguments, const {
-      'checkout',
-      'server',
-      'token',
-      'profile',
-    });
+    final options = _options(
+      arguments,
+      const {'checkout', 'server', 'token', 'profile', 'preview'},
+      booleanFlags: const {'preview'},
+    );
     final credentials = await resolveCredentials(
       options: options,
       environment: environment,
@@ -229,6 +228,7 @@ Future<int> _sync(
     final receipt = await RepositorySyncAdapter().sync(
       checkout: checkout,
       gateway: gateway,
+      previewOnly: options['preview'] == 'true',
       write: write,
       onProgress: writeError,
       writeError: writeError,
@@ -447,6 +447,7 @@ const _usage = '''Usage:
 
 Options:
   sync                 Read bound ARB files and submit one durable snapshot
+  --preview         Capture a local branch without changing the accepted catalog (sync only)
   --checkout <path>  Brickit checkout (defaults to the current directory)
   --server <url>     Blabla deployment (or BLABLA_API_URL)
   --token <token>    Token (or BLABLA_TOKEN); login prefers hidden input
