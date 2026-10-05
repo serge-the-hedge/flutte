@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import {
+	lstat,
 	mkdir,
 	readFile,
 	readlink,
@@ -93,6 +94,40 @@ async function optional(path) {
 		throw new Failure("INVALID_STATE", `Invalid checkpoint: ${path}.`);
 	}
 }
+/** A disappearing/replaced symlink can make readlink return EINVAL on macOS.
+ * Retry only a confirmed symlink, within a bound; never remove an invalid lock.
+ * @param {string} path @returns {Promise<string | null>} */
+async function readLock(path) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await readlink(path);
+		} catch (failure) {
+			let reason = failure;
+			if (object(failure) && failure.code === "ENOENT") return null;
+			if (object(failure) && failure.code === "EINVAL") {
+				let current;
+				try {
+					current = await lstat(path);
+				} catch (error) {
+					if (object(error) && error.code === "ENOENT") return null;
+					reason = error;
+				}
+				if (current?.isSymbolicLink()) {
+					if (attempt < 3) continue;
+					throw new Failure(
+						"BUSY",
+						"Worker lock changed repeatedly while reading it. Resume this command with the same state.",
+					);
+				}
+			}
+			const code =
+				object(reason) && typeof reason.code === "string"
+					? ` (${reason.code})`
+					: "";
+			throw new Failure("INVALID_STATE", `Cannot read worker lock${code}.`);
+		}
+	}
+}
 /** Symlink creation publishes the owner atomically, including if killed during
  * acquisition. Dead owners are reclaimed under the same kind of lock; even a
  * killed reclaimer is recoverable. A live owner's lock is never removed.
@@ -110,13 +145,14 @@ async function locked(path, action, waitMs = 0) {
 			break;
 		} catch (error) {
 			if (!object(error) || error.code !== "EEXIST") throw error;
+			const metadata = await readLock(path);
+			if (metadata === null) continue;
 			/** @type {unknown} */
 			let previous;
 			try {
-				previous = JSON.parse(await readlink(path));
-			} catch (failure) {
-				if (object(failure) && failure.code === "ENOENT") continue;
-				throw new Failure("INVALID_STATE", "Invalid worker lock.");
+				previous = JSON.parse(metadata);
+			} catch {
+				throw new Failure("INVALID_STATE", "Invalid worker lock JSON.");
 			}
 			if (
 				object(previous) &&
@@ -133,7 +169,7 @@ async function locked(path, action, waitMs = 0) {
 					try {
 						await locked(`${path}.reclaim`, async () => {
 							try {
-								if ((await readlink(path)) === JSON.stringify(previous))
+								if ((await readLock(path)) === JSON.stringify(previous))
 									await rm(path, { force: true });
 							} catch (failure) {
 								if (!object(failure) || failure.code !== "ENOENT")
