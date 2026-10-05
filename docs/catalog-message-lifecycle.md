@@ -104,6 +104,11 @@ advance the Baseline, or establish delivery truth.
 | Review and finalize a Locale Proposal | Creates a complete candidate catalog artifact | Only for reviewed candidate applications |
 | Automatic restore or Contract Transform | Updates derived catalog state | No new confirmation |
 
+An empty Source does not decide whether a target should render nothing. Its empty
+target still needs an Intentional Blank with a reason, recorded by a human or
+accepted through authorized independent review. The decision remains bound to
+the exact Source Contract, just as it does for a non-empty Source.
+
 Translation agents may propose and revise content. Human review is the default.
 An owner can enable independent agent review for the project, or an editor can
 authorize a named reviewer for an exact candidate revision. The Reviewer Agent

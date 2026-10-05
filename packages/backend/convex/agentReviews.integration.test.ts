@@ -10,7 +10,7 @@ import {
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
-async function setup(introduced = false) {
+async function setup({ introduced = false, emptySource = false } = {}) {
 	const t = createBackend();
 	const owner = await authenticatedBackend(t, "owner");
 	const projectId = await createProject(owner);
@@ -57,12 +57,15 @@ async function setup(introduced = false) {
 		files: [
 			{
 				catalogPath: "en.arb",
-				content:
-					'{"@@locale":"en","greeting":"Hello {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
+				content: emptySource
+					? '{"@@locale":"en","greeting":""}'
+					: '{"@@locale":"en","greeting":"Hello {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
 			},
 			{
 				catalogPath: "de.arb",
-				content: '{"@@locale":"de","greeting":"Hallo {name}"}',
+				content: emptySource
+					? '{"@@locale":"de","greeting":""}'
+					: '{"@@locale":"de","greeting":"Hallo {name}"}',
 			},
 		],
 	});
@@ -130,7 +133,7 @@ async function setup(introduced = false) {
 		if (!revisionId) throw new Error("Expected candidate revision");
 		return revisionId;
 	}
-	const revisionId = await submit();
+	const revisionId = await submit(emptySource ? "Nachsatz" : undefined);
 	return {
 		t,
 		owner,
@@ -372,7 +375,7 @@ describe("independent agent review", () => {
 	});
 
 	test("authorized exact acceptance completes First Review for a later introduction", async () => {
-		const f = await setup(true);
+		const f = await setup({ introduced: true });
 		async function navigation() {
 			return await f.t.run((ctx) =>
 				ctx.db
@@ -1059,36 +1062,61 @@ describe("independent agent review", () => {
 		).toEqual([]);
 	});
 
-	test("exact acceptance preserves an authored Intentional Blank reason", async () => {
-		const f = await setup();
-		const revisionId = await f.submit("", 1, "No greeting on this screen");
-		await f.owner.mutation(api.projects.setAgentReviewPolicy, {
-			projectId: f.projectId,
-			enabled: true,
-		});
-		const read = await context(f, revisionId);
-		expect(
-			(
-				await request(f.t, f.reviewer.token, revisionId, {
-					reviewToken: read.reviewToken,
-					decision: { kind: "accept" },
-				})
-			).status,
-		).toBe(200);
-		expect(
-			await f.t.run((ctx) =>
-				ctx.db.query("catalogWorkspaceDecisionRecords").collect(),
-			),
-		).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					kind: "intentionalBlank",
-					reason: "No greeting on this screen",
-					reviewAuthorization: expect.objectContaining({
-						reviewerTokenId: f.reviewer.tokenId,
+	test.each([false, true])(
+		"exact acceptance preserves an authored Intentional Blank reason (empty Source: %s)",
+		async (emptySource) => {
+			const f = await setup({ introduced: true, emptySource });
+			const revisionId = await f.submit("", 1, "No greeting on this screen");
+			await f.owner.mutation(api.projects.setAgentReviewPolicy, {
+				projectId: f.projectId,
+				enabled: true,
+			});
+			const read = await context(f, revisionId);
+			expect(
+				(
+					await request(f.t, f.reviewer.token, revisionId, {
+						reviewToken: read.reviewToken,
+						decision: { kind: "accept" },
+					})
+				).status,
+			).toBe(200);
+			expect(
+				await f.t.run((ctx) =>
+					ctx.db.query("catalogWorkspaceDecisionRecords").collect(),
+				),
+			).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "intentionalBlank",
+						reason: "No greeting on this screen",
+						reviewAuthorization: expect.objectContaining({
+							reviewerTokenId: f.reviewer.tokenId,
+						}),
 					}),
-				}),
-			]),
-		);
-	});
+				]),
+			);
+			const workspace = await readWorkspaceKeyCards(f.owner, f.projectId);
+			const key = workspace.keys.find((item) => item.id === "greeting");
+			expect(
+				key?.values.find((value) => value.localeId === f.localeId),
+			).toMatchObject({
+				value: "",
+				valueState: "settled",
+				intentionalBlankReason: "No greeting on this screen",
+			});
+			expect(
+				await f.t.run((ctx) =>
+					ctx.db
+						.query("catalogWorkspaceNavigationRows")
+						.withIndex("by_project_and_projection_and_messageId", (q) =>
+							q
+								.eq("projectId", f.projectId)
+								.eq("projectionId", f.basis.projectionId)
+								.eq("messageId", "greeting"),
+						)
+						.unique(),
+				),
+			).toMatchObject({ introductionReviewPending: 0 });
+		},
+	);
 });

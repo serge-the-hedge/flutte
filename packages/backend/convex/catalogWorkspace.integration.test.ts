@@ -674,65 +674,70 @@ describe("Catalog Workspace", () => {
 		});
 	}, 20_000);
 
-	test("keeps an ordinary empty target Waiting until an Intentional Blank records its reason", async () => {
-		const user = await authenticatedBackend(t, "workspace-blank");
-		const projectId = await createProject(user);
-		const { targetId } = await bindEnglishAndGerman(user, projectId);
-		await ingestCatalog(user, {
-			projectId,
-			commit: "baseline",
-			german: '{"@@locale":"de","greeting":""}',
-		});
+	test.each([false, true])(
+		"keeps an ordinary empty target Waiting until an Intentional Blank records its reason (empty Source: %s)",
+		async (emptySource) => {
+			const user = await authenticatedBackend(t, "workspace-blank");
+			const projectId = await createProject(user);
+			const { targetId } = await bindEnglishAndGerman(user, projectId);
+			await ingestCatalog(user, {
+				projectId,
+				commit: "baseline",
+				...(emptySource ? { english: '{"@@locale":"en","greeting":""}' } : {}),
+				german: '{"@@locale":"de","greeting":""}',
+			});
 
-		const waiting = await readTarget(user, projectId);
-		expect(waiting).toMatchObject({
-			value: "",
-			valueState: "waiting",
-		});
-		await expect(
-			user.mutation(api.catalogWorkspace.commit, {
+			const waiting = await readTarget(user, projectId);
+			expect(waiting).toMatchObject({
+				value: "",
+				valueState: "waiting",
+			});
+			await expect(
+				user.mutation(api.catalogWorkspace.commit, {
+					projectId,
+					messageId: "greeting",
+					localeId: targetId,
+					intent: { kind: "save", value: "" },
+					expectedGitValueFingerprint: waiting.gitValueFingerprint,
+					expectedGitValueRevision: waiting.gitValueRevision,
+					expectedWorkspaceRevision: waiting.workspaceRevision,
+					expectedSourceFingerprint: waiting.expectedSourceFingerprint,
+				}),
+			).rejects.toThrow("Intentional Blank");
+
+			await user.mutation(api.catalogWorkspace.commit, {
 				projectId,
 				messageId: "greeting",
 				localeId: targetId,
-				intent: { kind: "save", value: "" },
+				intent: { kind: "intentionalBlank", reason: "No German label here" },
 				expectedGitValueFingerprint: waiting.gitValueFingerprint,
 				expectedGitValueRevision: waiting.gitValueRevision,
 				expectedWorkspaceRevision: waiting.workspaceRevision,
 				expectedSourceFingerprint: waiting.expectedSourceFingerprint,
-			}),
-		).rejects.toThrow("Intentional Blank");
+			});
+			expect(await readTarget(user, projectId)).toMatchObject({
+				value: "",
+				valueState: "settled",
+				intentionalBlankReason: "No German label here",
+			});
 
-		await user.mutation(api.catalogWorkspace.commit, {
-			projectId,
-			messageId: "greeting",
-			localeId: targetId,
-			intent: { kind: "intentionalBlank", reason: "No German label here" },
-			expectedGitValueFingerprint: waiting.gitValueFingerprint,
-			expectedGitValueRevision: waiting.gitValueRevision,
-			expectedWorkspaceRevision: waiting.workspaceRevision,
-			expectedSourceFingerprint: waiting.expectedSourceFingerprint,
-		});
-		expect(await readTarget(user, projectId)).toMatchObject({
-			value: "",
-			valueState: "settled",
-			intentionalBlankReason: "No German label here",
-		});
-
-		await ingestCatalog(user, {
-			projectId,
-			commit: "source-changed",
-			baselineCommit: "baseline",
-			english:
-				'{"@@locale":"en","greeting":"Welcome {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
-			german: '{"@@locale":"de","greeting":""}',
-		});
-		const afterSourceChange = await readTarget(user, projectId);
-		expect(afterSourceChange).toMatchObject({
-			value: "",
-			valueState: "waiting",
-		});
-		expect(afterSourceChange).not.toHaveProperty("intentionalBlankReason");
-	}, 20_000);
+			await ingestCatalog(user, {
+				projectId,
+				commit: "source-changed",
+				baselineCommit: "baseline",
+				english:
+					'{"@@locale":"en","greeting":"Welcome {name}","@greeting":{"placeholders":{"name":{"type":"String"}}}}',
+				german: '{"@@locale":"de","greeting":""}',
+			});
+			const afterSourceChange = await readTarget(user, projectId);
+			expect(afterSourceChange).toMatchObject({
+				value: "",
+				valueState: "waiting",
+			});
+			expect(afterSourceChange).not.toHaveProperty("intentionalBlankReason");
+		},
+		20_000,
+	);
 
 	test("derives Unconfirmed Import until a human confirms the exact content and source wording", async () => {
 		const user = await authenticatedBackend(t, "workspace-confirmation");
