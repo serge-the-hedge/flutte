@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,9 +25,11 @@ async function body(request) {
 	for await (const chunk of request) text += chunk;
 	return JSON.parse(text);
 }
-/** @param {'task' | 'review'} role @param {import('node:http').RequestListener} handler */
-async function fixture(role, handler) {
+/** @param {'task' | 'review'} role @param {import('node:http').RequestListener} handler @param {string} [preload] */
+async function fixture(role, handler, preload) {
 	const directory = await mkdtemp(join(tmpdir(), "blabla-workflow-test-"));
+	const preloadPath = join(directory, "preload.mjs");
+	if (preload) await writeFile(preloadPath, preload);
 	const server = createServer((request, response) => {
 		if (request.url === "/api/agent/v1/projects/current")
 			return json(response, {
@@ -43,11 +45,17 @@ async function fixture(role, handler) {
 	if (!address || typeof address === "string")
 		throw new Error("No listening address");
 	const url = `http://127.0.0.1:${address.port}`;
+	const pacingDirectory = join(
+		tmpdir(),
+		`blabla-agent-${process.getuid?.() ?? "user"}`,
+		createHash("sha256").update(`${url}\0${token}`).digest("hex"),
+	);
 	/** @param {string[]} args @param {unknown} [input] @param {string} [state] */
 	function start(args, input, state = "state") {
 		const child = spawn(
 			process.execPath,
 			[
+				...(preload ? ["--import", preloadPath] : []),
 				script,
 				...args,
 				"--state",
@@ -83,6 +91,7 @@ async function fixture(role, handler) {
 	}
 	return {
 		directory,
+		pacingDirectory,
 		start,
 		/** @param {string[]} args @param {unknown} [input] @param {string} [state] */
 		async run(args, input, state) {
@@ -92,17 +101,7 @@ async function fixture(role, handler) {
 			server.closeAllConnections();
 			await new Promise((resolve) => server.close(() => resolve(null)));
 			await rm(directory, { recursive: true, force: true });
-			const fingerprint = createHash("sha256")
-				.update(`${url}\0${token}`)
-				.digest("hex");
-			await rm(
-				join(
-					tmpdir(),
-					`blabla-agent-${process.getuid?.() ?? "user"}`,
-					fingerprint,
-				),
-				{ recursive: true, force: true },
-			);
+			await rm(pacingDirectory, { recursive: true, force: true });
 		},
 	};
 }
@@ -415,6 +414,99 @@ test("shared credential pacing honors a 429 across concurrent reviewer states", 
 	assert.equal(times.length, 3);
 	assert.ok(times[1] - times[0] >= 900, JSON.stringify(times));
 	assert.ok(times[2] - times[1] >= 500, JSON.stringify(times));
+});
+
+/** Reproduce the readlink failure observed during real macOS lock contention.
+ * Only the shared pacing lock is affected; state locks, HTTP, and checkpoints
+ * still use the real runner with a fixture credential and isolated state.
+ * @param {'released' | 'symlink' | 'persistent' | 'file' | 'malformed'} mode */
+function lockReadFailure(mode) {
+	return `
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+const original = { symlink: fs.symlink, readlink: fs.readlink };
+let installed = false;
+let failed = false;
+let failures = 0;
+fs.symlink = async (owner, path, ...options) => {
+  if (!installed && path.endsWith('/read.lock')) {
+    installed = true;
+    if (${JSON.stringify(mode)} === 'file') await fs.writeFile(path, 'preserve this file');
+    else await original.symlink(${JSON.stringify(mode)} === 'malformed' ? 'not-json' : owner, path);
+  }
+  return original.symlink(owner, path, ...options);
+};
+fs.readlink = async (path, ...options) => {
+  if (path.endsWith('/read.lock') && !['file', 'malformed'].includes(${JSON.stringify(mode)}) && (!failed || ${JSON.stringify(mode)} === 'persistent')) {
+    if (++failures > 4) throw Object.assign(new Error('retry bound exceeded'), { code: 'EIO' });
+    failed = true;
+    if (${JSON.stringify(mode)} === 'released') await fs.rm(path);
+    if (${JSON.stringify(mode)} === 'symlink') setTimeout(() => fs.rm(path), 100);
+    throw Object.assign(new Error('simulated readlink handoff'), { code: 'EINVAL' });
+  }
+  return original.readlink(path, ...options);
+};
+syncBuiltinESMExports();
+`;
+}
+
+test("status survives a pacing lock handoff with readlink EINVAL", async (t) => {
+	for (const mode of /** @type {const} */ (["released", "symlink"])) {
+		await t.test(mode, async (t) => {
+			let reads = 0;
+			const f = await fixture(
+				"task",
+				(_request, response) => {
+					reads++;
+					json(response, {
+						task: { taskId: "task", localeCode: "de", targetCount: 1 },
+						targets: [
+							{ messageId: "m", sourceValue: "Source", candidate: null },
+						],
+						nextCursor: null,
+					});
+				},
+				lockReadFailure(mode),
+			);
+			t.after(() => f.close());
+			const status = ok(await f.run(["task", "status", "task"]));
+			assert.equal(status.complete, true);
+			assert.equal(status.scanned, 1);
+			assert.equal(reads, 1);
+		});
+	}
+});
+
+test("invalid pacing locks fail closed and repeated handoff errors are bounded", async (t) => {
+	for (const mode of /** @type {const} */ ([
+		"file",
+		"malformed",
+		"persistent",
+	])) {
+		await t.test(mode, async (t) => {
+			const f = await fixture(
+				"task",
+				() => assert.fail("invalid lock must stop before task requests"),
+				lockReadFailure(mode),
+			);
+			t.after(() => f.close());
+			const result = await f.run(["task", "status", "task"]);
+			assert.equal(result.code, 1);
+			assert.equal(
+				JSON.parse(result.stderr).error.code,
+				mode === "persistent" ? "BUSY" : "INVALID_STATE",
+			);
+			const lock = join(f.pacingDirectory, "read.lock");
+			if (mode === "file") {
+				assert.equal(await readFile(lock, "utf8"), "preserve this file");
+				assert.match(JSON.parse(result.stderr).error.message, /EINVAL/);
+			} else if (mode === "malformed") {
+				assert.equal(await readlink(lock), "not-json");
+			} else {
+				assert.equal(typeof JSON.parse(await readlink(lock)).nonce, "string");
+			}
+		});
+	}
 });
 
 test("candidate submissions stop on changed source, enforce Unicode limits, and preserve server contract failures", async (t) => {

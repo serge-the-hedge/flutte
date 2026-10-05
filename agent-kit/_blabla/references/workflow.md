@@ -131,6 +131,8 @@ the server coverage scan below, including revisions omitted from a decision file
 | Signal | Action |
 | --- | --- |
 | Interrupted worker / output exhaustion | Resume the same state and assigned scope; inspect saved files before regenerating work. Dead local owners are recovered. |
+| Local lock `BUSY` | Resume the same command and state after contention subsides. The runner bounds retries for lock handoffs. |
+| Invalid worker lock | Preserve the lock and state files; report the filesystem code or invalid-JSON diagnostic for investigation. |
 | Unknown candidate write | Repeat `task submit` with `<task-state>/submission.json` as the body. It reads the server before resubmitting identical candidates. |
 | Unknown review write | Repeat the exact saved decisions. The runner reads recorded results before writing. |
 | `429` | The runner shares pacing, honors retry timing, and bounds retries. If still blocked, resume later with the same state. |
