@@ -16,6 +16,7 @@ import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
 	boundedNumber,
 	cursor,
@@ -767,6 +768,27 @@ async function taskStatus(api, taskId, directory, maxPages, restart) {
 function contextPath(directory, revisionId, reviewToken) {
 	return join(directory, `context-${revisionId}-${hash(reviewToken)}.json`);
 }
+/** Persist server evidence on both ordinary submission and read-only recovery.
+ * @param {string} directory @param {string} revisionId @param {unknown} review */
+async function saveReviewReceipt(directory, revisionId, review) {
+	const receipt = {
+		revisionId,
+		status: "recorded",
+		review: record(review, "Recorded review"),
+	};
+	const path = join(directory, `receipt-${revisionId}.json`);
+	const previous = await optional(path);
+	if (previous !== null) {
+		if (!isDeepStrictEqual(previous, receipt))
+			throw new Failure(
+				"CONFLICTING_RECEIPT",
+				"Recorded review differs from the saved receipt. Preserve the state and reconcile the conflicting evidence before continuing.",
+			);
+		return receipt;
+	}
+	await save(path, receipt);
+	return receipt;
+}
 /** @param {Client} api @param {string} directory @param {unknown} body */
 async function reviewRead(api, directory, body) {
 	const revisions = array(
@@ -792,6 +814,7 @@ async function reviewRead(api, directory, body) {
 				"Review context belongs to a different revision.",
 			);
 		if (context.kind === "recordedReview") {
+			await saveReviewReceipt(directory, revisionId, context.latestReview);
 			contexts.push({ revisionId, recorded: context.latestReview });
 			continue;
 		}
@@ -922,12 +945,11 @@ async function reviewSubmit(api, directory, body) {
 					"CONFLICTING_REVIEW",
 					"The server recorded a different verdict; inspect it instead of claiming this decision succeeded.",
 				);
-			const receipt = {
-				revisionId: item.revisionId,
-				status: "recorded",
-				review: current.latestReview,
-			};
-			await save(join(directory, `receipt-${item.revisionId}.json`), receipt);
+			const receipt = await saveReviewReceipt(
+				directory,
+				item.revisionId,
+				current.latestReview,
+			);
 			results.push(receipt);
 		} catch (error) {
 			const failure =

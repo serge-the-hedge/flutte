@@ -44,6 +44,9 @@ Translation and review skills default to the [resumable workflow](_blabla/refere
 It checkpoints small pages, shares local rate pacing, binds explicit verdicts to
 assessed revisions, and recovers writes from server evidence. The host still owns
 launching isolated reviewer agents and assigning their credentials.
+For work spanning many review rounds, use a [campaign queue](_blabla/references/campaign.md)
+to assign disjoint work once and calculate progress from exact receipts. Reviewers
+still assess each bounded round through the resumable workflow.
 
 Start with assignments such as “Find our established German wording for this
 message,” “Translate task …,” or “Review candidate revision … independently.”
