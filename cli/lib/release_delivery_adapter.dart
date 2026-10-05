@@ -260,6 +260,22 @@ class ReleaseRepositoryAdapter {
         inputFiles,
       );
       _validateDelivery(summary, delivery);
+      if (localeArtifact != null) {
+        // The checkout check proves the input matches the proposal's Source.
+        // The Release Delta can itself change it without changing placeholders.
+        final sourcePath = localeArtifact.sourceSnapshot.catalogPath;
+        final sourceBefore = inputFiles.singleWhere(
+          (file) => file.catalogPath == sourcePath,
+        );
+        final sourceAfter = delivery.files.singleWhere(
+          (file) => file.catalogPath == sourcePath,
+        );
+        if (sourceBefore.content != sourceAfter.content) {
+          throw RepositoryAdapterException(
+            'The Release changes the Source catalog used to review this Locale Proposal. Prepare and review a proposal against the updated Source before combining them. No local branch was created.',
+          );
+        }
+      }
       if (delivery.applied.isEmpty && localeArtifact == null) {
         final detail = delivery.skipped.isEmpty
             ? 'The Release Bundle contains no applicable catalog changes.'

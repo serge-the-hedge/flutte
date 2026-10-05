@@ -657,50 +657,92 @@ void main() {
     },
   );
 
+  test('delivers a reviewed Source proposal for existing locales', () async {
+    final fixture = await BrickitFixture.create();
+    addTearDown(fixture.dispose);
+    await fixture.addGermanCatalog();
+    final summary = await existingLocaleRelease(fixture);
+    final output = StringBuffer();
+
+    final result = await ReleaseRepositoryAdapter().deliver(
+      ReleaseDeliveryRequest(
+        checkout: fixture.root,
+        recordId: summary.releaseRecord.id,
+        flutter: testFlutter(fixture.flutterExecutable),
+        gateway: SourceChangingReleaseGateway(summary),
+        write: output.writeln,
+      ),
+    );
+
+    expect(
+      await fixture
+          .file('packages/brickit_generated/lib/l10n/intl_en.arb')
+          .readAsString(),
+      '{"@@locale":"en","welcome":"Welcome back, {name}!"}',
+    );
+    expect(
+      result.changedPaths,
+      contains('packages/brickit_generated/lib/l10n/intl_en.arb'),
+    );
+    expect(result.sourceChanged, isTrue);
+    expect(
+      await fixture.git(['show', '-s', '--format=%B', 'HEAD']),
+      contains('Blabla-Source-Changed: yes'),
+    );
+    expect(
+      await File(result.pullRequestBodyFile).readAsString(),
+      contains('Source catalog changed: yes'),
+    );
+    expect(output.toString(), contains('including reviewed Source changes'));
+  });
+
   test(
-    'delivers a reviewed Source proposal with Portuguese in one branch',
+    'refuses a combined release that changes the new locale pinned Source',
     () async {
       final fixture = await BrickitFixture.create();
       addTearDown(fixture.dispose);
       await fixture.addGermanCatalog();
       final summary = await existingLocaleRelease(fixture);
       final artifact = await combinedPortugueseArtifact(fixture, summary);
-      final output = StringBuffer();
+      final head = await fixture.git(['rev-parse', 'HEAD']);
+      final branches = await fixture.git(['branch', '--list']);
+      final worktrees = await fixture.git(['worktree', 'list', '--porcelain']);
+      final runner = CountingCommandRunner();
 
-      final result = await ReleaseRepositoryAdapter().deliver(
-        ReleaseDeliveryRequest(
-          checkout: fixture.root,
-          recordId: summary.releaseRecord.id,
-          flutter: testFlutter(fixture.flutterExecutable),
-          gateway: SourceChangingReleaseGateway(summary),
-          localeProposal: LocaleProposalDeliveryInput(
-            proposalId: artifact.proposalId,
-            gateway: StaticLocaleProposalGateway(artifact),
+      await expectLater(
+        ReleaseRepositoryAdapter(runner: runner).deliver(
+          ReleaseDeliveryRequest(
+            checkout: fixture.root,
+            recordId: summary.releaseRecord.id,
+            flutter: testFlutter(fixture.flutterExecutable),
+            gateway: SourceChangingReleaseGateway(summary),
+            localeProposal: LocaleProposalDeliveryInput(
+              proposalId: artifact.proposalId,
+              gateway: StaticLocaleProposalGateway(artifact),
+            ),
+            write: (_) {},
           ),
-          write: output.writeln,
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            contains('Release changes the Source catalog'),
+          ),
         ),
       );
 
+      expect(runner.generationCount, 1);
+      expect(await fixture.git(['rev-parse', 'HEAD']), head);
+      expect(await fixture.git(['status', '--porcelain']), isEmpty);
+      expect(await fixture.git(['branch', '--list']), branches);
+      expect(await fixture.git(['worktree', 'list', '--porcelain']), worktrees);
       expect(
         await fixture
-            .file('packages/brickit_generated/lib/l10n/intl_en.arb')
-            .readAsString(),
-        '{"@@locale":"en","welcome":"Welcome back, {name}!"}',
+            .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+            .exists(),
+        isFalse,
       );
-      expect(
-        result.changedPaths,
-        contains('packages/brickit_generated/lib/l10n/intl_en.arb'),
-      );
-      expect(result.sourceChanged, isTrue);
-      expect(
-        await fixture.git(['show', '-s', '--format=%B', 'HEAD']),
-        contains('Blabla-Source-Changed: yes'),
-      );
-      expect(
-        await File(result.pullRequestBodyFile).readAsString(),
-        contains('Source catalog changed: yes'),
-      );
-      expect(output.toString(), contains('including reviewed Source changes'));
     },
   );
 
