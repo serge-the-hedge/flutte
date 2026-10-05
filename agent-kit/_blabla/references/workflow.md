@@ -133,7 +133,9 @@ read and new assessment; the command never refreshes a token and replays a verdi
 Its output separates `recorded` and `blocked` revisions. Partial completion exits
 nonzero; successful revisions remain recoverable from their receipts.
 `read` also saves receipts for already recorded reviews, including after a lost
-local receipt, without posting a decision.
+local receipt, without posting a decision. Existing receipts remain byte-identical;
+contradictory observations return `CONFLICTING_RECEIPT` and preserve the original
+evidence for explicit reconciliation.
 `complete` covers the submitted verdicts; whole-task completion always requires
 the server coverage scan below, including revisions omitted from a decision file.
 

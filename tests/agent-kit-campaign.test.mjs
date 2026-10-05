@@ -6,6 +6,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	realpath,
 	rm,
 	symlink,
 	writeFile,
@@ -299,6 +300,117 @@ test("recorded latest rejection is an open finding, never pending acceptance", a
 	assert.equal(report.counts.pendingReview, 0);
 	assert.equal(report.openFindings.length, 1);
 	assert.equal(report.allLatestRecordedAcceptance, false);
+});
+
+/** @param {'projectPolicy' | 'candidateGrant'} kind @returns {Row} */
+function authorization(kind) {
+	return {
+		kind,
+		candidateRevisionId: "a",
+		reviewerTokenId: "reviewer",
+		authorizedByUserId: "human",
+		authorizedAt: 900,
+		...(kind === "projectPolicy"
+			? { policyRevision: 1 }
+			: { grantId: "grant_a", grantRevision: 1 }),
+	};
+}
+
+test("both complete historical authorization variants count as recorded acceptance", async (t) => {
+	for (const kind of /** @type {const} */ ([
+		"projectPolicy",
+		"candidateGrant",
+	])) {
+		await t.test(kind, async (t) => {
+			const f = await fixture(t, [[revision("a")]]);
+			await f.receipt("a", "accept", 0, {
+				reviewAuthorization: authorization(kind),
+			});
+			const report = await campaign(f.path);
+			assert.ok("counts" in report);
+			assert.equal(report.valid, true);
+			assert.equal(report.counts.accepted, 1);
+			assert.equal(report.allLatestRecordedAcceptance, true);
+			assert.equal(report.sourceCurrency, "notObserved");
+			assert.equal(report.releaseReady, null);
+			const next = await campaign(f.path, { owner: "A" });
+			assert.ok("status" in next);
+			assert.equal(next.status, "complete");
+		});
+	}
+});
+
+test("incomplete or malformed historical authorization blocks acceptance and preserves receipt evidence", async (t) => {
+	for (const kind of /** @type {const} */ ([
+		"projectPolicy",
+		"candidateGrant",
+	])) {
+		const valid = authorization(kind);
+		/** @type {Array<{name: string, field: string, value?: unknown}>} */
+		const cases = Object.keys(valid).map((field) => ({
+			name: `missing ${field}`,
+			field,
+		}));
+		const invalidFields = {
+			kind: [null, "unknown"],
+			candidateRevisionId: [null, "other"],
+			reviewerTokenId: [null, "other", "bad id"],
+			authorizedByUserId: [null, 1, "", "   "],
+			authorizedAt: [null, "900", -1, Number.POSITIVE_INFINITY],
+			...(kind === "projectPolicy"
+				? { policyRevision: [null, "1", 0, -1, 1.5, 2 ** 53] }
+				: {
+						grantId: [null, 1, "", "bad id"],
+						grantRevision: [null, "1", 0, -1, 1.5, 2 ** 53],
+					}),
+		};
+		for (const [field, values] of Object.entries(invalidFields)) {
+			for (const value of values)
+				cases.push({
+					name: `invalid ${field}: ${String(value)}`,
+					field,
+					value,
+				});
+		}
+		for (const field of kind === "projectPolicy"
+			? ["grantId", "grantRevision", "unexpected"]
+			: ["policyRevision", "unexpected"])
+			cases.push({ name: `unexpected ${field}`, field, value: 1 });
+		for (const entry of cases) {
+			await t.test(`${kind}: ${entry.name}`, async (t) => {
+				const f = await fixture(t, [[revision("a")]]);
+				const changed = { ...valid };
+				if ("value" in entry) changed[entry.field] = entry.value;
+				else delete changed[entry.field];
+				await f.receipt("a", "accept", 0, { reviewAuthorization: changed });
+				const receiptPath = join(f.directory, "review-0", "receipt-a.json");
+				// JSON.stringify turns Infinity into null; an overflowing JSON number
+				// exercises the non-finite value that JSON.parse can actually return.
+				if (entry.value === Number.POSITIVE_INFINITY)
+					await writeFile(
+						receiptPath,
+						(await readFile(receiptPath, "utf8")).replace(
+							'"authorizedAt":null',
+							'"authorizedAt":1e400',
+						),
+					);
+				const before = await readFile(receiptPath, "utf8");
+				const report = await campaign(f.path);
+				assert.ok("counts" in report);
+				assert.equal(report.valid, false);
+				assert.equal(report.counts.accepted, 0);
+				assert.equal(report.counts.pendingReview, 1);
+				assert.equal(report.allLatestRecordedAcceptance, false);
+				assert.equal(report.problemCount, 1);
+				assert.equal(report.problems[0].path, await realpath(receiptPath));
+				const next = await campaign(f.path, { owner: "A" });
+				assert.ok("status" in next);
+				assert.equal(next.status, "blocked");
+				assert.equal(next.round, null);
+				assert.equal(await readFile(receiptPath, "utf8"), before);
+			});
+		}
+	}
 });
 
 test("mixed original handoffs omit superseded revisions and owners consume only their assignment", async (t) => {

@@ -185,6 +185,75 @@ test("review read recovers durable receipts without verdicts or writes, leaving 
 	}
 });
 
+test("review recovery preserves conflicting historical receipts and leaves equivalent observations byte-identical", async (t) => {
+	const original = recorded("rev", { kind: "reject", reason: "Wrong limit" });
+	let current = original;
+	const server = await fixture("review", (request, response) => {
+		assert.equal(request.method, "GET");
+		json(response, current);
+	});
+	t.after(() => server.close());
+	ok(await server.run(["review", "read"], assignment("rev")));
+	const receiptPath = join(server.directory, "state/receipt-rev.json");
+	const originalBytes = await readFile(receiptPath, "utf8");
+	for (const decision of [
+		{ kind: "accept" },
+		{ kind: "reject", reason: "Different objection" },
+	]) {
+		current = recorded("rev", decision);
+		const result = await server.run(["review", "read"], assignment("rev"));
+		assert.equal(result.code, 1);
+		assert.equal(JSON.parse(result.stderr).error.code, "CONFLICTING_RECEIPT");
+		assert.equal(await readFile(receiptPath, "utf8"), originalBytes);
+	}
+	current = {
+		...original,
+		latestReview: {
+			reviewer: original.latestReview.reviewer,
+			decision: original.latestReview.decision,
+		},
+	};
+	ok(await server.run(["review", "read"], assignment("rev")));
+	assert.equal(await readFile(receiptPath, "utf8"), originalBytes);
+});
+
+test("submit recovery blocks conflicting receipt evidence without reposting or replacing history", async (t) => {
+	let committed = false;
+	const server = await fixture("review", (request, response) => {
+		assert.equal(request.method, "GET");
+		json(
+			response,
+			committed ? recorded("rev", { kind: "accept" }) : context("rev"),
+		);
+	});
+	t.after(() => server.close());
+	ok(await server.run(["review", "read"], assignment("rev")));
+	const receiptPath = join(server.directory, "state/receipt-rev.json");
+	const originalBytes = JSON.stringify({
+		revisionId: "rev",
+		status: "recorded",
+		review: recorded("rev", { kind: "reject", reason: "Original objection" })
+			.latestReview,
+	});
+	await writeFile(receiptPath, originalBytes);
+	committed = true;
+	const result = await server.run(["review", "submit"], {
+		items: [
+			{
+				revisionId: "rev",
+				reviewToken: "token-rev",
+				decision: { kind: "accept" },
+			},
+		],
+	});
+	assert.equal(result.code, 1);
+	const output = JSON.parse(result.stdout);
+	assert.equal(output.complete, false);
+	assert.equal(output.results[0].status, "blocked");
+	assert.equal(output.results[0].error.code, "CONFLICTING_RECEIPT");
+	assert.equal(await readFile(receiptPath, "utf8"), originalBytes);
+});
+
 test("reviews require every exact verdict before writes; lost reject response recovers without acceptance or reposting", async (t) => {
 	/** @type {Row[]} */ const posts = [];
 	let committed = false;

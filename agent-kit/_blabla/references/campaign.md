@@ -114,6 +114,11 @@ summary totals and draft files never count as recorded review. State bindings
 must identify the manifest project and reviewer role. Receipts must identify their
 assigned exact revision, recorded decision, review ID, server timestamp and
 matching reviewer authorization; acceptance also needs its final fingerprint.
+Authorization evidence must include the authorizing human and timestamp, plus
+either the positive policy revision or the grant ID and positive grant revision.
+Incomplete, malformed, or mixed authorization variants cannot count as recorded
+review. This validates historical provenance; current permission remains the
+official workflow's responsibility.
 Invalid or conflicting evidence produces diagnostics and blocks `next`.
 
 The default report contains totals by Locale and owner and at most 16 examples

@@ -49,6 +49,63 @@ function id(value, label) {
 		throw new CampaignError("INVALID_MANIFEST", `Invalid ${label}.`);
 	return result;
 }
+/** Validate the closed historical authorization variants from agentReviewModel.
+ * This snapshot does not establish current permission; the official runner does.
+ * @param {Row} authorization */
+function authorizationToken(authorization) {
+	try {
+		const fields = [
+			"kind",
+			"reviewerTokenId",
+			"candidateRevisionId",
+			"authorizedByUserId",
+			"authorizedAt",
+		];
+		let revision;
+		if (authorization.kind === "projectPolicy") {
+			fields.push("policyRevision");
+			revision = authorization.policyRevision;
+		} else if (authorization.kind === "candidateGrant") {
+			fields.push("grantId", "grantRevision");
+			id(authorization.grantId, "grantId");
+			revision = authorization.grantRevision;
+		} else
+			throw new Error(
+				"Recorded authorization must identify a policy or grant.",
+			);
+		if (Object.keys(authorization).some((field) => !fields.includes(field)))
+			throw new Error(
+				"Recorded authorization contains fields outside its variant.",
+			);
+		// Both server counters start at one and advance by one per human change.
+		if (
+			typeof revision !== "number" ||
+			!Number.isSafeInteger(revision) ||
+			revision < 1
+		)
+			throw new Error(
+				"Recorded authorization must include a positive integer revision.",
+			);
+		text(authorization.authorizedByUserId, "authorizedByUserId");
+		if (
+			typeof authorization.authorizedAt !== "number" ||
+			!Number.isFinite(authorization.authorizedAt) ||
+			authorization.authorizedAt < 0
+		)
+			throw new Error(
+				"Recorded authorization must include its human authorization timestamp.",
+			);
+		id(authorization.candidateRevisionId, "candidateRevisionId");
+		return id(authorization.reviewerTokenId, "reviewerTokenId");
+	} catch (error) {
+		throw new CampaignError(
+			"WRONG_AUTHORIZATION",
+			error instanceof Error
+				? error.message
+				: "Invalid recorded authorization.",
+		);
+	}
+}
 /** @param {unknown} value @param {string} label @returns {unknown[]} */
 function list(value, label) {
 	if (!Array.isArray(value))
@@ -461,12 +518,9 @@ export async function campaign(manifestPath, options = {}) {
 					"Recorded authorization",
 				);
 				const reviewer = row(review.reviewer, "Recorded reviewer");
-				const tokenId = id(authorization.reviewerTokenId, "reviewerTokenId");
+				const tokenId = authorizationToken(authorization);
 				if (
 					authorization.candidateRevisionId !== revisionId ||
-					!["projectPolicy", "candidateGrant"].includes(
-						String(authorization.kind),
-					) ||
 					reviewer.kind !== "agent" ||
 					reviewer.id !== tokenId ||
 					(reviewers.get(round.owner) !== null &&

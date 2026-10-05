@@ -16,6 +16,7 @@ import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
 	boundedNumber,
 	cursor,
@@ -775,7 +776,17 @@ async function saveReviewReceipt(directory, revisionId, review) {
 		status: "recorded",
 		review: record(review, "Recorded review"),
 	};
-	await save(join(directory, `receipt-${revisionId}.json`), receipt);
+	const path = join(directory, `receipt-${revisionId}.json`);
+	const previous = await optional(path);
+	if (previous !== null) {
+		if (!isDeepStrictEqual(previous, receipt))
+			throw new Failure(
+				"CONFLICTING_RECEIPT",
+				"Recorded review differs from the saved receipt. Preserve the state and reconcile the conflicting evidence before continuing.",
+			);
+		return receipt;
+	}
+	await save(path, receipt);
 	return receipt;
 }
 /** @param {Client} api @param {string} directory @param {unknown} body */
