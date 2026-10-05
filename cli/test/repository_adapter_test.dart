@@ -696,55 +696,75 @@ void main() {
     expect(output.toString(), contains('including reviewed Source changes'));
   });
 
-  test(
-    'refuses a combined release that changes the new locale pinned Source',
-    () async {
-      final fixture = await BrickitFixture.create();
-      addTearDown(fixture.dispose);
-      await fixture.addGermanCatalog();
-      final summary = await existingLocaleRelease(fixture);
-      final artifact = await combinedPortugueseArtifact(fixture, summary);
-      final head = await fixture.git(['rev-parse', 'HEAD']);
-      final branches = await fixture.git(['branch', '--list']);
-      final worktrees = await fixture.git(['worktree', 'list', '--porcelain']);
-      final runner = CountingCommandRunner();
+  for (final bomOnly in [false, true]) {
+    test(
+      'refuses a combined release that changes the new locale pinned Source (${bomOnly ? 'BOM' : 'meaning'})',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        if (bomOnly) {
+          final source = fixture.file(
+            'packages/brickit_generated/lib/l10n/intl_en.arb',
+          );
+          final bytes = await source.readAsBytes();
+          await source.writeAsBytes([0xef, 0xbb, 0xbf, ...bytes]);
+          await fixture.git(['add', '.']);
+          await fixture.git(['commit', '-m', 'pin source with UTF-8 BOM']);
+        }
+        final summary = await existingLocaleRelease(fixture);
+        final artifact = await combinedPortugueseArtifact(fixture, summary);
+        final head = await fixture.git(['rev-parse', 'HEAD']);
+        final branches = await fixture.git(['branch', '--list']);
+        final worktrees = await fixture.git([
+          'worktree',
+          'list',
+          '--porcelain',
+        ]);
+        final runner = CountingCommandRunner();
 
-      await expectLater(
-        ReleaseRepositoryAdapter(runner: runner).deliver(
-          ReleaseDeliveryRequest(
-            checkout: fixture.root,
-            recordId: summary.releaseRecord.id,
-            flutter: testFlutter(fixture.flutterExecutable),
-            gateway: SourceChangingReleaseGateway(summary),
-            localeProposal: LocaleProposalDeliveryInput(
-              proposalId: artifact.proposalId,
-              gateway: StaticLocaleProposalGateway(artifact),
+        await expectLater(
+          ReleaseRepositoryAdapter(runner: runner).deliver(
+            ReleaseDeliveryRequest(
+              checkout: fixture.root,
+              recordId: summary.releaseRecord.id,
+              flutter: testFlutter(fixture.flutterExecutable),
+              gateway: bomOnly
+                  ? StaticReleaseGateway(summary)
+                  : SourceChangingReleaseGateway(summary),
+              localeProposal: LocaleProposalDeliveryInput(
+                proposalId: artifact.proposalId,
+                gateway: StaticLocaleProposalGateway(artifact),
+              ),
+              write: (_) {},
             ),
-            write: (_) {},
           ),
-        ),
-        throwsA(
-          isA<RepositoryAdapterException>().having(
-            (error) => error.message,
-            'message',
-            contains('Release changes the Source catalog'),
+          throwsA(
+            isA<RepositoryAdapterException>().having(
+              (error) => error.message,
+              'message',
+              contains('Release changes the Source catalog'),
+            ),
           ),
-        ),
-      );
+        );
 
-      expect(runner.generationCount, 1);
-      expect(await fixture.git(['rev-parse', 'HEAD']), head);
-      expect(await fixture.git(['status', '--porcelain']), isEmpty);
-      expect(await fixture.git(['branch', '--list']), branches);
-      expect(await fixture.git(['worktree', 'list', '--porcelain']), worktrees);
-      expect(
-        await fixture
-            .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
-            .exists(),
-        isFalse,
-      );
-    },
-  );
+        expect(runner.generationCount, 1);
+        expect(await fixture.git(['rev-parse', 'HEAD']), head);
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        expect(await fixture.git(['branch', '--list']), branches);
+        expect(
+          await fixture.git(['worktree', 'list', '--porcelain']),
+          worktrees,
+        );
+        expect(
+          await fixture
+              .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+              .exists(),
+          isFalse,
+        );
+      },
+    );
+  }
 
   test(
     'rejects mismatched combined provenance before changing checkout',

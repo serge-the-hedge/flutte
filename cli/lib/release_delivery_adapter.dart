@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'command_runner.dart';
@@ -264,13 +265,21 @@ class ReleaseRepositoryAdapter {
         // The checkout check proves the input matches the proposal's Source.
         // The Release Delta can itself change it without changing placeholders.
         final sourcePath = localeArtifact.sourceSnapshot.catalogPath;
-        final sourceBefore = inputFiles.singleWhere(
-          (file) => file.catalogPath == sourcePath,
+        final sourceBefore = await (await _regularFile(
+          staging.root,
+          sourcePath,
+        )).readAsBytes();
+        final sourceAfter = utf8.encode(
+          delivery.files
+              .singleWhere((file) => file.catalogPath == sourcePath)
+              .content,
         );
-        final sourceAfter = delivery.files.singleWhere(
-          (file) => file.catalogPath == sourcePath,
-        );
-        if (sourceBefore.content != sourceAfter.content) {
+        final sourceUnchanged =
+            sourceBefore.length == sourceAfter.length &&
+            sourceBefore.indexed.every(
+              (entry) => entry.$2 == sourceAfter[entry.$1],
+            );
+        if (!sourceUnchanged) {
           throw RepositoryAdapterException(
             'The Release changes the Source catalog used to review this Locale Proposal. Prepare and review a proposal against the updated Source before combining them. No local branch was created.',
           );
