@@ -931,7 +931,7 @@ const CatalogKeyCard = memo(function CatalogKeyCard({
 						onCheckedChange={(checked) =>
 							onSelectedChange(catalogKey.id, checked === true)
 						}
-						aria-label={`${selected ? "Remove" : "Add"} ${accessibleTitle} ${selected ? "from" : "to"} Translation Task`}
+						aria-label={`${selected ? "Remove" : "Add"} ${accessibleTitle} ${selected ? "from" : "to"} selection`}
 						className={cn(
 							"translate-y-0.5 transition-opacity",
 							selected

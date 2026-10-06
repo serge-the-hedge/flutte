@@ -28,6 +28,54 @@ export function canonicalReleaseExclusions(ids: readonly string[] = []) {
 	return [...new Set(ids)].sort();
 }
 
+/** Presence chooses selected-only mode. Empty selection must never become an
+ * unscoped release; exclusions and positive selection are mutually exclusive. */
+export function canonicalReleaseSelection(
+	ids: readonly string[] | undefined,
+	excludedMessageIds: readonly string[],
+) {
+	if (ids === undefined) return undefined;
+	if (excludedMessageIds.length) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Choose either selected messages or message exclusions.",
+		});
+	}
+	if (
+		ids.length > MAX_RELEASE_EXCLUDED_MESSAGES ||
+		new TextEncoder().encode(JSON.stringify(ids)).byteLength >
+			MAX_RELEASE_EXCLUDED_MESSAGE_BYTES
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message:
+				"Release selection supports at most 64 identifiers and 16 KiB of UTF-8 JSON.",
+		});
+	}
+	if (!ids.length || ids.some((id) => id.length === 0)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "Select at least one message with an exact identifier.",
+		});
+	}
+	return [...new Set(ids)].sort();
+}
+
+/** Shared by assessment and the compatibility bundle path. Only whole Catalog
+ * Messages enter the existing-language delta, including Source and targets. */
+export function releaseMessagePredicate(scope: {
+	selectedMessageIds?: readonly string[];
+	excludedMessageIds?: readonly string[];
+}) {
+	const selected =
+		scope.selectedMessageIds === undefined
+			? null
+			: new Set(scope.selectedMessageIds);
+	const excluded = new Set(scope.excludedMessageIds ?? []);
+	return (messageId: string) =>
+		(selected === null || selected.has(messageId)) && !excluded.has(messageId);
+}
+
 const releaseStatusValidator = v.union(
 	v.literal("preparing"),
 	v.literal("ready"),
@@ -72,6 +120,7 @@ export const releaseSummaryValidator = v.object({
 	commit: v.string(),
 	navigationRevision: v.number(),
 	excludedMessageIds: v.array(v.string()),
+	selectedMessageIds: v.optional(v.array(v.string())),
 	status: releaseStatusValidator,
 	posture: v.union(releasePostureValidator, v.null()),
 	progress: v.object({ cursor: v.number(), expectedKeyCount: v.number() }),
@@ -253,6 +302,9 @@ export function releaseSummary(
 		commit: record.commit,
 		navigationRevision: record.navigationRevision,
 		excludedMessageIds: record.excludedMessageIds ?? [],
+		...(record.selectedMessageIds === undefined
+			? {}
+			: { selectedMessageIds: record.selectedMessageIds }),
 		status: record.status,
 		posture: record.posture ?? null,
 		progress: {

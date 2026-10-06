@@ -151,6 +151,26 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 }
 
 function DeferredMessages({ record }: { record: ReleaseSummary }) {
+	if (record.selectedMessageIds !== undefined)
+		return (
+			<div className="flex flex-col gap-1 text-xs">
+				<span className="font-medium">
+					Only selected messages · frozen selection
+				</span>
+				<p className="text-muted-foreground">
+					This report and its bundle cover Source and all active existing target
+					languages for these messages. Other changes stay pending. New-language
+					additions remain separate, complete catalogs.
+				</p>
+				<ul className="flex flex-col gap-1">
+					{record.selectedMessageIds.map((id) => (
+						<li key={id}>
+							<code className="break-all">{id}</code>
+						</li>
+					))}
+				</ul>
+			</div>
+		);
 	if (!record.excludedMessageIds?.length) return null;
 	return (
 		<div className="flex flex-col gap-1 text-xs">

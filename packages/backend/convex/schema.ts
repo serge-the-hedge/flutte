@@ -1734,6 +1734,7 @@ export default defineSchema({
 		navigationRevision: v.number(),
 		// Absent on older records means no whole-message deferrals.
 		excludedMessageIds: v.optional(v.array(v.string())),
+		selectedMessageIds: v.optional(v.array(v.string())),
 		expectedKeyCount: v.number(),
 		handoffId: v.id("releaseWorkHandoffs"),
 		status: v.union(

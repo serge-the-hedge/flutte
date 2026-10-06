@@ -13,6 +13,7 @@ export function StringSelectionTools({
 	onSelectionChange,
 	selectAll,
 	canEdit,
+	onReleaseSelection,
 }: {
 	projectId: string;
 	collectionId?: string;
@@ -21,6 +22,7 @@ export function StringSelectionTools({
 	onSelectionChange: (ids: readonly string[]) => void;
 	selectAll: (progress: (count: number) => void) => Promise<string[]>;
 	canEdit: boolean;
+	onReleaseSelection?: () => void;
 }) {
 	const update = useMutation(api.messageTags.updateMany);
 	const [tagIds, setTagIds] = useState<string[]>([]);
@@ -96,6 +98,21 @@ export function StringSelectionTools({
 					>
 						Clear selection
 					</Button>
+					{onReleaseSelection ? (
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={busy || selected.length > 64}
+							onClick={onReleaseSelection}
+						>
+							Prepare selected release
+						</Button>
+					) : null}
+					{onReleaseSelection && selected.length > 64 ? (
+						<span className="text-muted-foreground text-xs">
+							Release selection supports up to 64 messages.
+						</span>
+					) : null}
 					{canEdit ? (
 						<fieldset
 							disabled={busy}

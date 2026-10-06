@@ -28,8 +28,27 @@ import {
 } from "@/components/localization/release-record-view";
 import { RepositoryProjectOnly } from "@/components/localization/repository-project-only";
 import { api, convexId } from "@/lib/convex-api";
+import {
+	type ReleasePreparationSelection,
+	releaseSelectionFromRecord,
+	releaseSelectionFromSearch,
+	releaseSelectionInvalid,
+} from "@/lib/release-selection";
 
 export const Route = createFileRoute("/projects/$projectId/release")({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { selectedMessages?: string[]; excludedMessages?: string[] } => {
+		const selection = releaseSelectionFromSearch(search);
+		return {
+			selectedMessages:
+				selection?.mode === "selected"
+					? selection.selectedMessageIds
+					: undefined,
+			excludedMessages:
+				selection?.mode === "all" ? selection.excludedMessageIds : undefined,
+		};
+	},
 	component: ReleaseRoute,
 });
 
@@ -55,11 +74,25 @@ function RepositoryReleaseRoute() {
 	const [starting, setStarting] = useState(false);
 	const [building, setBuilding] = useState(false);
 	const record = release?.kind === "available" ? release.current : null;
-	const [scopeDraft, setScopeDraft] = useState<string[] | null>(null);
-	const excludedMessageIds = scopeDraft ?? record?.excludedMessageIds ?? [];
+	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const selection =
+		releaseSelectionFromSearch(search) ?? releaseSelectionFromRecord(record);
+	const scopeInvalid = releaseSelectionInvalid(selection);
+	const changeSelection = (next: ReleasePreparationSelection) => {
+		void navigate({
+			search: {
+				selectedMessages:
+					next.mode === "selected" ? next.selectedMessageIds : undefined,
+				excludedMessages:
+					next.mode === "all" ? next.excludedMessageIds : undefined,
+			},
+			replace: true,
+		});
+	};
 	const scopeChanged =
-		JSON.stringify(excludedMessageIds) !==
-		JSON.stringify(record?.excludedMessageIds ?? []);
+		JSON.stringify(selection) !==
+		JSON.stringify(releaseSelectionFromRecord(record));
 	const bundle = useQuery(
 		api.releaseBundles.forRecord,
 		record?.status === "ready" ? { recordId: record.recordId } : "skip",
@@ -90,13 +123,17 @@ function RepositoryReleaseRoute() {
 		{ initialNumItems: 50 },
 	);
 
-	const start = async () => {
+	const start = async (scope: ReleasePreparationSelection = selection) => {
+		if (releaseSelectionInvalid(scope)) return;
 		setStarting(true);
 		try {
 			await prepare({
 				projectId: convexId<"projects">(projectId),
-				excludedMessageIds,
+				...(scope.mode === "selected"
+					? { selectedMessageIds: scope.selectedMessageIds }
+					: { excludedMessageIds: scope.excludedMessageIds }),
 			});
+			changeSelection(scope);
 			toast.success("Release assessment started.");
 		} catch (cause) {
 			toast.error(
@@ -130,9 +167,9 @@ function RepositoryReleaseRoute() {
 			<PageHeader title="Release" />
 			{release?.kind === "available" && release.canPrepare ? (
 				<ReleasePreparationScope
-					excludedMessageIds={excludedMessageIds}
-					onChange={setScopeDraft}
-					onPrepare={start}
+					selection={selection}
+					onChange={changeSelection}
+					onPrepare={() => void start()}
 					preparing={starting || record?.status === "preparing"}
 				/>
 			) : null}
@@ -148,9 +185,9 @@ function RepositoryReleaseRoute() {
 							size="sm"
 							variant="outline"
 							disabled={starting}
-							onClick={start}
+							onClick={() => void start(releaseSelectionFromRecord(record))}
 						>
-							Prepare current release
+							Refresh this report’s selection
 						</Button>
 					) : null}
 				</div>
@@ -223,8 +260,8 @@ function RepositoryReleaseRoute() {
 									<Button
 										size="sm"
 										variant="outline"
-										disabled={starting}
-										onClick={start}
+										disabled={starting || scopeInvalid}
+										onClick={() => void start()}
 									>
 										Prepare current release
 									</Button>
@@ -326,7 +363,11 @@ function RepositoryReleaseRoute() {
 						</div>
 						{release.canPrepare ? (
 							<div>
-								<Button size="sm" disabled={starting} onClick={start}>
+								<Button
+									size="sm"
+									disabled={starting || scopeInvalid}
+									onClick={() => void start()}
+								>
 									{starting ? (
 										<LoaderCircle aria-hidden="true" className="animate-spin" />
 									) : null}

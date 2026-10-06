@@ -671,6 +671,17 @@ function RepositoryStrings() {
 					selected={selectedKeys}
 					onSelectionChange={setSelectedKeys}
 					canEdit={!!overview.canEdit}
+					onReleaseSelection={
+						overview.canEdit
+							? () => {
+									void navigate({
+										to: "/projects/$projectId/release",
+										params: { projectId },
+										search: { selectedMessages: [...selectedKeys].sort() },
+									});
+								}
+							: undefined
+					}
 					selectAll={(progress) =>
 						matchingRepositoryKeys(
 							convex,

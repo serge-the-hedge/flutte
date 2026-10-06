@@ -301,7 +301,7 @@ describe("Catalog editor draft lifecycle", () => {
 		await act(async () =>
 			testDom.container
 				.querySelector<HTMLButtonElement>(
-					'[aria-label="Add welcome to Translation Task"]',
+					'[aria-label="Add welcome to selection"]',
 				)
 				?.click(),
 		);
@@ -567,7 +567,7 @@ describe("Catalog editor draft lifecycle", () => {
 			await act(async () => {
 				testDom.container
 					.querySelector<HTMLElement>(
-						`[aria-label="Add ${display} to Translation Task"]`,
+						`[aria-label="Add ${display} to selection"]`,
 					)
 					?.click();
 			});
