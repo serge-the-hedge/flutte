@@ -1,6 +1,32 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
+
+export const MAX_RELEASE_EXCLUDED_MESSAGES = 64;
+export const MAX_RELEASE_EXCLUDED_MESSAGE_BYTES = 16 * 1024;
+
+/** Exact identifiers: no trimming or case folding. Bound the submitted list
+ * before deduplication so both validation reads and frozen scope stay finite. */
+export function canonicalReleaseExclusions(ids: readonly string[] = []) {
+	if (
+		ids.length > MAX_RELEASE_EXCLUDED_MESSAGES ||
+		new TextEncoder().encode(JSON.stringify(ids)).byteLength >
+			MAX_RELEASE_EXCLUDED_MESSAGE_BYTES
+	) {
+		throw new ConvexError({
+			code: "LIMIT_EXCEEDED",
+			message:
+				"Release exclusions support at most 64 identifiers and 16 KiB of UTF-8 JSON.",
+		});
+	}
+	if (ids.some((id) => id.length === 0)) {
+		throw new ConvexError({
+			code: "VALIDATION",
+			message: "A deferred message needs an exact identifier.",
+		});
+	}
+	return [...new Set(ids)].sort();
+}
 
 const releaseStatusValidator = v.union(
 	v.literal("preparing"),
@@ -45,6 +71,7 @@ export const releaseSummaryValidator = v.object({
 	snapshotId: v.id("sourceSnapshots"),
 	commit: v.string(),
 	navigationRevision: v.number(),
+	excludedMessageIds: v.array(v.string()),
 	status: releaseStatusValidator,
 	posture: v.union(releasePostureValidator, v.null()),
 	progress: v.object({ cursor: v.number(), expectedKeyCount: v.number() }),
@@ -225,6 +252,7 @@ export function releaseSummary(
 		snapshotId: record.snapshotId,
 		commit: record.commit,
 		navigationRevision: record.navigationRevision,
+		excludedMessageIds: record.excludedMessageIds ?? [],
 		status: record.status,
 		posture: record.posture ?? null,
 		progress: {

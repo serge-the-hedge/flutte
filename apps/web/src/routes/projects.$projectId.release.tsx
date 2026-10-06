@@ -19,6 +19,7 @@ import {
 	ProjectShell,
 } from "@/components/localization/project-shell";
 import { ReleaseChanges } from "@/components/localization/release-changes";
+import { ReleasePreparationScope } from "@/components/localization/release-preparation-scope";
 import {
 	PreparingCard,
 	ReleaseDeliveryHandoff,
@@ -36,7 +37,7 @@ function ReleaseRoute() {
 	const { projectId } = Route.useParams();
 	return (
 		<RepositoryProjectOnly projectId={projectId}>
-			<RepositoryReleaseRoute />
+			<RepositoryReleaseRoute key={projectId} />
 		</RepositoryProjectOnly>
 	);
 }
@@ -54,6 +55,11 @@ function RepositoryReleaseRoute() {
 	const [starting, setStarting] = useState(false);
 	const [building, setBuilding] = useState(false);
 	const record = release?.kind === "available" ? release.current : null;
+	const [scopeDraft, setScopeDraft] = useState<string[] | null>(null);
+	const excludedMessageIds = scopeDraft ?? record?.excludedMessageIds ?? [];
+	const scopeChanged =
+		JSON.stringify(excludedMessageIds) !==
+		JSON.stringify(record?.excludedMessageIds ?? []);
 	const bundle = useQuery(
 		api.releaseBundles.forRecord,
 		record?.status === "ready" ? { recordId: record.recordId } : "skip",
@@ -87,7 +93,10 @@ function RepositoryReleaseRoute() {
 	const start = async () => {
 		setStarting(true);
 		try {
-			await prepare({ projectId: convexId<"projects">(projectId) });
+			await prepare({
+				projectId: convexId<"projects">(projectId),
+				excludedMessageIds,
+			});
 			toast.success("Release assessment started.");
 		} catch (cause) {
 			toast.error(
@@ -119,6 +128,14 @@ function RepositoryReleaseRoute() {
 	return (
 		<ProjectShell projectId={projectId} title={project?.name ?? "Project"}>
 			<PageHeader title="Release" />
+			{release?.kind === "available" && release.canPrepare ? (
+				<ReleasePreparationScope
+					excludedMessageIds={excludedMessageIds}
+					onChange={setScopeDraft}
+					onPrepare={start}
+					preparing={starting || record?.status === "preparing"}
+				/>
+			) : null}
 			{record?.status === "ready" &&
 			release?.kind === "available" &&
 			!release.basisCurrent ? (
@@ -231,7 +248,13 @@ function RepositoryReleaseRoute() {
 						</Button>
 					}
 					releaseAction={
-						!release.basisCurrent ? null : readyLocaleProposal === undefined ? (
+						scopeChanged ? (
+							<p className="text-muted-foreground text-xs">
+								Prepare this selection to update the report before building or
+								delivering.
+							</p>
+						) : !release.basisCurrent ? null : readyLocaleProposal ===
+							undefined ? (
 							<Skeleton className="h-12 w-full max-w-xl" />
 						) : bundle?.status === "ready" ? (
 							<ReleaseDeliveryHandoff

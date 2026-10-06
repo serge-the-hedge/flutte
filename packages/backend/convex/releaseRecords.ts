@@ -34,6 +34,7 @@ import {
 import { now, sha256Hex } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import {
+	canonicalReleaseExclusions,
 	deliberateEvidenceFor,
 	emptyLocaleSummary,
 	emptyReleaseAssessment,
@@ -237,12 +238,34 @@ async function currentNavigationBasis(
 }
 
 export const prepare = mutation({
-	args: { projectId: v.id("projects") },
+	args: {
+		projectId: v.id("projects"),
+		excludedMessageIds: v.optional(v.array(v.string())),
+	},
 	returns: releaseSummaryValidator,
 	handler: async (ctx, args) => {
 		const { userId } = await requireEditor(ctx, args.projectId);
+		const excludedMessageIds = canonicalReleaseExclusions(
+			args.excludedMessageIds,
+		);
 		const { projection, snapshotId, navigationRevision } =
 			await currentNavigationBasis(ctx, args.projectId);
+		for (const messageId of excludedMessageIds) {
+			const key = await ctx.db
+				.query("catalogWorkspaceNavigationRows")
+				.withIndex("by_project_and_projection_and_messageId", (q) =>
+					q
+						.eq("projectId", args.projectId)
+						.eq("projectionId", projection._id)
+						.eq("messageId", messageId),
+				)
+				.unique();
+			if (!key)
+				throw new ConvexError({
+					code: "VALIDATION",
+					message: `The current catalog has no message with identifier ${JSON.stringify(messageId)}.`,
+				});
+		}
 		const sameBasis = await ctx.db
 			.query("releaseRecords")
 			.withIndex("by_project_and_projection_and_navigationRevision", (q) =>
@@ -253,7 +276,15 @@ export const prepare = mutation({
 			)
 			.order("desc")
 			.take(1);
-		const reusable = sameBasis[0];
+		// Reuse only the latest basis record, avoiding an index migration or a
+		// history scan. Returning to an older scope can create a fresh record.
+		const latest = sameBasis[0];
+		const reusable =
+			latest &&
+			JSON.stringify(latest.excludedMessageIds ?? []) ===
+				JSON.stringify(excludedMessageIds)
+				? latest
+				: undefined;
 		if (
 			reusable?.status === "ready" &&
 			reusable.changedKeyCount !== undefined
@@ -317,6 +348,7 @@ export const prepare = mutation({
 			snapshotId,
 			commit: projection.commit,
 			navigationRevision,
+			excludedMessageIds,
 			expectedKeyCount: projection.expectedKeyCount,
 			handoffId,
 			status: "preparing",
@@ -611,8 +643,10 @@ export const processStep = internalMutation({
 			let handoffKeyCount = handoff.keyCount;
 			let handoffByteLength = handoff.byteLength;
 			let cursor = preparation.cursor;
+			const excludedMessageIds = new Set(record.excludedMessageIds ?? []);
 			for (const digest of rows) {
 				cursor = digest.catalogIndex;
+				if (excludedMessageIds.has(digest.messageId)) continue;
 				const isDelta = isReleaseDelta(digest);
 				if (!isDelta) continue;
 				deltaKeyCount++;

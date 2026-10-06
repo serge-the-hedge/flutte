@@ -1,11 +1,45 @@
 import { describe, expect, test } from "vitest";
 
 import {
+	canonicalReleaseExclusions,
 	deliberateEvidenceFor,
 	isReleaseDelta,
 	releasePostureFor,
 	releaseTargetContribution,
 } from "./releaseRecordModel";
+
+describe("Release message deferral envelope", () => {
+	test("canonicalizes exact identifiers without changing caller input", () => {
+		const ids = ["b", " a ", "b", "A"];
+		expect(canonicalReleaseExclusions(ids)).toEqual([" a ", "A", "b"]);
+		expect(ids).toEqual(["b", " a ", "b", "A"]);
+		expect(canonicalReleaseExclusions()).toEqual([]);
+	});
+
+	test("bounds submitted items before deduplication", () => {
+		expect(
+			canonicalReleaseExclusions(Array.from({ length: 64 }, () => "a")),
+		).toEqual(["a"]);
+		expect(() =>
+			canonicalReleaseExclusions(Array.from({ length: 65 }, () => "a")),
+		).toThrow("64 identifiers");
+	});
+
+	test("bounds UTF-8 JSON bytes, including escaping and multibyte identifiers", () => {
+		expect(canonicalReleaseExclusions(["a".repeat(16380)])[0]?.length).toBe(
+			16380,
+		);
+		expect(() => canonicalReleaseExclusions(["a".repeat(16381)])).toThrow(
+			"16 KiB",
+		);
+		expect(() => canonicalReleaseExclusions(["語".repeat(5461)])).toThrow(
+			"16 KiB",
+		);
+		expect(() => canonicalReleaseExclusions(["\n".repeat(8191)])).toThrow(
+			"16 KiB",
+		);
+	});
+});
 
 describe("Release Assessment posture", () => {
 	test.each([

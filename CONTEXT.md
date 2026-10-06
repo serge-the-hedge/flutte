@@ -329,7 +329,9 @@ _Avoid_: live dashboard counter, export attempt
 
 **Release Preparation**:
 A deliberate request to assess the current Release Scope and create or reuse
-its Release Record. It is distinct from lightweight live translation status.
+its Release Record. An editor can leave whole Catalog Messages pending for this
+record, excluding their Source and all existing target values together while
+retaining the pending work. It is distinct from lightweight live translation status.
 _Avoid_: page refresh, export attempt
 
 **Release Bundle**:

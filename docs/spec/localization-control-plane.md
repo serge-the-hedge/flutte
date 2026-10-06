@@ -10,7 +10,7 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Release assessment, bundles, configured language delivery and binding | Implemented, including script/region variants over an existing language base and adapter-owned locale-subtag preservation. Exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
+| Release assessment, bundles, configured language delivery and binding | Implemented, including immutable whole-message deferral during Release Preparation, script/region variants over an existing language base and adapter-owned locale-subtag preservation. Exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
 | Dictionary and project voice guidance | Human-maintained general Voice Guide with optional Locale add-ons; Dictionary authoring by editors or explicitly scoped agents, immutable citations, and bounded reads implemented; derived Dictionary observations remain planned |
@@ -718,6 +718,16 @@ you cannot ship German alone. **Release Posture** is computed over the keys in
 the record's delta, so an English-only delivery is not held hostage to the
 catalog's standing backlog.
 
+An editor may deliberately leave whole Catalog Messages pending for one Release
+Record. The frozen exclusion covers Source and every active existing target
+Locale together, with no per-Locale waiver. Excluded messages contribute no delta,
+assessment counts, findings, evidence, or Work Hand-off keys; their pending work
+and provenance remain unchanged. The exact identifiers appear separately in the
+report and history, and a later preparation can include them again. Default
+preparation excludes nothing; scope is part of immutable reuse identity and all
+freshness checks remain in force. The bounded exact-identifier input and reuse
+behavior are specified in the [lifecycle](../catalog-message-lifecycle.md#release-delivery-and-observation).
+
 Three postures, and no others:
 
 | Posture | Meaning |
@@ -784,6 +794,11 @@ regenerates after both catalog operations. It produces one delivery commit carry
 provenance identities, optionally preceded by a verified generated-output refresh
 commit on the same review branch. The new-Locale-only command remains a compatibility
 adapter, not a second product workflow.
+
+Whole-message deferral affects the existing-language Release Delta only. A
+complete finalized new-Locale catalog retains excluded messages. The final Source
+compatibility check still rejects a new-Locale artifact when an included Source
+edit changes its pinned Source.
 
 - **Drift is content, not distance.** The predicate compares the Baseline
   Snapshot's catalogs against the delivery tree's, over the bound files only.
