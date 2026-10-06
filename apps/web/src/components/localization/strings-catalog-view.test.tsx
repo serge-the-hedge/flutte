@@ -375,9 +375,7 @@ describe("StringsCatalogView", () => {
 			/>,
 		);
 
-		expect(markup).toContain(
-			'aria-label="Add account_title to Translation Task"',
-		);
+		expect(markup).toContain('aria-label="Add account_title to selection"');
 	});
 
 	test("distinguishes explicit empty values from materialized missing targets", () => {

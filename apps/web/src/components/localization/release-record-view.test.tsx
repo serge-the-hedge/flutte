@@ -72,6 +72,32 @@ const evidence: ReleaseEvidence[] = [
 ];
 
 describe("Release Record UI", () => {
+	test("labels current and historical positive selection as frozen whole-message scope", () => {
+		const record = {
+			...releaseSummary("ready"),
+			selectedMessageIds: ["current_message"],
+		};
+		const history = {
+			...releaseSummary("ready"),
+			selectedMessageIds: ["earlier_message"],
+		};
+		const markup = renderToStaticMarkup(
+			<ReleaseRecordView
+				record={record}
+				history={[history]}
+				evidence={[]}
+				evidenceStatus="Exhausted"
+				onLoadMoreEvidence={() => undefined}
+			/>,
+		);
+		expect(markup).toContain("current_message");
+		expect(markup).toContain("earlier_message");
+		expect(
+			markup.match(/Only selected messages · frozen selection/g),
+		).toHaveLength(2);
+		expect(markup).toContain("Other changes stay pending");
+		expect(markup).toContain("complete catalogs");
+	});
 	test("shows exact deferred messages separately in current, preparing and historical records", () => {
 		const record = {
 			...releaseSummary("ready"),

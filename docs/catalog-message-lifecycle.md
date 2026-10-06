@@ -186,15 +186,28 @@ completed. The report and its history list these identifiers separately from
 included delta counts. Refreshing a stale report preserves the selection; choose
 **Include again** and prepare to restore a message to a later release.
 
-`releaseRecords.prepare` accepts optional `excludedMessageIds`: at most 64
-submitted identifiers and 16 KiB for their UTF-8 JSON array, including duplicates.
-Identifiers must exactly match the current catalog; no trimming or case folding
-is applied. Deduplication and sorting freeze a canonical selection. Older records
-without this field mean no exclusions. Reuse checks the latest record at the same
-Snapshot and Workspace revision and requires the same selection; switching back
-to an older selection may create a fresh record instead of reusing history.
+`releaseRecords.prepare` accepts optional `selectedMessageIds` to release only
+those exact messages, or optional `excludedMessageIds` to defer messages from
+all current changes. Positive selection and nonempty exclusions cannot coexist.
+Each submitted array supports at most 64 identifiers and 16 KiB of UTF-8 JSON,
+including duplicates. Identifiers must exactly match the current catalog; no
+trimming or case folding is applied. An empty or invalid positive selection is
+rejected; it never falls back to all changes. An omitted positive selection
+retains all-current-deltas behavior, including for older records.
 
-Deferral affects only the existing-language delta. Complete finalized new-Locale
+Deduplication and sorting freeze the canonical scope in the Release Record and
+bundle metadata. Assessment, saved comparisons and bundle changes include each
+chosen message's Source and all active existing targets together. Unselected
+workspace edits, confirmations, proposals and reviews remain pending. Reuse
+checks the latest record at the same Snapshot and Workspace revision and requires
+the same mode and identifiers; returning to an older scope may create a fresh
+record instead of reusing history. Refresh retains the frozen scope. Strings can
+carry its selected messages into Release Preparation; URL state preserves the
+draft on reload and navigation. Current and historical reports identify their
+frozen selection, and changing the draft requires preparation before building or
+delivering it.
+
+Selection and deferral affect only the existing-language delta. Complete finalized new-Locale
 catalogs retain these messages with their independently reviewed values. Combined
 delivery still checks the final Source against their pinned Source; any included
 Source edit that changes it prevents incompatible new-Locale delivery.

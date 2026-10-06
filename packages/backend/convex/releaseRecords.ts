@@ -35,6 +35,7 @@ import { now, sha256Hex } from "./lib";
 import { requireEditor, requireViewer } from "./permissions";
 import {
 	canonicalReleaseExclusions,
+	canonicalReleaseSelection,
 	deliberateEvidenceFor,
 	emptyLocaleSummary,
 	emptyReleaseAssessment,
@@ -44,6 +45,7 @@ import {
 	isReleaseDelta,
 	localeSummaryMap,
 	releaseAssessmentFrom,
+	releaseMessagePredicate,
 	releasePostureFor,
 	releaseSummary,
 	releaseSummaryValidator,
@@ -241,6 +243,7 @@ export const prepare = mutation({
 	args: {
 		projectId: v.id("projects"),
 		excludedMessageIds: v.optional(v.array(v.string())),
+		selectedMessageIds: v.optional(v.array(v.string())),
 	},
 	returns: releaseSummaryValidator,
 	handler: async (ctx, args) => {
@@ -248,9 +251,13 @@ export const prepare = mutation({
 		const excludedMessageIds = canonicalReleaseExclusions(
 			args.excludedMessageIds,
 		);
+		const selectedMessageIds = canonicalReleaseSelection(
+			args.selectedMessageIds,
+			excludedMessageIds,
+		);
 		const { projection, snapshotId, navigationRevision } =
 			await currentNavigationBasis(ctx, args.projectId);
-		for (const messageId of excludedMessageIds) {
+		for (const messageId of selectedMessageIds ?? excludedMessageIds) {
 			const key = await ctx.db
 				.query("catalogWorkspaceNavigationRows")
 				.withIndex("by_project_and_projection_and_messageId", (q) =>
@@ -282,7 +289,9 @@ export const prepare = mutation({
 		const reusable =
 			latest &&
 			JSON.stringify(latest.excludedMessageIds ?? []) ===
-				JSON.stringify(excludedMessageIds)
+				JSON.stringify(excludedMessageIds) &&
+			JSON.stringify(latest.selectedMessageIds ?? null) ===
+				JSON.stringify(selectedMessageIds ?? null)
 				? latest
 				: undefined;
 		if (
@@ -349,6 +358,7 @@ export const prepare = mutation({
 			commit: projection.commit,
 			navigationRevision,
 			excludedMessageIds,
+			...(selectedMessageIds === undefined ? {} : { selectedMessageIds }),
 			expectedKeyCount: projection.expectedKeyCount,
 			handoffId,
 			status: "preparing",
@@ -643,10 +653,10 @@ export const processStep = internalMutation({
 			let handoffKeyCount = handoff.keyCount;
 			let handoffByteLength = handoff.byteLength;
 			let cursor = preparation.cursor;
-			const excludedMessageIds = new Set(record.excludedMessageIds ?? []);
+			const includesMessage = releaseMessagePredicate(record);
 			for (const digest of rows) {
 				cursor = digest.catalogIndex;
-				if (excludedMessageIds.has(digest.messageId)) continue;
+				if (!includesMessage(digest.messageId)) continue;
 				const isDelta = isReleaseDelta(digest);
 				if (!isDelta) continue;
 				deltaKeyCount++;

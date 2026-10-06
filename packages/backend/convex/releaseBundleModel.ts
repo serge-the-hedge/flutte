@@ -19,6 +19,7 @@ export type ReleaseBundleArtifact = {
 		manifestHash: string;
 		integrationBranch: string;
 		excludedMessageIds?: string[];
+		selectedMessageIds?: string[];
 	};
 	catalogs: Array<{
 		localeCode: string;
