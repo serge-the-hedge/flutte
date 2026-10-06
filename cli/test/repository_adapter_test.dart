@@ -711,11 +711,9 @@ void main() {
             '{"@@locale":"de","welcome":"Hallo","deferred_message":"Legacy target"}';
         await fixture.file(sourcePath).writeAsString(source);
         await fixture.file(targetPath).writeAsString(target);
-        final generation = await Process.run(
-          fixture.flutterExecutable,
-          ['gen-l10n'],
-          workingDirectory: '${fixture.root.path}/packages/brickit_generated',
-        );
+        final generation = await Process.run(fixture.flutterExecutable, [
+          'gen-l10n',
+        ], workingDirectory: '${fixture.root.path}/packages/brickit_generated');
         expect(generation.exitCode, 0);
         await fixture.git(['add', '.']);
         await fixture.git([
