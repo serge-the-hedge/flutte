@@ -45,17 +45,27 @@ export function releaseSelectionFromRecord(
 		: { mode: "selected", selectedMessageIds: record.selectedMessageIds };
 }
 
-export function releaseSelectionInvalid(
+export function releaseSelectionProblem(
 	selection: ReleasePreparationSelection,
 ) {
 	const ids =
 		selection.mode === "selected"
 			? selection.selectedMessageIds
 			: selection.excludedMessageIds;
-	return (
-		(selection.mode === "selected" && ids.length === 0) ||
+	if (
 		ids.length > 64 ||
-		ids.some((id) => !id.length) ||
 		new TextEncoder().encode(JSON.stringify(ids)).byteLength > 16 * 1024
-	);
+	)
+		return "Use at most 64 identifiers and 16 KiB of UTF-8 JSON.";
+	if (selection.mode === "selected" && ids.length === 0)
+		return "Select at least one message, or carry a selection from Strings.";
+	if (ids.some((id) => !id.length))
+		return "Every message needs an exact identifier.";
+	return null;
+}
+
+export function releaseSelectionInvalid(
+	selection: ReleasePreparationSelection,
+) {
+	return releaseSelectionProblem(selection) !== null;
 }

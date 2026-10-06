@@ -25,7 +25,7 @@ import {
 import { useId, useState } from "react";
 import {
 	type ReleasePreparationSelection,
-	releaseSelectionInvalid,
+	releaseSelectionProblem,
 } from "@/lib/release-selection";
 
 const modes = [
@@ -52,6 +52,7 @@ export function ReleasePreparationScope({
 	const ids = selectedOnly
 		? selection.selectedMessageIds
 		: selection.excludedMessageIds;
+	const problem = releaseSelectionProblem(selection);
 	const changeIds = (next: string[]) =>
 		onChange(
 			selectedOnly
@@ -157,22 +158,19 @@ export function ReleasePreparationScope({
 					</ul>
 				) : (
 					<p className="text-muted-foreground text-xs">
-						{selectedOnly
-							? "Select at least one message, or carry a selection from Strings."
-							: "All current message changes are included."}
+						{problem ?? "All current message changes are included."}
 					</p>
 				)}
-				{ids.length > 64 ||
-				new TextEncoder().encode(JSON.stringify(ids)).byteLength > 16 * 1024 ? (
+				{ids.length > 0 && problem ? (
 					<p role="status" className="text-muted-foreground text-xs">
-						Use at most 64 identifiers and 16 KiB of UTF-8 JSON.
+						{problem}
 					</p>
 				) : null}
 			</CardContent>
 			<CardFooter>
 				<Button
 					size="sm"
-					disabled={preparing || releaseSelectionInvalid(selection)}
+					disabled={preparing || problem !== null}
 					onClick={onPrepare}
 				>
 					Prepare with this selection
