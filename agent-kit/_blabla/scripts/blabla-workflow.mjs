@@ -484,8 +484,15 @@ async function handoff(current, directory) {
 	await save(path, { revisions });
 	return { path, revisions };
 }
-/** @param {Client} api @param {string} taskId @param {string} directory */
-async function taskRead(api, taskId, directory, restart = false) {
+/** Read a scan page or inspect one observed position without moving the scan.
+ * @param {Client} api @param {string} taskId @param {string} directory
+ * @param {{restart?: boolean, inspectCursor?: number}} options */
+async function taskRead(
+	api,
+	taskId,
+	directory,
+	{ restart = false, inspectCursor },
+) {
 	const submission = await optional(join(directory, "submission.json"));
 	if (object(submission) && submission.outcome === "unknown")
 		throw new Failure(
@@ -495,22 +502,33 @@ async function taskRead(api, taskId, directory, restart = false) {
 	if (restart)
 		await save(join(directory, "cursor.json"), { cursor: 0, complete: false });
 	const progress = checkpoint(await optional(join(directory, "cursor.json")));
-	if (progress.complete)
+	const inspecting = inspectCursor !== undefined;
+	if (progress.complete && !inspecting)
 		return {
 			taskId,
 			submittedScopeComplete: true,
 			next: "task status (fresh server review coverage)",
 		};
-	const current = await getPage(api, taskId, progress.cursor);
-	await save(join(directory, "page.json"), {
-		cursor: progress.cursor,
-		page: current,
-	});
+	const position = inspectCursor ?? progress.cursor;
+	// Invalidate the old selection before I/O: a failed or interrupted fetch
+	// must not leave an unrelated page available to submit. Unknown writes block above.
+	if (inspecting)
+		await save(join(directory, "page.json"), {
+			cursor: position,
+			mode: "inspect",
+			page: null,
+		});
+	const current = await getPage(api, taskId, position);
 	const pending = current.targets.filter((target) =>
 		["missing", "rejected"].includes(reviewKind(target)),
 	);
 	const review = await handoff(current, directory);
-	if (!pending.length)
+	await save(join(directory, "page.json"), {
+		cursor: position,
+		...(inspecting ? { mode: "inspect" } : {}),
+		page: current,
+	});
+	if (!pending.length && !inspecting)
 		await save(join(directory, "cursor.json"), {
 			cursor: current.nextCursor,
 			complete: current.nextCursor === null,
@@ -519,7 +537,16 @@ async function taskRead(api, taskId, directory, restart = false) {
 		...current,
 		work: pending.map((target) => target.messageId),
 		reviewHandoff: review.path,
-		submittedScopeComplete: !pending.length && current.nextCursor === null,
+		submittedScopeComplete: inspecting
+			? progress.complete
+			: !pending.length && current.nextCursor === null,
+		...(inspecting
+			? {
+					inspectionCursor: position,
+					inspectedPageComplete: !pending.length,
+					scanCheckpoint: progress,
+				}
+			: {}),
 		next: pending.length
 			? "Translate this page, then task submit. Rejected terminal tasks need a correction task."
 			: "Hand off pending reviews; task read continues the saved cursor.",
@@ -538,8 +565,28 @@ function sameCandidate(target, item) {
 async function taskSubmit(api, taskId, directory, body) {
 	const items = candidates(body);
 	const saved = record(await read(join(directory, "page.json")), "Saved page");
-	if (!cursor(saved.cursor))
-		throw new Failure("INVALID_STATE", "Read the task page before submitting.");
+	if (
+		!cursor(saved.cursor) ||
+		!object(saved.page) ||
+		!(saved.mode === undefined || saved.mode === "inspect")
+	)
+		throw new Failure(
+			"INVALID_STATE",
+			"Successfully read or inspect the task page before submitting.",
+		);
+	const inspecting = saved.mode === "inspect";
+	const intentPath = join(directory, "submission.json");
+	const previous = await optional(intentPath);
+	if (
+		object(previous) &&
+		previous.outcome === "unknown" &&
+		(previous.cursor !== saved.cursor ||
+			JSON.stringify(previous.items) !== JSON.stringify(items))
+	)
+		throw new Failure(
+			"UNKNOWN_WRITE",
+			"Recover the saved submission on its original page with identical input before changing it.",
+		);
 	const before = page(saved.page);
 	const current = await getPage(api, taskId, saved.cursor);
 	if (
@@ -600,17 +647,6 @@ async function taskSubmit(api, taskId, directory, body) {
 			);
 		return true;
 	});
-	const intentPath = join(directory, "submission.json");
-	const previous = await optional(intentPath);
-	if (
-		object(previous) &&
-		previous.outcome === "unknown" &&
-		JSON.stringify(previous.items) !== JSON.stringify(items)
-	)
-		throw new Failure(
-			"UNKNOWN_WRITE",
-			"Recover the saved submission with the identical input before changing it.",
-		);
 	await save(intentPath, { items, outcome: "unknown", cursor: saved.cursor });
 	if (pending.length) {
 		try {
@@ -653,24 +689,37 @@ async function taskSubmit(api, taskId, directory, body) {
 	await save(intentPath, { items, outcome: "recorded", cursor: saved.cursor });
 	await save(join(directory, "page.json"), {
 		cursor: saved.cursor,
+		...(inspecting ? { mode: "inspect" } : {}),
 		page: after,
 	});
 	const remaining = after.targets
 		.filter((target) => ["missing", "rejected"].includes(reviewKind(target)))
 		.map((target) => target.messageId);
-	if (!remaining.length)
+	if (!remaining.length && !inspecting)
 		await save(join(directory, "cursor.json"), {
 			cursor: after.nextCursor,
 			complete: after.nextCursor === null,
 		});
 	const review = await handoff(after, directory);
+	const progress = inspecting
+		? checkpoint(await optional(join(directory, "cursor.json")))
+		: null;
 	return {
 		taskId,
 		submitted: items.length,
 		remainingOnPage: remaining,
 		reviewHandoff: review.path,
 		revisions: review.revisions,
-		submittedScopeComplete: !remaining.length && after.nextCursor === null,
+		submittedScopeComplete: progress
+			? progress.complete
+			: !remaining.length && after.nextCursor === null,
+		...(progress
+			? {
+					inspectionCursor: saved.cursor,
+					inspectedPageComplete: !remaining.length,
+					scanCheckpoint: progress,
+				}
+			: {}),
 	};
 }
 
@@ -1077,12 +1126,18 @@ async function taskReuse(api, taskId, sourceTaskId, directory, maxPages) {
 
 const help = `Blabla resumable workflow (Node.js 22+)
 node blabla-workflow.mjs task read|submit|status TASK_ID --state DIRECTORY [--profile NAME]
+node blabla-workflow.mjs task inspect TASK_ID --cursor CURSOR --state DIRECTORY [--profile NAME]
 node blabla-workflow.mjs task reuse DESTINATION_TASK_ID --source SOURCE_TASK_ID --state DIRECTORY [--profile NAME]
 node blabla-workflow.mjs review read|submit --state DIRECTORY --body FILE [--profile NAME]
 
 task read returns at most 16 targets with live guidance; submit takes the ordinary
 {items:[{messageId,candidate:{kind:"value",value:"..."}}]} body (--body FILE).
 The cursor advances only when the page has candidates; repeated reads preserve work.
+task inspect selects one fresh page at an observed nonnegative integer cursor.
+Reuse a server cursor; byte-bounded pages cannot be located by assumed page size.
+Inspect and its submit preserve the scan checkpoint and status observations.
+inspectedPageComplete covers only that page; submittedScopeComplete covers the saved scan.
+Inspection clears page selection before fetching; after failure, read or inspect again.
 Submissions use the server's ICU and character-limit validation and save review handoffs.
 task reuse copies exact reviewed authorship as fresh pending candidates, saves receipts
 and review handoffs, and scans 4 source pages per call. Use separate reuse state.
@@ -1108,7 +1163,7 @@ export async function main(argv) {
 	if (
 		!(
 			(role === "task" &&
-				["read", "submit", "status", "reuse"].includes(command)) ||
+				["read", "inspect", "submit", "status", "reuse"].includes(command)) ||
 			(role === "review" && ["read", "submit"].includes(command))
 		)
 	)
@@ -1126,6 +1181,7 @@ export async function main(argv) {
 				"--max-pages",
 				"--restart",
 				"--source",
+				"--cursor",
 			].includes(flag) ||
 			flags.has(flag)
 		)
@@ -1153,6 +1209,26 @@ export async function main(argv) {
 		throw new Failure(
 			"INVALID_ARGUMENT",
 			"task reuse requires --source and does not take --body.",
+		);
+	if (
+		flags.has("--cursor") !== (command === "inspect") ||
+		(command === "inspect" && flags.has("--body"))
+	)
+		throw new Failure(
+			"INVALID_ARGUMENT",
+			"task inspect requires --cursor and does not take --body; --cursor is only for task inspect.",
+		);
+	const rawCursor = flags.get("--cursor");
+	const inspectCursor = rawCursor === undefined ? undefined : Number(rawCursor);
+	if (
+		rawCursor !== undefined &&
+		(!/^\d+$/.test(rawCursor) ||
+			!Number.isSafeInteger(inspectCursor) ||
+			Number(inspectCursor) < 0)
+	)
+		throw new Failure(
+			"INVALID_ARGUMENT",
+			"--cursor must be a nonnegative safe integer observed from task pagination.",
 		);
 	const sourceTaskId =
 		command === "reuse" ? id(flags.get("--source"), "--source taskId") : null;
@@ -1219,8 +1295,11 @@ export async function main(argv) {
 								directory,
 								boundedNumber(flags.get("--max-pages"), 4, 32),
 							)
-						: command === "read"
-							? await taskRead(api, taskId, directory, flags.has("--restart"))
+						: ["read", "inspect"].includes(command)
+							? await taskRead(api, taskId, directory, {
+									restart: flags.has("--restart"),
+									inspectCursor,
+								})
 							: command === "submit"
 								? await taskSubmit(api, taskId, directory, body)
 								: await taskStatus(
