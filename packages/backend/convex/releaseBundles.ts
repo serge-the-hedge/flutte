@@ -255,6 +255,7 @@ export const bundleContext = internalQuery({
 					baselineSnapshotId: snapshot._id,
 					repository: snapshot.repository,
 					baselineCommit: snapshot.commit,
+					excludedMessageIds: record.excludedMessageIds ?? [],
 					manifestHash: snapshot.manifestHash,
 					integrationBranch:
 						project.integrationBranch ?? DEFAULT_INTEGRATION_BRANCH,
@@ -366,7 +367,9 @@ export const bundleChangePage = internalQuery({
 				maximumBytesRead: 1024 * 1024,
 			});
 		const changes = [];
+		const excludedMessageIds = new Set(record.excludedMessageIds ?? []);
 		for (const key of page.page) {
+			if (excludedMessageIds.has(key.messageId)) continue;
 			if (!isReleaseDelta(key)) continue;
 			const rows = await ctx.db
 				.query("catalogProjectionMessages")

@@ -696,6 +696,101 @@ void main() {
     expect(output.toString(), contains('including reviewed Source changes'));
   });
 
+  for (final changeIncludedSource in [false, true]) {
+    test(
+      'whole-message deferral retains complete new-Locale values and final Source compatibility (included Source edit: $changeIncludedSource)',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        await fixture.addGermanCatalog();
+        const sourcePath = 'packages/brickit_generated/lib/l10n/intl_en.arb';
+        const targetPath = 'packages/brickit_generated/lib/l10n/intl_de.arb';
+        const source =
+            '{"@@locale":"en","welcome":"Welcome, {name}!","deferred_message":"Legacy source"}';
+        const target =
+            '{"@@locale":"de","welcome":"Hallo","deferred_message":"Legacy target"}';
+        await fixture.file(sourcePath).writeAsString(source);
+        await fixture.file(targetPath).writeAsString(target);
+        final generation = await Process.run(
+          fixture.flutterExecutable,
+          ['gen-l10n'],
+          workingDirectory: '${fixture.root.path}/packages/brickit_generated',
+        );
+        expect(generation.exitCode, 0);
+        await fixture.git(['add', '.']);
+        await fixture.git([
+          'commit',
+          '-m',
+          'add deferred message to complete catalogs',
+        ]);
+        final summary = await existingLocaleRelease(fixture);
+        final original = await combinedPortugueseArtifact(fixture, summary);
+        const content =
+            '{"@@locale":"pt","welcome":"Boas-vindas, {name}!","deferred_message":"Texto independente"}';
+        final artifact = LocaleProposalArtifact(
+          version: original.version,
+          proposalId: original.proposalId,
+          sourceSnapshot: original.sourceSnapshot,
+          locale: original.locale,
+          catalog: ProposedCatalog(
+            fileName: original.catalog.fileName,
+            content: content,
+            contentHash: sha256.convert(utf8.encode(content)).toString(),
+          ),
+        );
+        final delivery = ReleaseRepositoryAdapter().deliver(
+          ReleaseDeliveryRequest(
+            checkout: fixture.root,
+            recordId: summary.releaseRecord.id,
+            flutter: testFlutter(fixture.flutterExecutable),
+            gateway: DeferredMessageReleaseGateway(
+              summary,
+              changeIncludedSource: changeIncludedSource,
+            ),
+            localeProposal: LocaleProposalDeliveryInput(
+              proposalId: artifact.proposalId,
+              gateway: StaticLocaleProposalGateway(artifact),
+            ),
+            write: (_) {},
+          ),
+        );
+        if (changeIncludedSource) {
+          await expectLater(
+            delivery,
+            throwsA(
+              isA<RepositoryAdapterException>().having(
+                (error) => error.message,
+                'message',
+                contains('Release changes the Source catalog'),
+              ),
+            ),
+          );
+          expect(await fixture.git(['status', '--porcelain']), isEmpty);
+          expect(
+            await fixture
+                .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+                .exists(),
+            isFalse,
+          );
+        } else {
+          final result = await delivery;
+          expect(result.applied, ['welcome']);
+          expect(
+            await fixture
+                .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+                .readAsString(),
+            content,
+          );
+          expect(
+            await fixture.file(targetPath).readAsString(),
+            contains('"deferred_message":"Legacy target"'),
+          );
+        }
+        expect(await fixture.file(sourcePath).readAsString(), source);
+      },
+    );
+  }
+
   for (final bomOnly in [false, true]) {
     test(
       'refuses a combined release that changes the new locale pinned Source (${bomOnly ? 'BOM' : 'meaning'})',
@@ -1429,6 +1524,46 @@ class SkippedReleaseGateway implements ReleaseGateway {
       SkippedReleaseKey(messageId: 'greeting', reason: 'source_changed'),
       SkippedReleaseKey(messageId: 'farewell', reason: 'missing_source'),
     ],
+  );
+}
+
+/// The backend already froze the deferred message out of this delta. The
+/// adapter must keep that key in the existing and complete new-Locale catalogs.
+class DeferredMessageReleaseGateway extends StaticReleaseGateway {
+  DeferredMessageReleaseGateway(
+    super.summary, {
+    required this.changeIncludedSource,
+  });
+
+  final bool changeIncludedSource;
+
+  @override
+  Future<ReleaseDeliveryTree> createDeliveryTree(
+    String recordId,
+    List<DeliveryTreeFile> files,
+  ) async => ReleaseDeliveryTree(
+    releaseRecord: summary.releaseRecord,
+    files: files.map((file) {
+      if (file.catalogPath.endsWith('intl_de.arb'))
+        return DeliveryTreeFile(
+          catalogPath: file.catalogPath,
+          content: file.content.replaceFirst(
+            '"welcome":"Hallo"',
+            '"welcome":"Guten Tag"',
+          ),
+        );
+      if (changeIncludedSource && file.catalogPath.endsWith('intl_en.arb'))
+        return DeliveryTreeFile(
+          catalogPath: file.catalogPath,
+          content: file.content.replaceFirst(
+            'Welcome, {name}!',
+            'Welcome back, {name}!',
+          ),
+        );
+      return file;
+    }).toList(),
+    applied: const ['welcome'],
+    skipped: const [],
   );
 }
 

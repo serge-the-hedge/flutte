@@ -150,6 +150,27 @@ function BaselineLine({ record }: { record: ReleaseSummary }) {
 	);
 }
 
+function DeferredMessages({ record }: { record: ReleaseSummary }) {
+	if (!record.excludedMessageIds?.length) return null;
+	return (
+		<div className="flex flex-col gap-1 text-xs">
+			<span className="font-medium">Messages left pending</span>
+			<p className="text-muted-foreground">
+				Source and all active existing target languages are excluded from this
+				release. Pending edits and review evidence are retained; complete
+				new-language catalogs keep these messages.
+			</p>
+			<ul className="flex flex-col gap-1">
+				{record.excludedMessageIds.map((id) => (
+					<li key={id}>
+						<code className="break-all">{id}</code>
+					</li>
+				))}
+			</ul>
+		</div>
+	);
+}
+
 export function ReleaseDeliveryHandoff({
 	recordId,
 	changeKeyCount,
@@ -216,6 +237,7 @@ export function PreparingCard({ record }: { record: ReleaseSummary }) {
 						}}
 					/>
 				</div>
+				<DeferredMessages record={record} />
 			</CardContent>
 		</Card>
 	);
@@ -346,6 +368,7 @@ export function ReleaseRecordView({
 			<Card size="sm" className="max-w-3xl">
 				<CardContent className="flex flex-col gap-2">
 					<span className="font-medium text-sm">Assessment scope</span>
+					<DeferredMessages record={record} />
 					<p className="text-muted-foreground text-xs">
 						{NUMBER_FORMAT.format(record.scopeValueCount)} target{" "}
 						{presentation.needsWork ? "slots" : "values"} checked across{" "}
@@ -415,6 +438,7 @@ export function ReleaseRecordView({
 									>
 										{releaseHistoryStatus(item)}
 									</span>
+									<DeferredMessages record={item} />
 								</li>
 							))}
 						</ul>

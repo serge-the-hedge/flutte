@@ -40,6 +40,7 @@ const record: ReleaseSummary = {
 	snapshotId: convexId<"sourceSnapshots">("snapshot"),
 	commit: "abc123",
 	navigationRevision: 1,
+	excludedMessageIds: [],
 	status: "ready",
 	posture: "ready",
 	progress: { cursor: 1, expectedKeyCount: 2 },

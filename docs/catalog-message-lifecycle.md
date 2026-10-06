@@ -177,6 +177,28 @@ Scope, over only the keys in the Release Record's delta:
 Release records keep existing-Locale changes, complete new-Locale additions,
 ordinary imports, pending First Reviews, and Source Proposals distinct.
 
+Release Preparation includes all current deltas by default. An editor may leave
+exact Catalog Message identifiers pending for one new Release Record. This
+immutable selection excludes Source and every active existing target Locale of
+each message before assessment and bundle construction. It changes no proposals,
+Workspace heads, decisions, or provenance; omitted work is neither accepted nor
+completed. The report and its history list these identifiers separately from
+included delta counts. Refreshing a stale report preserves the selection; choose
+**Include again** and prepare to restore a message to a later release.
+
+`releaseRecords.prepare` accepts optional `excludedMessageIds`: at most 64
+submitted identifiers and 16 KiB for their UTF-8 JSON array, including duplicates.
+Identifiers must exactly match the current catalog; no trimming or case folding
+is applied. Deduplication and sorting freeze a canonical selection. Older records
+without this field mean no exclusions. Reuse checks the latest record at the same
+Snapshot and Workspace revision and requires the same selection; switching back
+to an older selection may create a fresh record instead of reusing history.
+
+Deferral affects only the existing-language delta. Complete finalized new-Locale
+catalogs retain these messages with their independently reviewed values. Combined
+delivery still checks the final Source against their pinned Source; any included
+Source edit that changes it prevents incompatible new-Locale delivery.
+
 The Release report lists actual text changes separately from the keys assessed
 for readiness. Expand a key to compare its saved Source or translations with
 the pinned Git baseline; key search and language filters page through this frozen

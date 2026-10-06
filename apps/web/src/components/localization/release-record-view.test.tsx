@@ -22,6 +22,7 @@ function releaseSummary(
 		snapshotId: convexId<"sourceSnapshots">("snapshot"),
 		commit: "4c6b65419745deadbeef",
 		navigationRevision: 3,
+		excludedMessageIds: [],
 		status: "ready",
 		posture,
 		progress: { cursor: 1433, expectedKeyCount: 1434 },
@@ -71,6 +72,39 @@ const evidence: ReleaseEvidence[] = [
 ];
 
 describe("Release Record UI", () => {
+	test("shows exact deferred messages separately in current, preparing and historical records", () => {
+		const record = {
+			...releaseSummary("ready"),
+			excludedMessageIds: ["legacy_message"],
+		};
+		const history = {
+			...releaseSummary("ready"),
+			recordId: convexId<"releaseRecords">("earlier"),
+			excludedMessageIds: ["earlier_message"],
+		};
+		const markup = renderToStaticMarkup(
+			<ReleaseRecordView
+				record={record}
+				history={[history]}
+				evidence={[]}
+				evidenceStatus="Exhausted"
+				onLoadMoreEvidence={() => undefined}
+			/>,
+		);
+		expect(markup).toContain("legacy_message");
+		expect(markup).toContain("earlier_message");
+		expect(markup).toContain("Messages left pending");
+		expect(markup).toContain(
+			"complete new-language catalogs keep these messages",
+		);
+		expect(markup).toContain("2 keys");
+		const preparing = renderToStaticMarkup(
+			<PreparingCard
+				record={{ ...record, status: "preparing", posture: null }}
+			/>,
+		);
+		expect(preparing).toContain("legacy_message");
+	});
 	test("shows complete new-Locale scope before bundle construction", () => {
 		const markup = renderToStaticMarkup(
 			<ReleaseDeliveryScope
