@@ -74,7 +74,9 @@ task means the assigned scope may need a new task.
 
 ### `GET /translation-tasks/:id`
 
-Returns a task page with `limit` 1–16 and `nextCursor`. Existing-Locale tasks
+Returns a task page with `limit` 1–16 and `nextCursor`. `cursor` is a nonnegative
+integer position (default `0`); reuse an observed `nextCursor` unchanged rather
+than calculating offsets from a page size. Existing-Locale tasks
 retain their key selection while resolving current Source and target values;
 new-Locale tasks read the pinned Source template. Internal concurrency basis
 fields are not exposed.

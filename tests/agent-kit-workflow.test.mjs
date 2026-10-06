@@ -445,6 +445,257 @@ test("candidate write survives a killed owner; resume recovers exact bytes and a
 	);
 });
 
+test("inspect corrects an observed final page with fresh evidence and unknown-write recovery while preserving scan and status", async (t) => {
+	let sourceValue = "Source";
+	let voiceGuide = "Precise";
+	/** @type {Row | null} */ let candidate = {
+		revisionId: "rejected",
+		value: "Old",
+		latestReview: { decision: { kind: "reject", reason: "Wrong wording" } },
+	};
+	let posts = 0;
+	/** @type {string[]} */ const reads = [];
+	const server = await fixture("task", async (request, response) => {
+		if (request.method === "POST") {
+			assert.equal(
+				request.url,
+				"/api/agent/v1/translation-tasks/task/candidates",
+			);
+			assert.deepEqual(await body(request), submission);
+			posts++;
+			candidate = {
+				revisionId: "corrected",
+				value: "Corrected",
+				latestReview: null,
+			};
+			response.destroy(); // Commit, then lose the response.
+			return;
+		}
+		const url = new URL(request.url ?? "", "http://local");
+		assert.equal(url.pathname, "/api/agent/v1/translation-tasks/task");
+		assert.equal(url.searchParams.get("limit"), "16");
+		const position = url.searchParams.get("cursor") ?? "0";
+		reads.push(position);
+		json(response, {
+			task: { taskId: "task", localeCode: "de", targetCount: 3 },
+			targets: [
+				{
+					messageId: position === "23" ? "correction" : `m${position}`,
+					sourceValue,
+					candidate:
+						position === "23"
+							? candidate
+							: position === "0"
+								? { revisionId: "first", value: "First", latestReview: null }
+								: null,
+				},
+			],
+			guidance: { voiceGuide },
+			nextCursor: position === "0" ? 7 : position === "7" ? 23 : null,
+		});
+	});
+	t.after(() => server.close());
+	const submission = {
+		items: [
+			{
+				messageId: "correction",
+				candidate: { kind: "value", value: "Corrected" },
+			},
+		],
+	};
+	ok(await server.run(["task", "read", "task"]));
+	const scanPage = ok(await server.run(["task", "read", "task"]));
+	assert.equal(scanPage.nextCursor, 23); // Observed continuation; not a fixed-size offset.
+	ok(await server.run(["task", "status", "task", "--max-pages", "1"]));
+	const cursorPath = join(server.directory, "state/cursor.json");
+	const statusPath = join(server.directory, "state/status.json");
+	const cursorBytes = await readFile(cursorPath, "utf8");
+	const statusBytes = await readFile(statusPath, "utf8");
+	const inspect = [
+		"task",
+		"inspect",
+		"task",
+		"--cursor",
+		String(scanPage.nextCursor),
+	];
+	const selected = ok(await server.run(inspect));
+	assert.deepEqual(selected.work, ["correction"]);
+	assert.equal(selected.inspectionCursor, 23);
+	assert.equal(selected.inspectedPageComplete, false);
+	assert.equal(selected.submittedScopeComplete, false);
+	assert.deepEqual(selected.scanCheckpoint, { cursor: 7, complete: false });
+	for (const change of [
+		() => {
+			sourceValue = "Changed";
+		},
+		() => {
+			voiceGuide = "Updated";
+		},
+	]) {
+		change();
+		const stale = await server.run(["task", "submit", "task"], submission);
+		assert.equal(JSON.parse(stale.stderr).error.code, "REASSESS");
+		assert.equal(posts, 0);
+		ok(await server.run(inspect)); // Fresh evidence must be reassessed before submission.
+	}
+	const unknown = await server.run(["task", "submit", "task"], submission);
+	assert.equal(unknown.code, 1);
+	const pagePath = join(server.directory, "state/page.json");
+	const pageBytes = await readFile(pagePath, "utf8");
+	const readsBeforeRecovery = reads.length;
+	for (const args of [
+		inspect,
+		["task", "inspect", "task", "--cursor", "7"],
+		["task", "read", "task", "--restart"],
+	]) {
+		const blocked = await server.run(args);
+		assert.equal(JSON.parse(blocked.stderr).error.code, "UNKNOWN_WRITE");
+	}
+	assert.equal(reads.length, readsBeforeRecovery);
+	assert.equal(await readFile(pagePath, "utf8"), pageBytes);
+	const recovered = ok(
+		await server.run([
+			"task",
+			"submit",
+			"task",
+			"--body",
+			join(server.directory, "state/submission.json"),
+		]),
+	);
+	assert.equal(posts, 1);
+	assert.deepEqual(reads.slice(readsBeforeRecovery), ["23", "23"]);
+	assert.equal(recovered.inspectionCursor, 23);
+	assert.equal(recovered.inspectedPageComplete, true);
+	assert.equal(recovered.submittedScopeComplete, false);
+	assert.deepEqual(recovered.scanCheckpoint, { cursor: 7, complete: false });
+	assert.equal(
+		JSON.parse(await readFile(String(recovered.reviewHandoff), "utf8"))
+			.revisions[0].revisionId,
+		"corrected",
+	);
+	assert.equal(JSON.parse(await readFile(pagePath, "utf8")).mode, "inspect");
+	const finalPage = ok(await server.run(inspect));
+	assert.equal(finalPage.nextCursor, null);
+	assert.equal(finalPage.inspectedPageComplete, true);
+	assert.equal(finalPage.submittedScopeComplete, false);
+	assert.equal(await readFile(cursorPath, "utf8"), cursorBytes);
+	assert.equal(await readFile(statusPath, "utf8"), statusBytes);
+	assert.deepEqual(ok(await server.run(["task", "read", "task"])).work, ["m7"]);
+	assert.equal(JSON.parse(await readFile(pagePath, "utf8")).mode, undefined);
+});
+
+test("failed or killed inspection clears the old selection before fetching", async (t) => {
+	let hold = false;
+	let entered = () => {};
+	const requested = new Promise((resolve) => {
+		entered = () => resolve(null);
+	});
+	const server = await fixture("task", (request, response) => {
+		const position = new URL(
+			request.url ?? "",
+			"http://local",
+		).searchParams.get("cursor");
+		if (position === "23") {
+			if (hold) {
+				entered();
+				return;
+			}
+			return json(
+				response,
+				{ code: "VALIDATION", error: "Cannot read page" },
+				400,
+			);
+		}
+		json(response, {
+			task: { taskId: "task", localeCode: "de", targetCount: 1 },
+			targets: [{ messageId: "old", sourceValue: "Source", candidate: null }],
+			nextCursor: null,
+		});
+	});
+	t.after(() => server.close());
+	const inspect = ["task", "inspect", "task", "--cursor", "23"];
+	const submission = {
+		items: [{ messageId: "old", candidate: { kind: "value", value: "Old" } }],
+	};
+	ok(await server.run(["task", "read", "task"]));
+	assert.equal((await server.run(inspect)).code, 1);
+	assert.equal(
+		JSON.parse(
+			await readFile(join(server.directory, "state/page.json"), "utf8"),
+		).page,
+		null,
+	);
+	assert.equal(
+		JSON.parse(
+			(await server.run(["task", "submit", "task"], submission)).stderr,
+		).error.code,
+		"INVALID_STATE",
+	);
+	ok(await server.run(["task", "read", "task"]));
+	hold = true;
+	const pending = server.start(inspect);
+	t.after(() => pending.child.kill("SIGKILL"));
+	await requested;
+	pending.child.kill("SIGKILL");
+	await pending.result;
+	assert.equal(
+		JSON.parse(
+			await readFile(join(server.directory, "state/page.json"), "utf8"),
+		).page,
+		null,
+	);
+	assert.equal(
+		JSON.parse(
+			(await server.run(["task", "submit", "task"], submission)).stderr,
+		).error.code,
+		"INVALID_STATE",
+	);
+	ok(await server.run(["task", "read", "task"]));
+});
+
+test("inspection rejects missing, malformed and inappropriate flags before creating state or making requests", async (t) => {
+	const server = await fixture("task", () =>
+		assert.fail("Invalid inspection must not request task data"),
+	);
+	t.after(() => server.close());
+	const inspect = ["task", "inspect", "task"];
+	const invalid = [
+		inspect,
+		...[
+			"",
+			"-1",
+			"1.5",
+			"NaN",
+			"Infinity",
+			"9007199254740992",
+			"opaque",
+			"1e2",
+			" 23 ",
+		].map((value) => [...inspect, "--cursor", value]),
+		[...inspect, "--cursor"],
+		[...inspect, "--cursor", "23", "--restart"],
+		[...inspect, "--cursor", "23", "--max-pages", "1"],
+		[...inspect, "--cursor", "23", "--body", "-"],
+		[...inspect, "--cursor", "23", "--source", "other"],
+		[...inspect, "--cursor", "23", "--cursor", "23"],
+		...["read", "submit", "status", "reuse"].map((command) => [
+			"task",
+			command,
+			"task",
+			"--cursor",
+			"23",
+		]),
+		["review", "read", "--cursor", "23"],
+	];
+	for (const args of invalid) {
+		const result = await server.run(args);
+		assert.equal(result.code, 1, args.join(" "));
+	}
+	await assert.rejects(readFile(join(server.directory, "state/binding.json")), {
+		code: "ENOENT",
+	});
+});
+
 test("status counts blanks, rejected, pending and missing separately and resumes a bounded scan", async (t) => {
 	/** @type {(Row | null)[]} */ const candidates = [
 		{

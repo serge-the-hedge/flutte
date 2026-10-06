@@ -59,6 +59,38 @@ advances only after its page has candidates; draft files do not advance progress
 Use `task read ... --restart` to revisit feedback from the start. A rejected
 terminal task requires an assigned correction task; do not rewrite accepted work.
 
+### Inspect a known page
+
+To revisit a known correction, reuse a cursor previously returned by this task:
+
+```text
+node <workflow> task inspect TASK_ID --cursor CURSOR --state <task-state> --profile <translator>
+node <workflow> task submit TASK_ID --state <task-state> --profile <translator> --body candidates.json
+```
+
+`--cursor` is a nonnegative safe integer position. Use an observed server cursor;
+do not calculate it from an assumed page size because pages can stop on bytes.
+Inspection reads one fresh page of at most 16 targets with current Source,
+guidance, candidates and feedback. The cursor locates evidence; it does not
+establish that the page was assessed or reviewed. Read and reassess that evidence
+before submitting corrections through the ordinary submit command.
+
+Inspection selects the saved page for submission and preserves the ordinary scan
+checkpoint and separate `task status` observations. Its output (and subsequent
+submit output) includes `inspectionCursor`, `inspectedPageComplete` and
+`scanCheckpoint`. `inspectedPageComplete` means this page has no missing or
+rejected candidates; even a final inspected page cannot establish whole-task
+coverage. `submittedScopeComplete` reports the saved ordinary scan. Resume
+`task read` at that checkpoint, and rescan `task status --restart` for fresh review
+coverage after corrections.
+
+Unknown writes block inspection: recover the identical saved submission on its
+original page first. Before fetching, inspection clears the old page selection.
+If fetching fails or the worker stops, successfully read or inspect again before
+submitting. Changed Source or guidance still requires fresh assessment. Inspection uses the assigned
+translator credential and state; independent review and exact revision handoffs
+follow the same rules as ordinary submission.
+
 One translator owns a task/state at a time. Parallelize independent tasks/locales;
 start with one translator and one reviewer, then at most two of each if useful.
 Keep each review round at 16 revisions or fewer, with one owner per revision.
