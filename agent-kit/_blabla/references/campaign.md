@@ -49,6 +49,14 @@ boundary, including recovery of unfinished writes. Reuse their existing state
 directories. Assign the new manifest hash explicitly before resuming; a reviewer
 pinned to an older hash must not silently adopt changed scope or ownership.
 
+Reserve affected owners before authoring a correction. An owner whose revisions,
+task basis and assigned evidence remain unchanged can continue disjoint work on
+the old pinned manifest during authoring. Request that owner's idle boundary when
+the amendment is ready for adoption, rather than holding them through unrelated
+retrieval and drafting. Recover unknown writes before switching any owner's
+manifest, and record each explicit hash acknowledgment before dispatching work
+under the new version.
+
 ```json
 {
   "version": 1,
