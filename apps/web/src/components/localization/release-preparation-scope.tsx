@@ -1,5 +1,12 @@
 import { Button } from "@blabla/ui/components/button";
-import { Card, CardContent } from "@blabla/ui/components/card";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardFooter,
+	CardHeader,
+	CardTitle,
+} from "@blabla/ui/components/card";
 import {
 	Field,
 	FieldDescription,
@@ -31,16 +38,16 @@ export function ReleasePreparationScope({
 	};
 	return (
 		<Card size="sm" className="max-w-3xl">
-			<CardContent className="flex flex-col gap-3">
-				<span className="font-medium text-sm">
-					Leave messages pending for this release
-				</span>
-				<p className="text-muted-foreground text-xs">
+			<CardHeader>
+				<CardTitle>Leave messages pending for this release</CardTitle>
+				<CardDescription>
 					Deferred messages are excluded from the existing-language delta:
 					Source and all active target languages. Their pending edits and
 					reviews are retained. Complete new-language catalogs still include
 					these messages.
-				</p>
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-3">
 				<FieldGroup>
 					<Field data-disabled={preparing}>
 						<FieldLabel htmlFor={id}>Exact message identifier</FieldLabel>
@@ -96,12 +103,12 @@ export function ReleasePreparationScope({
 						All current message changes are included.
 					</p>
 				)}
-				<div>
-					<Button size="sm" disabled={preparing} onClick={onPrepare}>
-						Prepare with this selection
-					</Button>
-				</div>
 			</CardContent>
+			<CardFooter>
+				<Button size="sm" disabled={preparing} onClick={onPrepare}>
+					Prepare with this selection
+				</Button>
+			</CardFooter>
 		</Card>
 	);
 }
