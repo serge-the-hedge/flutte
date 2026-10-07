@@ -1,4 +1,5 @@
-import { Navigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
 export const DEFAULT_AUTH_REDIRECT = "/projects";
 
@@ -24,11 +25,19 @@ export function safeAuthRedirect(redirect: string | undefined) {
 }
 
 export default function AuthRedirect() {
-	const redirect = useRouterState({
-		select: (state) => state.location.href,
-	});
+	const router = useRouter();
+	const navigate = useNavigate();
+	// Navigation changes the location before this component unmounts. Keep the
+	// protected URL fixed so it cannot become a recursively nested sign-in URL.
+	const [redirect] = useState(() => router.state.location.href);
 
-	return (
-		<Navigate to="/sign-in" search={{ mode: "sign-in", redirect }} replace />
-	);
+	useEffect(() => {
+		void navigate({
+			to: "/sign-in",
+			search: { mode: "sign-in", redirect },
+			replace: true,
+		});
+	}, [navigate, redirect]);
+
+	return null;
 }
