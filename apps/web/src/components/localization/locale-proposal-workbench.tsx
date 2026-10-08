@@ -43,6 +43,7 @@ import {
 	CandidateReviewDelegation,
 	candidateReviewUrl,
 } from "@/components/localization/candidate-review-delegation";
+import { LocaleSourceSelector } from "@/components/localization/locale-source-selector";
 import {
 	PageHeader,
 	ProjectShell,
@@ -92,6 +93,7 @@ export function LocaleProposalWorkbench({
 		initialProposalId ? "skip" : { projectId: convexProjectId, localeCode },
 	);
 	const ensureForReview = useMutation(api.localeProposals.ensureForReview);
+	const prepareForReview = useAction(api.localeProposals.prepareForReview);
 	const stageForReview = useMutation(api.localeProposals.stageForReview);
 	const reviewStagedValue = useMutation(api.localeProposals.reviewStagedValue);
 	const reviewTaskValue = useMutation(
@@ -114,6 +116,10 @@ export function LocaleProposalWorkbench({
 	);
 	const navigate = useNavigate();
 	const [proposalId, setProposalId] = useState<string | null>(null);
+	const [selectedSourceSnapshotId, setSelectedSourceSnapshotId] = useState<
+		string | null
+	>(null);
+	const [sourceChangeExpanded, setSourceChangeExpanded] = useState(false);
 	const activeProposalId = initialProposalId ?? proposalId ?? currentProposalId;
 	const [cursor, setCursor] = useState(0);
 	const [pendingCursor, setPendingCursor] = useState<string | undefined>();
@@ -186,6 +192,8 @@ export function LocaleProposalWorkbench({
 				status: detail.proposal.status,
 				isBound: languageIsBound,
 				isCurrentBaseline: detail.isCurrentBaseline,
+				sourceSelection: detail.sourceSelection,
+				sourceIsEligible: detail.sourceIsEligible,
 				remaining: detail.proposal.progress.remaining,
 				pendingReview: detail.pendingReview,
 			})
@@ -193,7 +201,7 @@ export function LocaleProposalWorkbench({
 	const proposalReadOnly =
 		detail === null ||
 		detail === undefined ||
-		!detail.isCurrentBaseline ||
+		!detail.sourceIsEligible ||
 		detail.proposal.status === "ready";
 	const showWorkflowEmptyState =
 		focus === "awaiting" && deferredSearch.trim().length === 0;
@@ -223,7 +231,7 @@ export function LocaleProposalWorkbench({
 	}, [activeProposalId, queriedDetail, sparseQueueTransition]);
 
 	useEffect(() => {
-		if (detail && !detail.isCurrentBaseline && focus === "awaiting") {
+		if (detail && !detail.sourceIsEligible && focus === "awaiting") {
 			setFocus("all");
 		}
 	}, [detail, focus]);
@@ -242,6 +250,8 @@ export function LocaleProposalWorkbench({
 		setBusy(null);
 		setError(null);
 		setNotice(null);
+		setSelectedSourceSnapshotId(null);
+		setSourceChangeExpanded(false);
 	}, [activeProposalId]);
 
 	// Review filters are server-backed catalog scans. Reset their cursor so a
@@ -277,6 +287,25 @@ export function LocaleProposalWorkbench({
 			];
 		});
 	}, [detail, drafts]);
+	const hasUnsavedVisibleEdits =
+		detail?.messages.some((message) => {
+			const currentValue =
+				message.candidate?.review?.finalValue ??
+				message.review?.finalValue ??
+				(message.facts.state === "reviewedDraft"
+					? message.value?.value
+					: (message.candidate?.value ?? message.value?.value)) ??
+				"";
+			return (
+				(drafts[message.messageId] !== undefined &&
+					drafts[message.messageId] !== currentValue) ||
+				(blankReasons[message.messageId] !== undefined &&
+					blankReasons[message.messageId] !==
+						(message.candidate?.intentionalBlankReason ??
+							message.value?.intentionalBlankReason ??
+							""))
+			);
+		}) ?? false;
 	const selectableAgentCandidates = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.filter((message) => {
@@ -337,28 +366,38 @@ export function LocaleProposalWorkbench({
 
 	const prepare = () =>
 		run("prepare", async () => {
-			const result = await ensureForReview({
-				projectId: convexProjectId,
-				localeCode,
-			});
+			const result = selectedSourceSnapshotId
+				? await prepareForReview({
+						projectId: convexProjectId,
+						localeCode,
+						sourceSnapshotId: convexId<"sourceSnapshots">(
+							selectedSourceSnapshotId,
+						),
+					})
+				: await ensureForReview({ projectId: convexProjectId, localeCode });
 			setProposalId(result.proposalId);
 			setNotice(
 				"The catalog is ready for manual editing or agent-assisted review.",
 			);
 		});
 
-	const continueOnCurrentSource = () =>
+	const continueOnSource = (sourceSnapshotId?: string) =>
 		run("continue-source", async () => {
 			if (!activeProposalId) return;
-			if (dirtyItems.length > 0) {
+			if (hasUnsavedVisibleEdits) {
 				setError(
-					"Resolve the unsaved visible edits before continuing on the current source.",
+					"Resolve the unsaved visible edits before changing Source Snapshot.",
 				);
 				return;
 			}
 			if (taskId) {
 				const result = await continueNewLocaleTask({
 					taskId: convexId<"agentTranslationProposals">(taskId),
+					...(sourceSnapshotId
+						? {
+								sourceSnapshotId: convexId<"sourceSnapshots">(sourceSnapshotId),
+							}
+						: {}),
 				});
 				await navigate({
 					to: "/projects/$projectId/proposals/$proposalId",
@@ -369,10 +408,13 @@ export function LocaleProposalWorkbench({
 			const result = await carryForwardForReview({
 				projectId: convexProjectId,
 				proposalId: convexId<"localeProposals">(activeProposalId),
+				...(sourceSnapshotId
+					? { sourceSnapshotId: convexId<"sourceSnapshots">(sourceSnapshotId) }
+					: {}),
 			});
 			setProposalId(result.localeProposalId);
 			setNotice(
-				`${result.carriedValueCount.toLocaleString()} compatible value${result.carriedValueCount === 1 ? "" : "s"} carried forward; ${result.remainingValueCount.toLocaleString()} need work on the current source.`,
+				`${result.carriedValueCount.toLocaleString()} compatible reviewed value${result.carriedValueCount === 1 ? "" : "s"} carried forward; ${result.remainingValueCount.toLocaleString()} need work on ${sourceSnapshotId ? "the selected" : "the current"} source.`,
 			);
 		});
 
@@ -622,6 +664,16 @@ export function LocaleProposalWorkbench({
 					decision: { kind: "intentionalBlank", reason },
 				});
 			}
+			setDrafts((previous) => {
+				const next = { ...previous };
+				delete next[message.messageId];
+				return next;
+			});
+			setBlankReasons((previous) => {
+				const next = { ...previous };
+				delete next[message.messageId];
+				return next;
+			});
 			setNotice("Intentional Blank recorded with human review.");
 		});
 
@@ -716,6 +768,26 @@ export function LocaleProposalWorkbench({
 			{notice ? (
 				<Alert className="mb-4">
 					<AlertDescription>{notice}</AlertDescription>
+				</Alert>
+			) : null}
+			{detail?.sourceSelection === "selectedSnapshot" &&
+			!detail.isCurrentBaseline &&
+			!languageIsBound ? (
+				<Alert className="mb-4">
+					<AlertTitle>
+						{detail.proposal.status === "ready"
+							? "Reviewed for selected source"
+							: "Reviewing selected source"}
+					</AlertTitle>
+					<AlertDescription>
+						{detail.proposal.status === "ready"
+							? "This finalized artifact is review evidence, not accepted for delivery."
+							: detail.sourceIsEligible
+								? "You can edit, review, and finalize this catalog for its selected Source."
+								: "This selected Source is no longer eligible for edits."}{" "}
+						Delivery uses the accepted Source after any unmerged copy is merged
+						and synced.
+					</AlertDescription>
 				</Alert>
 			) : null}
 			{detail?.proposal.status === "ready" &&
@@ -816,7 +888,10 @@ export function LocaleProposalWorkbench({
 					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
 						<span>
 							All {detail.proposal.progress.total.toLocaleString()} values are
-							reviewed. Finalize the catalog to prepare it for delivery.
+							reviewed.{" "}
+							{detail.isCurrentBaseline
+								? "Finalize the catalog to prepare it for delivery."
+								: "Finalize the catalog as review evidence for the selected Source Snapshot."}
 						</span>
 						<Button
 							size="sm"
@@ -825,13 +900,13 @@ export function LocaleProposalWorkbench({
 							disabled={
 								busy !== null ||
 								!reviewState.canFinalize ||
-								dirtyItems.length > 0
+								hasUnsavedVisibleEdits
 							}
 						>
 							<Check data-icon="inline-start" />
 							{busy === "finalize"
 								? "Finalizing…"
-								: dirtyItems.length > 0
+								: hasUnsavedVisibleEdits
 									? "Save edits first"
 									: "Finalize catalog"}
 						</Button>
@@ -840,50 +915,82 @@ export function LocaleProposalWorkbench({
 			) : null}
 			{!languageIsBound &&
 			!delivery &&
+			detail &&
 			delivery !== undefined &&
 			binding !== undefined &&
-			(reviewState?.phase === "stale" ||
-				reviewState?.phase === "previousSource") ? (
-				<Alert className="mb-4">
-					<RefreshCw aria-hidden className="size-4" />
-					<AlertTitle>Continue on the current source</AlertTitle>
-					<AlertDescription className="flex flex-col items-start gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-						<span>
-							Keep reviewed values whose source is unchanged. Continue with only
-							changed or new source values; this proposal stays available.
-							{dirtyItems.length > 0
-								? " Copy any unsaved edits you need before discarding them."
-								: ""}
-						</span>
-						<div className="flex shrink-0 flex-wrap gap-2">
-							{dirtyItems.length > 0 ? (
+			reviewState?.phase !== "handedOff" ? (
+				detail.isCurrentBaseline && !sourceChangeExpanded ? (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={busy !== null || project?.role === "viewer"}
+						onClick={() => setSourceChangeExpanded(true)}
+					>
+						Choose another source
+					</Button>
+				) : (
+					<Alert className="mb-4">
+						<RefreshCw aria-hidden className="size-4" />
+						<AlertTitle>
+							{selectedSourceSnapshotId
+								? "Continue on selected source"
+								: "Continue on the current source"}
+						</AlertTitle>
+						<AlertDescription className="flex flex-col items-start gap-3">
+							<span>
+								Keep reviewed values whose source is unchanged. Continue with
+								only changed or new source values; this proposal stays
+								available.
+								{hasUnsavedVisibleEdits
+									? " Copy any unsaved edits you need before discarding them."
+									: ""}
+							</span>
+							<LocaleSourceSelector
+								autoLoad={sourceChangeExpanded}
+								baselineSnapshotId={project?.baselineSnapshotId}
+								projectId={projectId}
+								value={selectedSourceSnapshotId}
+								onChange={setSelectedSourceSnapshotId}
+								disabled={busy !== null || project?.role === "viewer"}
+							/>
+							<div className="flex shrink-0 flex-wrap gap-2">
+								{hasUnsavedVisibleEdits ? (
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => {
+											setDrafts({});
+											setBlankReasons({});
+										}}
+										disabled={busy !== null}
+									>
+										Discard unsaved edits
+									</Button>
+								) : null}
 								<Button
 									size="sm"
-									variant="outline"
-									onClick={() => {
-										setDrafts({});
-										setBlankReasons({});
-									}}
-									disabled={busy !== null}
+									onClick={() =>
+										continueOnSource(selectedSourceSnapshotId ?? undefined)
+									}
+									disabled={
+										busy !== null ||
+										hasUnsavedVisibleEdits ||
+										project?.role === "viewer"
+									}
 								>
-									Discard unsaved edits
+									<RefreshCw data-icon="inline-start" />
+									{busy === "continue-source"
+										? "Carrying work forward…"
+										: hasUnsavedVisibleEdits
+											? "Resolve unsaved edits"
+											: selectedSourceSnapshotId
+												? "Continue on selected source"
+												: "Continue on current source"}
 								</Button>
-							) : null}
-							<Button
-								size="sm"
-								onClick={continueOnCurrentSource}
-								disabled={busy !== null || dirtyItems.length > 0}
-							>
-								<RefreshCw data-icon="inline-start" />
-								{busy === "continue-source"
-									? "Carrying work forward…"
-									: dirtyItems.length > 0
-										? "Resolve unsaved edits"
-										: "Continue on current source"}
-							</Button>
-						</div>
-					</AlertDescription>
-				</Alert>
+							</div>
+						</AlertDescription>
+					</Alert>
+				)
 			) : null}
 			{taskId && detail && detail.pendingReview.count > 0 ? (
 				<Alert className="mb-4">
@@ -910,11 +1017,21 @@ export function LocaleProposalWorkbench({
 						</EmptyMedia>
 						<EmptyTitle>Prepare a language</EmptyTitle>
 						<EmptyDescription>
-							Start from the accepted source, then translate here or ask an
-							agent.
+							Start from the accepted source or deliberately choose a captured
+							Source Snapshot, then translate here or ask an agent.
 						</EmptyDescription>
 					</EmptyHeader>
-					<Button onClick={() => void prepare()} disabled={busy !== null}>
+					<LocaleSourceSelector
+						baselineSnapshotId={project?.baselineSnapshotId}
+						projectId={projectId}
+						value={selectedSourceSnapshotId}
+						onChange={setSelectedSourceSnapshotId}
+						disabled={busy !== null || project?.role === "viewer"}
+					/>
+					<Button
+						onClick={() => void prepare()}
+						disabled={busy !== null || project?.role === "viewer"}
+					>
 						<Sparkles data-icon="inline-start" />
 						Prepare proposal
 					</Button>

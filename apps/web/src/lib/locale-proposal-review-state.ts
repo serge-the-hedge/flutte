@@ -3,6 +3,7 @@ export type LocaleProposalReviewPhase =
 	| "readyToFinalize"
 	| "stale"
 	| "previousSource"
+	| "selectedSourceFinalized"
 	| "finalized"
 	| "handedOff";
 
@@ -19,6 +20,8 @@ export function localeProposalReviewState(input: {
 	status: "draft" | "ready";
 	isBound?: boolean;
 	isCurrentBaseline: boolean;
+	sourceSelection?: "baseline" | "selectedSnapshot";
+	sourceIsEligible?: boolean;
 	remaining: number;
 	pendingReview: { count: number; hasMore: boolean };
 }): LocaleProposalReviewState {
@@ -29,6 +32,18 @@ export function localeProposalReviewState(input: {
 			emptyTitle: "Language is available in Strings",
 			emptyDescription:
 				"This task is complete. Review current translations and any changed source values in Strings.",
+			canFinalize: false,
+		};
+	}
+	const sourceIsEligible = input.sourceIsEligible ?? input.isCurrentBaseline;
+	const selectedSource = input.sourceSelection === "selectedSnapshot";
+	if (selectedSource && input.status === "ready" && !input.isCurrentBaseline) {
+		return {
+			phase: "selectedSourceFinalized",
+			badgeLabel: "Reviewed for selected source",
+			emptyTitle: "Selected source catalog finalized",
+			emptyDescription:
+				"This artifact records review for the selected Source Snapshot. Continue on the accepted source after the developer merges it to prepare delivery.",
 			canFinalize: false,
 		};
 	}
@@ -52,7 +67,7 @@ export function localeProposalReviewState(input: {
 			canFinalize: false,
 		};
 	}
-	if (!input.isCurrentBaseline) {
+	if (!sourceIsEligible) {
 		return {
 			phase: "stale",
 			badgeLabel: "Source changed",

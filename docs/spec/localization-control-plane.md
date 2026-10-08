@@ -10,6 +10,7 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
+| Explicit captured Source for new languages | Implemented for editor-selected preparation and continuation, authoring, review and finalization. Baseline publication and repository delivery remain separate; see [selected Source workflow](../adding-languages.md#translate-approved-copy-before-its-branch-merges). |
 | Release assessment, bundles, configured language delivery and binding | Implemented, including immutable exact-message positive selection or whole-message deferral during Release Preparation, Strings selection handoff, script/region variants over an existing language base and adapter-owned locale-subtag preservation. Positive selection covers Source and all existing targets together; complete new-Locale additions remain separate. Exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
@@ -333,6 +334,16 @@ still available as a bounded read-only view over its historical projection. An
 interrupted continuation is safe to retry, and carried human authorship remains
 valid review evidence. Final delivery remains strict: only the resulting
 current-source artifact can compose with a Release Bundle.
+
+An editor may instead explicitly select a captured Source Snapshot, for example
+approved English on an unmerged branch. Selection is immutable proposal intent,
+not an inference from the snapshot's mutable publication status. The selected
+proposal uses its own stored Source for authoring, review and finalization;
+unrelated Baseline changes do not change that Source. The same compatible-value
+carry rules apply. This operation leaves the accepted Catalog Workspace and
+pending Source Proposals intact. A complete selected-source artifact is not
+delivery-ready outside the accepted Baseline; after ordinary ingestion, continue
+to the accepted Source and finalize before delivery.
 
 ---
 

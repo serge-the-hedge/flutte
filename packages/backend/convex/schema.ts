@@ -6,6 +6,7 @@ import {
 } from "./agentReviewModel";
 import { managedBasisValidator } from "./contentModel";
 import { tokenScopeValidator } from "./lib";
+import { sourceFactValidator } from "./localeSourceFactModel";
 import { releaseAssessmentFields } from "./releaseRecordModel";
 import { syncSummaryValidator } from "./syncSummary";
 import { reusedCandidateOrigin, reusePage } from "./taskReuseModel";
@@ -795,7 +796,28 @@ export default defineSchema({
 		.index("by_project_and_localeCode", ["projectId", "localeCode"])
 		.index("by_project_and_catalogPath", ["projectId", "catalogPath"]),
 
+	localeSourceFactIndexes: defineTable({
+		projectId: v.id("projects"),
+		sourceFileId: v.id("sourceSnapshotFiles"),
+		storageId: v.id("_storage"),
+		contentHash: v.string(),
+		messageCount: v.number(),
+		expectedBytes: v.number(),
+		stagedCount: v.number(),
+		stagedBytes: v.number(),
+		status: v.union(v.literal("building"), v.literal("ready")),
+	}).index("by_sourceFile", ["sourceFileId"]),
+	localeSourceFacts: defineTable(
+		sourceFactValidator.extend({
+			projectId: v.id("projects"),
+			sourceFileId: v.id("sourceSnapshotFiles"),
+		}),
+	)
+		.index("by_sourceFile_and_messageId", ["sourceFileId", "messageId"])
+		.index("by_sourceFile_and_catalogIndex", ["sourceFileId", "catalogIndex"]),
 	localeProposals: defineTable({
+		sourceSelection: v.optional(v.literal("selectedSnapshot")),
+		continuedFromProposalId: v.optional(v.id("localeProposals")),
 		projectId: v.id("projects"),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		sourceSnapshotFileId: v.id("sourceSnapshotFiles"),

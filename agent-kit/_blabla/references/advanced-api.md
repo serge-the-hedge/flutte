@@ -107,7 +107,11 @@ validation diagnostics. It does not create an active Locale or bind a file.
 #### `GET /locale-proposals?proposalId=...`
 
 Returns the durable proposal review summary, including bounded diagnostics from
-the last failed finalization attempt.
+the last failed finalization attempt. `sourceSelection` distinguishes ordinary
+Baseline preparation from an editor-selected snapshot, and `sourceIsEligible`
+states whether its pin still supports review/finalization. Delivery eligibility
+remains separate: a complete selected-snapshot artifact can still have
+`deliveryStatus: "stale"` until continued onto accepted Source.
 
 #### `GET /locale-proposals/template?proposalId=...&cursor=0&limit=16`
 
