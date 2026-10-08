@@ -293,6 +293,81 @@ function client(auth) {
 }
 /** @typedef {ReturnType<typeof client>} Client */
 
+/** Prepared review evidence is separate from task candidates. Missing or malformed
+ * authority/basis must never turn ordinary staged text into completed work.
+ * @param {RecordValue} target @param {RecordValue} task */
+function validatePreparedValue(target, task) {
+	if (target.preparedValue === undefined || target.preparedValue === null)
+		return;
+	const prepared = record(target.preparedValue, "Prepared value");
+	const basis = record(prepared.basis, "Prepared basis");
+	const provenance = record(prepared.provenance, "Prepared provenance");
+	const actor = record(provenance.updatedBy, "Prepared author");
+	const authorization = provenance.reviewAuthorization;
+	const authority =
+		actor.kind === "user"
+			? typeof actor.id === "string" && actor.id.trim().length > 0
+			: actor.kind === "agent" &&
+				object(authorization) &&
+				typeof actor.id === "string" &&
+				/^[A-Za-z0-9_-]{1,128}$/.test(actor.id) &&
+				actor.id === authorization.reviewerTokenId &&
+				["projectPolicy", "candidateGrant"].includes(
+					String(authorization.kind),
+				) &&
+				typeof authorization.candidateRevisionId === "string" &&
+				/^[A-Za-z0-9_-]{1,128}$/.test(authorization.candidateRevisionId) &&
+				typeof authorization.authorizedByUserId === "string" &&
+				authorization.authorizedByUserId.trim().length > 0 &&
+				Number.isFinite(authorization.authorizedAt) &&
+				Number(authorization.authorizedAt) >= 0 &&
+				Object.keys(authorization).every((field) =>
+					[
+						"kind",
+						"reviewerTokenId",
+						"candidateRevisionId",
+						"authorizedByUserId",
+						"authorizedAt",
+						...(authorization.kind === "projectPolicy"
+							? ["policyRevision"]
+							: ["grantId", "grantRevision"]),
+					].includes(field),
+				) &&
+				(authorization.kind === "projectPolicy"
+					? Number.isSafeInteger(authorization.policyRevision) &&
+						Number(authorization.policyRevision) > 0
+					: typeof authorization.grantId === "string" &&
+						/^[A-Za-z0-9_-]{1,128}$/.test(authorization.grantId) &&
+						Number.isSafeInteger(authorization.grantRevision) &&
+						Number(authorization.grantRevision) > 0);
+	if (
+		!authority ||
+		typeof provenance.valueId !== "string" ||
+		!provenance.valueId ||
+		!Number.isFinite(provenance.updatedAt) ||
+		Number(provenance.updatedAt) < 0 ||
+		typeof target.targetValue !== "string" ||
+		prepared.valueFingerprint !== hash(target.targetValue) ||
+		basis.kind !== "localeProposal" ||
+		typeof task.localeProposalId !== "string" ||
+		!task.localeProposalId ||
+		typeof task.sourceSnapshotId !== "string" ||
+		!task.sourceSnapshotId ||
+		basis.localeProposalId !== task.localeProposalId ||
+		basis.snapshotId !== task.sourceSnapshotId ||
+		basis.sourceFingerprint !== target.sourceFingerprint ||
+		basis.sourceFingerprint !== hash(String(target.sourceValue)) ||
+		(target.targetValue === ""
+			? typeof prepared.intentionalBlankReason !== "string" ||
+				!prepared.intentionalBlankReason.trim()
+			: prepared.intentionalBlankReason !== undefined)
+	)
+		throw new Failure(
+			"INVALID_RESPONSE",
+			"Prepared value lost its exact Source, value, or review authority.",
+		);
+}
+
 /** @param {unknown} value */
 function page(value) {
 	const result = record(value, "Task page");
@@ -321,6 +396,7 @@ function page(value) {
 			if (typeof target.candidate.value !== "string")
 				throw new Failure("INVALID_RESPONSE", "Candidate value is missing.");
 		}
+		validatePreparedValue(target, task);
 		return target;
 	});
 	if (
@@ -341,7 +417,12 @@ function page(value) {
 }
 /** @param {RecordValue} target */
 function reviewKind(target) {
-	if (!object(target.candidate)) return "missing";
+	if (!object(target.candidate))
+		return object(target.preparedValue)
+			? target.targetValue === ""
+				? "preparedIntentionalBlank"
+				: "prepared"
+			: "missing";
 	const review = target.candidate.latestReview;
 	if (review === null || review === undefined) return "pendingReview";
 	const kind = record(
@@ -630,7 +711,14 @@ async function taskSubmit(api, taskId, directory, body) {
 				"REASSESS",
 				`Target or candidate feedback changed for ${item.messageId}. Read and reassess.`,
 			);
-		if (["accepted", "intentionalBlank"].includes(reviewKind(live)))
+		if (
+			[
+				"accepted",
+				"intentionalBlank",
+				"prepared",
+				"preparedIntentionalBlank",
+			].includes(reviewKind(live))
+		)
 			throw new Failure(
 				"ALREADY_REVIEWED",
 				`Preserve reviewed ${item.messageId}; use an explicitly assigned correction task.`,
@@ -733,6 +821,8 @@ async function taskStatus(api, taskId, directory, maxPages, restart) {
 		const { rows: _rows, ...summary } = saved;
 		return {
 			...summary,
+			allTargetsReviewed:
+				summary.allTargetsReviewed ?? summary.allLatestReviewed,
 			next: "Use --restart for a fresh scan; this is recorded coverage, not live release readiness.",
 		};
 	}
@@ -764,6 +854,9 @@ async function taskStatus(api, taskId, directory, maxPages, restart) {
 					revisionId: object(target.candidate)
 						? target.candidate.revisionId
 						: null,
+					...(target.candidate === null && object(target.preparedValue)
+						? { preparedValue: target.preparedValue }
+						: {}),
 				},
 				enumerable: true,
 				writable: true,
@@ -776,6 +869,8 @@ async function taskStatus(api, taskId, directory, maxPages, restart) {
 			rejected: 0,
 			pendingReview: 0,
 			missing: 0,
+			prepared: 0,
+			preparedIntentionalBlank: 0,
 		};
 		for (const row of Object.values(rows)) {
 			const status = record(row, "Coverage row").status;
@@ -800,6 +895,13 @@ async function taskStatus(api, taskId, directory, maxPages, restart) {
 			counts,
 			allLatestReviewed:
 				complete && counts.accepted + counts.intentionalBlank === total,
+			allTargetsReviewed:
+				complete &&
+				counts.accepted +
+					counts.intentionalBlank +
+					counts.prepared +
+					counts.preparedIntentionalBlank ===
+					total,
 		};
 		await save(path, { ...result, rows });
 		if (complete || index === maxPages - 1)
@@ -1132,7 +1234,7 @@ node blabla-workflow.mjs review read|submit --state DIRECTORY --body FILE [--pro
 
 task read returns at most 16 targets with live guidance; submit takes the ordinary
 {items:[{messageId,candidate:{kind:"value",value:"..."}}]} body (--body FILE).
-The cursor advances only when the page has candidates; repeated reads preserve work.
+The cursor advances only when the page has candidates or reviewed prepared values; repeated reads preserve work.
 task inspect selects one fresh page at an observed nonnegative integer cursor.
 Reuse a server cursor; byte-bounded pages cannot be located by assumed page size.
 Inspect and its submit preserve the scan checkpoint and status observations.

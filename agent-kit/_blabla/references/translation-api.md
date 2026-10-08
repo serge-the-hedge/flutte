@@ -87,6 +87,45 @@ decision, reason, reviewer, authorization, timestamp, and any final fingerprint;
 it is null until that exact revision is reviewed. It is historical evidence,
 not a guarantee that current target text still matches.
 
+New-Locale task pages also identify the destination `localeProposalId` and
+`sourceSnapshotId` in `task`. A target's optional `preparedValue` is separate
+server-derived evidence for an already reviewed or human-authored staged value:
+
+```json
+{
+  "targetValue": "Reviewed translation",
+  "candidate": null,
+  "preparedValue": {
+    "valueFingerprint": "SHA256_OF_EXACT_TARGET_VALUE",
+    "basis": {
+      "kind": "localeProposal",
+      "localeProposalId": "DESTINATION_PROPOSAL",
+      "snapshotId": "PINNED_SOURCE_SNAPSHOT",
+      "sourceFingerprint": "SHA256_OF_EXACT_SOURCE_VALUE"
+    },
+    "provenance": {
+      "valueId": "STORED_PREPARED_VALUE",
+      "updatedBy": { "kind": "user", "id": "ORIGINAL_HUMAN" },
+      "updatedAt": 123
+    }
+  }
+}
+```
+
+`targetValue` holds the exact bytes; the proof references their fingerprint rather
+than duplicating large text. Empty prepared values include their reviewed
+`intentionalBlankReason`. Agent-reviewed provenance retains the original
+`reviewAuthorization`, including the original candidate revision, reviewer token
+and project-policy or per-revision human authority. Those historical identifiers
+do not create a candidate or review on the continued task.
+
+The server emits this proof only for an eligible proposal with matching Source,
+valid current executable metadata/ICU contract and character limit, and human or
+authorized review provenance. Otherwise `preparedValue` is null. Older responses
+may omit it. Neither populated `targetValue` nor `staged: true` supplies review
+authority. A current candidate always owns its feedback: pending or rejected
+candidate revisions remain unresolved even when prepared evidence also exists.
+
 Pages stop at 16 targets or 1 MiB of target/candidate payload. Shared `guidance`
 appears once; `matchedTextIndexes` refer to the page's targets. Source texts for
 guidance have a separate 512 KiB cap; reduce `limit` for large messages.
@@ -196,6 +235,11 @@ Use [Translation Tasks](#post-translation-tasks) for agent work. Ordinary creati
 pins the accepted Baseline; a later Baseline advance makes staging/finalization
 fail with `STALE_SOURCE`. An editor can continue against current Source, carrying
 still-compatible reviewed values and exposing the residue.
+
+The ordinary workflow recognizes compatible reviewed carry through
+`preparedValue`, advances pages containing only that evidence, and submits only
+the remaining `work`. Preserve the original approvals instead of creating new
+candidates for carried values. See [coverage semantics](workflow.md#recovery-and-completion).
 
 An editor can also prepare or continue a task on an explicitly selected captured
 Source Snapshot. Use the returned task ID and its exact task Source, including

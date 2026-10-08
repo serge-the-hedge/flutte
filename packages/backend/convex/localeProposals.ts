@@ -21,6 +21,7 @@ import {
 	activeProjectionFor,
 	MAX_WORKING_CATALOG_KEYS,
 } from "./catalogProjection";
+import { assertCharacterLimit } from "./characterLimits";
 import {
 	assertTargetValueContract,
 	sourceContractsMatch,
@@ -47,6 +48,7 @@ import {
 import { assertMessageCharacterLimit } from "./messageConstraints";
 import { declaredPlaceholderNames, messageFacts } from "./messageFacts";
 import { requireEditor, requireViewer } from "./permissions";
+import schema from "./schema";
 
 export const PORTUGUESE_LOCALE_CODE = "pt";
 export const PORTUGUESE_LOCALE_LABEL = "Portuguese";
@@ -1722,18 +1724,8 @@ export const stagedValuesForTemplate = internalQuery({
 		proposalId: v.id("localeProposals"),
 		messageIds: v.array(v.string()),
 	},
-	handler: async (
-		ctx,
-		args,
-	): Promise<
-		Array<{
-			messageId: string;
-			value: string;
-			sourceFingerprint: string;
-			intentionalBlankReason?: string;
-			byteLength: number;
-		}>
-	> => {
+	returns: v.array(schema.doc("localeProposalValues")),
+	handler: async (ctx, args) => {
 		if (args.messageIds.length > MAX_LOCALE_PROPOSAL_TEMPLATE_ITEMS) {
 			validationError(
 				"Locale proposal template page exceeds its item envelope.",
@@ -1760,13 +1752,7 @@ export const stagedValuesForTemplate = internalQuery({
 				message: "Locale Proposal not found.",
 			});
 		}
-		const staged: Array<{
-			messageId: string;
-			value: string;
-			sourceFingerprint: string;
-			intentionalBlankReason?: string;
-			byteLength: number;
-		}> = [];
+		const staged: Doc<"localeProposalValues">[] = [];
 		for (const messageId of args.messageIds) {
 			const value = await ctx.db
 				.query("localeProposalValues")
@@ -1783,15 +1769,7 @@ export const stagedValuesForTemplate = internalQuery({
 					"Locale Proposal value does not match its byte envelope.",
 				);
 			}
-			staged.push({
-				messageId,
-				value: value.value,
-				sourceFingerprint: value.sourceFingerprint,
-				...(value.intentionalBlankReason === undefined
-					? {}
-					: { intentionalBlankReason: value.intentionalBlankReason }),
-				byteLength: value.byteLength,
-			});
+			staged.push(value);
 		}
 		return staged;
 	},
@@ -2337,17 +2315,69 @@ export async function taskProposalPage(
 	const stagedByMessageId = new Map(
 		stagedValues.map((value) => [value.messageId, value] as const),
 	);
+	const proposal = await ctx.runQuery(internal.localeProposals.read, {
+		projectId: actor.projectId,
+		proposalId: args.proposalId,
+	});
 	const messages = [];
 	let pageBytes = 0;
 	for (const message of sourcePage) {
 		const staged = stagedByMessageId.get(message.id);
+		const fingerprint = await sourceFingerprint(message);
+		let preparedValue = null;
+		if (
+			staged &&
+			source.sourceIsEligible &&
+			staged.sourceFingerprint === fingerprint &&
+			isHumanOrAuthorizedReview(staged.updatedBy, staged.reviewAuthorization)
+		) {
+			try {
+				if (staged.value === "") {
+					if (!staged.intentionalBlankReason?.trim())
+						validationError("Prepared blank has no reviewed reason.");
+				} else {
+					if (staged.intentionalBlankReason !== undefined)
+						validationError("Prepared content has obsolete blank metadata.");
+					assertTargetValueContract({
+						messageId: message.id,
+						localeCode: proposal.locale.code,
+						value: staged.value,
+						source: sourceContract(message),
+					});
+				}
+				assertCharacterLimit(
+					staged.value,
+					limitByMessage.get(message.id),
+					message.id,
+				);
+				preparedValue = {
+					valueFingerprint: await sha256Hex(staged.value),
+					intentionalBlankReason: staged.intentionalBlankReason,
+					basis: {
+						kind: "localeProposal" as const,
+						localeProposalId: args.proposalId,
+						snapshotId: source.snapshotId,
+						sourceFingerprint: fingerprint,
+					},
+					provenance: {
+						valueId: staged._id,
+						updatedBy: staged.updatedBy,
+						updatedAt: staged.updatedAt,
+						reviewAuthorization: staged.reviewAuthorization,
+					},
+				};
+			} catch (error) {
+				if (!(error instanceof ConvexError)) throw error;
+			}
+		}
 		const item = {
 			messageId: message.id,
 			characterLimit: limitByMessage.get(message.id),
 			sourceValue: message.value,
-			sourceFingerprint: await sourceFingerprint(message),
+			sourceFingerprint: fingerprint,
 			targetValue: staged?.value ?? "",
 			staged: staged !== undefined,
+			preparedValue,
 			...(message.metadata === undefined
 				? {}
 				: { metadataJson: JSON.stringify(message.metadata) }),
