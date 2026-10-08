@@ -26,7 +26,9 @@ translating coordinator to post.
 3. Evaluate meaning and project wording. Apply the executable contract for App
    messages; managed `format: "plain"` text treats braces literally.
    Follow [retrieval](../_blabla/references/retrieval.md) independently for related
-   examples.
+   examples. For constrained titles, subtitles, buttons or fragments, assess the
+   [complete UI group](../_blabla/references/workflow.md#review-a-ui-group), including
+   any redistribution of meaning and the limits of layout evidence.
 4. Fill the generated template with an explicit accept or concrete rejection for
    each exact `revisionId` and assessed `reviewToken`, then use `review submit`.
    Missing decisions stay undecided. Acceptance cannot supply edited wording. A correction

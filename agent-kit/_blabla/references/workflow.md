@@ -8,6 +8,13 @@ the endpoint references remain authoritative.
 
 ## Establish the run
 
+The coordinator assigns one absolute installed bundle root to the run and every
+worker. Check it against the chosen reviewed checkout using the
+[installer](https://github.com/serge-the-hedge/flutte/blob/main/agent-kit/README.md#install-into-the-consumers-workspace)
+with `--check`, and retain the reported fingerprint with the brief. Keep that
+bundle for resumed states; adopt an update at an idle boundary with its new
+root/fingerprint recorded.
+
 Discover the project with the assigned profile. Record requested keys and locales,
 matching task IDs, and one private state directory per task. Use discovered locale
 identities verbatim. New repository locales need their catalog path and real runtime
@@ -25,12 +32,35 @@ For repeated caller or fragment research, select [shared local evidence](evidenc
 against the current saved task or reviewer context. Keep its Source/file hash
 results and limitations with the round's briefing.
 
+For constrained UI groups, follow [review a UI group](#review-a-ui-group) before
+expanding the affected pilot. Include the group even in a small assignment.
+
 Translate and review the pilot before expanding. Preserve each brief version;
 include its path in worker assignments. If policy changes, create a new version
 listing the affected message IDs, stop overlapping work on those messages, and
 reassign their translation/review. Persist Dictionary or Voice Guide changes only
 when that maintenance is authorized. A local brief does not override server
 guidance or grant review authority.
+
+### Review a UI group
+
+Read co-displayed titles, subtitles, buttons, and composed fragments together.
+Record their exact keys and Source, the action/object the group must communicate,
+and available screenshot or caller evidence. Include known width, line-count,
+explicit line-break, and optional-subtitle constraints. Distinguish measured or
+observed behavior from assumptions; a character count alone cannot prove fit.
+
+Evaluate the complete localized group in the pilot, including likely longer
+languages. Shorten wording while retaining the action and its object somewhere
+visible: a generic “Filter” button only works when nearby text establishes what
+is filtered. An authorized blank subtitle or redistributed meaning must leave
+the group understandable and preserve executable contracts. Record that choice
+and the blank reason for the independent reviewer.
+
+If layout evidence is unavailable, record that limitation and preserve clear
+meaning. Ask a targeted question when the missing context changes the wording;
+unaffected groups can continue. Share the same evidence with the reviewer, who
+still fetches current authoritative Source and candidate contexts independently.
 
 ## Translate one durable page
 
