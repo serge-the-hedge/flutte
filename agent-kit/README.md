@@ -31,9 +31,28 @@ Use the same command with `--replace` to deliberately update these bundle
 folders; back up local edits first. Other skills are untouched. Rerunning after an
 interrupted update recovers the prior bundle (or keeps a completed update) before
 applying normal overwrite checks. If recovery evidence is invalid, the installer
-stops and preserves it for inspection. Pick a reviewed
-commit/tag of this repository when distributing a pinned version. Reload your
-agent's skill catalog using its normal mechanism after installation.
+stops and preserves it for inspection. Choose a reviewed commit/tag of this
+repository as the source for a pinned bundle. Reload your agent's skill catalog
+using its normal mechanism after installation.
+
+Before a new run, compare the selected installation with that reviewed checkout:
+
+```sh
+node scripts/install-agent-kit.mjs --to /absolute/path/to/application/.agents/skills --check
+```
+
+Install and successful check output include the complete bundle's SHA-256
+fingerprint and absolute shared-support root. Record these in the run assignment
+and use that root's helpers and references together. The check reads only the
+five bundle folders, detects missing, changed and extra paths, and leaves unrelated
+sibling skills alone. Extra file contents are not read. It makes no writes and
+preserves installer locks and recovery evidence for the ordinary installer.
+
+A mismatch compares this checkout with the chosen installation; an intentionally
+pinned older bundle should be checked from its matching reviewed checkout. Keep
+the previous bundle available when choosing a new one. Update or switch workers
+only at an idle boundary, after recovering pending writes; back up local edits
+before using `--replace`. The check never updates an installation.
 
 Follow [Human Setup](_blabla/references/api.md#human-setup) to select credentials
 for each project and role, including reviewer isolation. Credentials are never

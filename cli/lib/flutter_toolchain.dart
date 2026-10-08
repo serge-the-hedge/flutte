@@ -219,11 +219,17 @@ class FlutterToolchainResolver {
     final result = await _tryRun(checkout, flutter.executable, [
       ...flutter.argumentsPrefix,
       '--version',
+      '--machine',
     ]);
     if (result == null || result.exitCode != 0) return 'unavailable';
-    for (final line in result.stdout.split('\n')) {
-      final value = line.trim();
-      if (value.isNotEmpty) return value;
+    try {
+      if (jsonDecode(result.stdout) case {
+        'frameworkVersion': final String version,
+      }) {
+        return 'Flutter ${Version.parse(version)}';
+      }
+    } on FormatException {
+      // Human banners and unknown versions cannot authorize a refresh.
     }
     return 'unavailable';
   }

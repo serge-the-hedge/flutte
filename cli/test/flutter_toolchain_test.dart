@@ -59,6 +59,91 @@ void main() {
     expect(resolved.source, 'repository FVM');
   });
 
+  test('machine version ignores banners and preserves the FVM pin', () async {
+    final fixture = await ToolchainFixture.create();
+    addTearDown(fixture.dispose);
+    final sdk = await fixture.sdk(
+      '.fvm/flutter_sdk',
+      'Flutter 3.47.0',
+      humanOutput:
+          '┌───────────────┐\n│ Update Flutter │\n└───────────────┘\nFlutter 3.47.0',
+    );
+    await File(fixture.path('.fvmrc')).writeAsString('{"flutter":"3.47.0"}');
+    await File(
+      fixture.path('pubspec.yaml'),
+    ).writeAsString('environment: {sdk: ^3.12.0, flutter: ^3.47.0}');
+
+    final humanVersion = await Process.run('${sdk.path}/bin/flutter', [
+      '--version',
+    ]);
+    expect(humanVersion.stdout, startsWith('┌'));
+    final resolved = await FlutterToolchainResolver(
+      environment: const {},
+    ).resolve(fixture.root);
+
+    expect(resolved.version, 'Flutter 3.47.0');
+    expect(resolved.description, contains('version: Flutter 3.47.0'));
+    expect(resolved.canRefreshGeneratedOutput, isTrue);
+  });
+
+  for (final output in [
+    '',
+    'Flutter 3.47.0',
+    '{',
+    '{}',
+    '[{"frameworkVersion":"3.47.0"}]',
+    '{"frameworkVersion":347}',
+    '{"frameworkVersion":""}',
+    '{"frameworkVersion":"unknown"}',
+  ]) {
+    test(
+      'uninterpretable machine version remains unavailable: $output',
+      () async {
+        final fixture = await ToolchainFixture.create();
+        addTearDown(fixture.dispose);
+        final sdk = await fixture.sdk('explicit', 'Flutter 3.47.0');
+        final resolved = await FlutterToolchainResolver(
+          environment: const {},
+          runner: VersionRunner(
+            CommandResult(
+              exitCode: 0,
+              stdout: output,
+              stderr: 'Flutter 3.47.0',
+            ),
+          ),
+        ).resolve(fixture.root, explicitSdk: sdk.path);
+
+        expect(resolved.version, 'unavailable');
+        expect(resolved.canRefreshGeneratedOutput, isFalse);
+      },
+    );
+  }
+
+  for (final (name, result) in [
+    (
+      'failed',
+      const CommandResult(
+        exitCode: 1,
+        stdout: '{"frameworkVersion":"3.47.0"}',
+        stderr: 'failed',
+      ),
+    ),
+    ('missing', null),
+  ]) {
+    test('$name version command remains unavailable', () async {
+      final fixture = await ToolchainFixture.create();
+      addTearDown(fixture.dispose);
+      final sdk = await fixture.sdk('explicit', 'Flutter 3.47.0');
+      final resolved = await FlutterToolchainResolver(
+        environment: const {},
+        runner: VersionRunner(result),
+      ).resolve(fixture.root, explicitSdk: sdk.path);
+
+      expect(resolved.version, 'unavailable');
+      expect(resolved.canRefreshGeneratedOutput, isFalse);
+    });
+  }
+
   test('resolves FVM to a fixed SDK executable before staging', () async {
     final fixture = await ToolchainFixture.create();
     addTearDown(fixture.dispose);
@@ -85,6 +170,7 @@ void main() {
         equals([
           '${await sdk.resolveSymbolicLinks()}/bin/flutter',
           '--version',
+          '--machine',
         ]),
       ),
     );
@@ -196,13 +282,21 @@ environment:
     return ToolchainFixture._(root);
   }
 
-  Future<Directory> sdk(String name, String version) async {
+  Future<Directory> sdk(
+    String name,
+    String version, {
+    String? humanOutput,
+  }) async {
     final root = Directory(path(name));
     final flutter = File('${root.path}/bin/flutter');
     await flutter.parent.create(recursive: true);
     await flutter.writeAsString('''#!/bin/sh
+if [ "\$1" = "--version" ] && [ "\$2" = "--machine" ]; then
+  echo '${jsonEncode({'frameworkVersion': version.replaceFirst('Flutter ', '')})}'
+  exit 0
+fi
 if [ "\$1" = "--version" ]; then
-  echo '$version'
+  echo '${humanOutput ?? version}'
   exit 0
 fi
 exit 0
@@ -234,10 +328,10 @@ class FvmRunner implements CommandRunner {
       return const CommandResult(exitCode: 0, stdout: '3.2.1\n', stderr: '');
     }
     if (executable == '$sdkPath/bin/flutter' &&
-        arguments.join(' ') == '--version') {
+        arguments.join(' ') == '--version --machine') {
       return const CommandResult(
         exitCode: 0,
-        stdout: 'Flutter 3.44.6\n',
+        stdout: '{"frameworkVersion":"3.44.6"}\n',
         stderr: '',
       );
     }
@@ -251,5 +345,22 @@ class FvmRunner implements CommandRunner {
       );
     }
     return const CommandResult(exitCode: 1, stdout: '', stderr: 'unexpected');
+  }
+}
+
+class VersionRunner implements CommandRunner {
+  const VersionRunner(this.result);
+
+  final CommandResult? result;
+
+  @override
+  Future<CommandResult> run(
+    String executable,
+    List<String> arguments, {
+    required String workingDirectory,
+    List<int>? stdin,
+  }) async {
+    expect(arguments, ['--version', '--machine']);
+    return result ?? (throw RepositoryAdapterException('SDK unavailable'));
   }
 }

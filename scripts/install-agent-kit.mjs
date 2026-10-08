@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import {
 	cp,
 	lstat,
@@ -33,10 +35,13 @@ const entries = [
 ];
 const help = `Install the complete portable Blabla skill bundle.
 Usage: node scripts/install-agent-kit.mjs --to <agent-skills-directory> [--replace]
+       node scripts/install-agent-kit.mjs --to <agent-skills-directory> --check
 
 --to       Explicit destination, e.g. /path/to/app/.agents/skills
 --replace  Replace these five existing bundle directories, including local edits.
            Other skills are untouched. Symlink destinations are rejected.
+--check    Compare the five installed folders with this checkout, without writes.
+           Cannot be combined with --replace. Unrelated sibling skills are ignored.
 No credentials, global installation, or agent configuration are created.
 `;
 
@@ -58,6 +63,120 @@ function inside(path, directory) {
 		!nested ||
 		(nested !== ".." && !nested.startsWith(`..${sep}`) && !isAbsolute(nested))
 	);
+}
+
+/** @typedef {{kind: "directory" | "file", sha256?: string}} BundleEntry */
+
+/** Inventory only the five bundle folders. Extra installed files are identified
+ * without opening them; they may contain private consumer data.
+ * @param {string} root @param {Map<string, BundleEntry>} [expected] */
+async function bundle(root, expected) {
+	/** @type {Map<string, BundleEntry>} */
+	const result = new Map();
+	/** @param {string} name @param {boolean} [top] */
+	async function visit(name, top = false) {
+		const path = join(root, name);
+		const info = await existing(path);
+		if (!info) return;
+		if (info.isSymbolicLink() || (top && !info.isDirectory()))
+			throw new Error(`Refusing symlink or invalid bundle entry: ${name}`);
+		if (info.isDirectory()) {
+			result.set(name, { kind: "directory" });
+			for (const child of (await readdir(path)).sort())
+				await visit(`${name}/${child}`);
+		} else if (info.isFile()) {
+			const entry = /** @type {BundleEntry} */ ({ kind: "file" });
+			if (!expected || expected.get(name)?.kind === "file") {
+				const handle = await open(
+					path,
+					constants.O_RDONLY | constants.O_NOFOLLOW,
+				);
+				try {
+					if (!(await handle.stat()).isFile())
+						throw new Error(`Refusing special bundle file: ${name}`);
+					entry.sha256 = createHash("sha256")
+						.update(await handle.readFile())
+						.digest("hex");
+				} finally {
+					await handle.close();
+				}
+			}
+			result.set(name, entry);
+		} else throw new Error(`Refusing special bundle file: ${name}`);
+	}
+	for (const name of entries) await visit(name, true);
+	return result;
+}
+
+/** Paths, entry kinds and exact file hashes determine the bundle identity.
+ * @param {Map<string, BundleEntry>} inventory */
+function fingerprint(inventory) {
+	if (
+		[...inventory.values()].some(
+			(entry) => entry.kind === "file" && !entry.sha256,
+		)
+	)
+		return "unavailable (extra files were not read)";
+	return createHash("sha256")
+		.update(
+			JSON.stringify(
+				[...inventory].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+			),
+		)
+		.digest("hex");
+}
+
+/** @param {Map<string, BundleEntry>} expected @param {Map<string, BundleEntry>} actual */
+function differences(expected, actual) {
+	const changes = [];
+	for (const name of [
+		...new Set([...expected.keys(), ...actual.keys()]),
+	].sort()) {
+		const wanted = expected.get(name);
+		const found = actual.get(name);
+		if (!wanted) changes.push(`Extra: ${name}`);
+		else if (!found) changes.push(`Missing: ${name}`);
+		else if (wanted.kind !== found.kind || wanted.sha256 !== found.sha256)
+			changes.push(`Changed: ${name}`);
+	}
+	return changes;
+}
+
+/** This branch never acquires locks, recovers stages, or creates directories.
+ * @param {string} target @param {Map<string, BundleEntry>} expected */
+async function checkBundle(target, expected) {
+	try {
+		const info = await existing(target);
+		if (info && (!info.isDirectory() || info.isSymbolicLink()))
+			throw new Error(
+				`Refusing non-directory or symlink destination: ${target}`,
+			);
+		const selected = info ? await realpath(target) : target;
+		if (info) {
+			if (
+				(await readdir(selected)).some((name) =>
+					name.startsWith(".blabla-install"),
+				)
+			)
+				throw new Error(
+					"Installation or recovery evidence exists; preserve it and finish the ordinary installer at an idle boundary.",
+				);
+		}
+		const actual = await bundle(selected, expected);
+		const changes = differences(expected, actual);
+		if (changes.length)
+			throw new Error(
+				`Bundle mismatch:\n${changes.join("\n")}\nSource SHA256: ${fingerprint(expected)}\nInstalled SHA256: ${fingerprint(actual)}`,
+			);
+		process.stdout.write(
+			`Bundle matches this checkout in ${selected}\nBundle SHA256: ${fingerprint(actual)}\nShared support root: ${join(selected, "_blabla")}\n`,
+		);
+	} catch (error) {
+		throw new Error(
+			`${error instanceof Error ? error.message : "Bundle check failed."}\nUse the matching reviewed checkout to check a pinned bundle, or install this reviewed source into a new directory. Update with --replace only at an idle boundary after backing up local edits.`,
+			{ cause: error },
+		);
+	}
 }
 
 /** @typedef {{version: 1, state: "preparing" | "ready" | "committed", previous: string[]}} Journal */
@@ -244,6 +363,7 @@ async function install(args) {
 	}
 	let destination;
 	let replace = false;
+	let check = false;
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--to" && destination === undefined) {
@@ -251,15 +371,22 @@ async function install(args) {
 			if (!destination || destination.startsWith("--"))
 				throw new Error("--to requires an agent skills directory.");
 		} else if (arg === "--replace" && !replace) replace = true;
+		else if (arg === "--check" && !check) check = true;
 		else throw new Error("Unknown or repeated option. Use --help.");
 	}
 	if (!destination)
 		throw new Error("Choose an explicit destination with --to.");
+	if (check && replace)
+		throw new Error("--check cannot be combined with --replace.");
 	const target = resolve(destination);
 	const source = resolve(
 		dirname(fileURLToPath(import.meta.url)),
 		"../agent-kit",
 	);
+	const expected = await bundle(source);
+	if (entries.some((name) => expected.get(name)?.kind !== "directory"))
+		throw new Error("The source checkout is missing a complete bundle folder.");
+	if (check) return checkBundle(target, expected);
 	const targetInfo = await existing(target);
 	let parent = target;
 	const missing = [];
@@ -314,6 +441,10 @@ async function install(args) {
 		try {
 			for (const entry of entries)
 				await cp(join(source, entry), join(stage, entry), { recursive: true });
+			if (differences(expected, await bundle(stage, expected)).length)
+				throw new Error(
+					"The source bundle changed while staging; retry from the reviewed checkout.",
+				);
 			journal.state = "ready";
 			await saveJournal(stage, journal);
 			for (const entry of entries) {
@@ -332,7 +463,7 @@ async function install(args) {
 		await rm(lock);
 	}
 	process.stdout.write(
-		`Installed four Blabla skills and shared support in ${target}\n`,
+		`Installed four Blabla skills and shared support in ${physicalTarget}\nBundle SHA256: ${fingerprint(expected)}\nShared support root: ${join(physicalTarget, "_blabla")}\n`,
 	);
 }
 
