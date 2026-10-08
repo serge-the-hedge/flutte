@@ -757,35 +757,8 @@ async function createNewLocaleTaskForHuman(
 			targetCount: localeProposal.sourceMessageCount,
 		};
 	}
-	const existing = await ctx.db
-		.query("agentTranslationProposals")
-		.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
-			q
-				.eq("projectId", input.projectId)
-				.eq("createdByTokenId", undefined)
-				.eq("clientProposalKey", title),
-		)
-		.unique();
-	if (existing) {
-		if (
-			existing.target.kind !== "localeProposal" ||
-			existing.target.localeProposalId !== localeProposal._id ||
-			existing.localeProposalTaskScope?.targetCount !==
-				localeProposal.sourceMessageCount
-		) {
-			throw new ConvexError({
-				code: "BAD_STATE",
-				message:
-					"The existing new-Locale task belongs to an older Baseline Snapshot.",
-			});
-		}
-		return {
-			taskId: existing._id,
-			title: existing.clientProposalKey,
-			localeCode: localeProposal.localeCode,
-			targetCount: localeProposal.sourceMessageCount,
-		};
-	}
+	// Human titles are display labels. The owner/proposal lookup above owns
+	// retries, so the same label can name work on another immutable Source pin.
 	if (localeProposal.status !== "draft") {
 		throw new ConvexError({
 			code: "BAD_STATE",

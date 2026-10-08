@@ -121,6 +121,67 @@ async function fact(
 }
 
 describe("immutable selected Locale Source", () => {
+	test("same human title prepares distinct pins and each retry retains its task and candidates", async () => {
+		const f = await setup();
+		const firstPin = await ingest(
+			f.user,
+			f.projectId,
+			"first-pr",
+			{ welcome: "First copy" },
+			"divergent",
+		);
+		const secondPin = await ingest(
+			f.user,
+			f.projectId,
+			"second-pr",
+			{ welcome: "Second copy" },
+			"divergent",
+		);
+		const prepare = (sourceSnapshotId: Id<"sourceSnapshots">) =>
+			f.user.action(
+				api.agentTranslationProposals.createNewLocaleTaskOnSnapshot,
+				{
+					projectId: f.projectId,
+					title: "Translate pt",
+					localeCode: "pt",
+					sourceSnapshotId,
+				},
+			);
+		const first = await prepare(firstPin);
+		await request(
+			f.t,
+			f.translator.token,
+			`translation-tasks/${first.taskId}/candidates`,
+			{
+				items: [{ messageId: "welcome", value: "Primeiro texto" }],
+			},
+		);
+		const firstState = await f.t.run((ctx) => ctx.db.get(first.taskId));
+		const firstCandidates = await f.user.query(
+			api.agentTranslationProposals.getForReview,
+			{ proposalId: first.taskId },
+		);
+		const second = await prepare(secondPin);
+		expect(first.taskId).not.toBe(second.taskId);
+		expect(first.title).toBe("Translate pt");
+		expect(second.title).toBe("Translate pt");
+		expect(await prepare(firstPin)).toEqual(first);
+		expect(await prepare(secondPin)).toEqual(second);
+		expect(await f.t.run((ctx) => ctx.db.get(first.taskId))).toEqual(
+			firstState,
+		);
+		expect(
+			await f.user.query(api.agentTranslationProposals.getForReview, {
+				proposalId: first.taskId,
+			}),
+		).toEqual(firstCandidates);
+		const secondPage = await request<{
+			targets: Array<{ messageId: string; sourceValue: string }>;
+		}>(f.t, f.translator.token, `translation-tasks/${second.taskId}?limit=16`);
+		expect(secondPage.targets).toMatchObject([
+			{ messageId: "welcome", sourceValue: "Second copy" },
+		]);
+	});
 	test("normal agent author, independent review, examples and final artifact use exact captured Source", async () => {
 		const f = await setup();
 		const ordinary = await f.user.mutation(

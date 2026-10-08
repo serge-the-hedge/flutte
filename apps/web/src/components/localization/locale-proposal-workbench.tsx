@@ -55,6 +55,8 @@ import { canRecordIntentionalBlank } from "@/lib/catalog-value-lifecycle";
 import { api, convexId } from "@/lib/convex-api";
 import { localeProposalReviewState } from "@/lib/locale-proposal-review-state";
 
+type ReviewDraft = { value: string; savedValue: string };
+
 type ReviewDecision =
 	| { kind: "accept" }
 	| { kind: "acceptWithEdits"; value: string }
@@ -208,8 +210,10 @@ export function LocaleProposalWorkbench({
 	const continuousReviewQueue =
 		(focus === "awaiting" || focus === "attention" || focus === "routine") &&
 		deferredSearch.trim().length === 0;
-	const [drafts, setDrafts] = useState<Record<string, string>>({});
-	const [blankReasons, setBlankReasons] = useState<Record<string, string>>({});
+	const [drafts, setDrafts] = useState<Record<string, ReviewDraft>>({});
+	const [blankReasons, setBlankReasons] = useState<Record<string, ReviewDraft>>(
+		{},
+	);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
@@ -268,7 +272,7 @@ export function LocaleProposalWorkbench({
 	const dirtyItems = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.flatMap((message) => {
-			const draft = drafts[message.messageId];
+			const draft = drafts[message.messageId]?.value;
 			const currentValue =
 				message.candidate?.review?.finalValue ??
 				message.review?.finalValue ??
@@ -287,25 +291,46 @@ export function LocaleProposalWorkbench({
 			];
 		});
 	}, [detail, drafts]);
-	const hasUnsavedVisibleEdits =
-		detail?.messages.some((message) => {
-			const currentValue =
-				message.candidate?.review?.finalValue ??
-				message.review?.finalValue ??
-				(message.facts.state === "reviewedDraft"
-					? message.value?.value
-					: (message.candidate?.value ?? message.value?.value)) ??
-				"";
-			return (
-				(drafts[message.messageId] !== undefined &&
-					drafts[message.messageId] !== currentValue) ||
-				(blankReasons[message.messageId] !== undefined &&
-					blankReasons[message.messageId] !==
-						(message.candidate?.intentionalBlankReason ??
-							message.value?.intentionalBlankReason ??
-							""))
-			);
-		}) ?? false;
+	// The editing session survives filtering and paging; its unsaved work must
+	// therefore guard Source changes and finalization even while its row is hidden.
+	const hasUnsavedEdits = [
+		...Object.values(drafts),
+		...Object.values(blankReasons),
+	].some((draft) => draft.value !== draft.savedValue);
+
+	// A query acknowledgement updates the saved basis of visible drafts. Hidden
+	// drafts keep their last observed basis until a save succeeds or they return.
+	useEffect(() => {
+		if (!queriedDetail) return;
+		const acknowledge = (
+			previous: Record<string, ReviewDraft>,
+			reasons: boolean,
+		) => {
+			let next = previous;
+			for (const message of queriedDetail.messages) {
+				const draft = previous[message.messageId];
+				if (!draft) continue;
+				const savedValue = reasons
+					? (message.candidate?.intentionalBlankReason ??
+						message.value?.intentionalBlankReason ??
+						"")
+					: (message.candidate?.review?.finalValue ??
+						message.review?.finalValue ??
+						(message.facts.state === "reviewedDraft"
+							? message.value?.value
+							: (message.candidate?.value ?? message.value?.value)) ??
+						"");
+				if (draft.value === savedValue || draft.savedValue !== savedValue) {
+					if (next === previous) next = { ...previous };
+					if (draft.value === savedValue) delete next[message.messageId];
+					else next[message.messageId] = { ...draft, savedValue };
+				}
+			}
+			return next;
+		};
+		setDrafts((previous) => acknowledge(previous, false));
+		setBlankReasons((previous) => acknowledge(previous, true));
+	}, [queriedDetail]);
 	const selectableAgentCandidates = useMemo(() => {
 		if (!detail) return [];
 		return detail.messages.filter((message) => {
@@ -326,7 +351,7 @@ export function LocaleProposalWorkbench({
 				value.length > 0 &&
 				candidateToken !== undefined &&
 				!message.facts.staleSource &&
-				(drafts[message.messageId] ?? value) === value
+				(drafts[message.messageId]?.value ?? value) === value
 			);
 		});
 	}, [detail, drafts]);
@@ -384,10 +409,8 @@ export function LocaleProposalWorkbench({
 	const continueOnSource = (sourceSnapshotId?: string) =>
 		run("continue-source", async () => {
 			if (!activeProposalId) return;
-			if (hasUnsavedVisibleEdits) {
-				setError(
-					"Resolve the unsaved visible edits before changing Source Snapshot.",
-				);
+			if (hasUnsavedEdits) {
+				setError("Resolve the unsaved edits before changing Source Snapshot.");
 				return;
 			}
 			if (taskId) {
@@ -423,10 +446,16 @@ export function LocaleProposalWorkbench({
 			if (!activeProposalId || proposalReadOnly || dirtyItems.length === 0)
 				return;
 			for (let offset = 0; offset < dirtyItems.length; offset += 16) {
+				const items = dirtyItems.slice(offset, offset + 16);
 				await stageForReview({
 					projectId: convexProjectId,
 					proposalId: convexId<"localeProposals">(activeProposalId),
-					items: dirtyItems.slice(offset, offset + 16),
+					items,
+				});
+				setDrafts((previous) => {
+					const next = { ...previous };
+					for (const item of items) delete next[item.messageId];
+					return next;
 				});
 			}
 			setNotice(
@@ -622,7 +651,7 @@ export function LocaleProposalWorkbench({
 		run(`blank:${message.messageId}`, async () => {
 			if (!activeProposalId) return;
 			const reason = (
-				blankReasons[message.messageId] ??
+				blankReasons[message.messageId]?.value ??
 				message.candidate?.intentionalBlankReason ??
 				message.value?.intentionalBlankReason ??
 				""
@@ -680,6 +709,10 @@ export function LocaleProposalWorkbench({
 	const finalize = () =>
 		run("finalize", async () => {
 			if (!activeProposalId) return;
+			if (hasUnsavedEdits) {
+				setError("Resolve the unsaved edits before finalizing this catalog.");
+				return;
+			}
 			if (taskId) {
 				await finalizeTask({
 					taskId: convexId<"agentTranslationProposals">(taskId),
@@ -898,15 +931,13 @@ export function LocaleProposalWorkbench({
 							className="shrink-0"
 							onClick={finalize}
 							disabled={
-								busy !== null ||
-								!reviewState.canFinalize ||
-								hasUnsavedVisibleEdits
+								busy !== null || !reviewState.canFinalize || hasUnsavedEdits
 							}
 						>
 							<Check data-icon="inline-start" />
 							{busy === "finalize"
 								? "Finalizing…"
-								: hasUnsavedVisibleEdits
+								: hasUnsavedEdits
 									? "Save edits first"
 									: "Finalize catalog"}
 						</Button>
@@ -941,7 +972,7 @@ export function LocaleProposalWorkbench({
 								Keep reviewed values whose source is unchanged. Continue with
 								only changed or new source values; this proposal stays
 								available.
-								{hasUnsavedVisibleEdits
+								{hasUnsavedEdits
 									? " Copy any unsaved edits you need before discarding them."
 									: ""}
 							</span>
@@ -954,7 +985,7 @@ export function LocaleProposalWorkbench({
 								disabled={busy !== null || project?.role === "viewer"}
 							/>
 							<div className="flex shrink-0 flex-wrap gap-2">
-								{hasUnsavedVisibleEdits ? (
+								{hasUnsavedEdits ? (
 									<Button
 										size="sm"
 										variant="outline"
@@ -974,14 +1005,14 @@ export function LocaleProposalWorkbench({
 									}
 									disabled={
 										busy !== null ||
-										hasUnsavedVisibleEdits ||
+										hasUnsavedEdits ||
 										project?.role === "viewer"
 									}
 								>
 									<RefreshCw data-icon="inline-start" />
 									{busy === "continue-source"
 										? "Carrying work forward…"
-										: hasUnsavedVisibleEdits
+										: hasUnsavedEdits
 											? "Resolve unsaved edits"
 											: selectedSourceSnapshotId
 												? "Continue on selected source"
@@ -1195,7 +1226,7 @@ export function LocaleProposalWorkbench({
 									? message.value?.value
 									: candidateValue) ??
 								"";
-							const draft = drafts[message.messageId] ?? savedValue;
+							const draft = drafts[message.messageId]?.value ?? savedValue;
 							const reviewed = message.facts.state === "reviewed";
 							const reviewToken =
 								message.candidate?.revisionId ??
@@ -1360,7 +1391,7 @@ export function LocaleProposalWorkbench({
 														update: (value) =>
 															setDrafts((previous) => ({
 																...previous,
-																[message.messageId]: value,
+																[message.messageId]: { value, savedValue },
 															})),
 														save: () =>
 															void saveMessageReview(
@@ -1408,7 +1439,7 @@ export function LocaleProposalWorkbench({
 															busy !== null ||
 															draft !== savedValue ||
 															(blankReasons[message.messageId] !== undefined &&
-																blankReasons[message.messageId] !==
+																blankReasons[message.messageId]?.value !==
 																	(message.candidate.intentionalBlankReason ??
 																		"")) ||
 															message.facts.staleSource
@@ -1422,7 +1453,7 @@ export function LocaleProposalWorkbench({
 																aria-label={`Reason for intentionally blank ${message.messageId}`}
 																placeholder="Reason for an intentional blank"
 																value={
-																	blankReasons[message.messageId] ??
+																	blankReasons[message.messageId]?.value ??
 																	message.candidate?.intentionalBlankReason ??
 																	message.value?.intentionalBlankReason ??
 																	""
@@ -1430,7 +1461,14 @@ export function LocaleProposalWorkbench({
 																onChange={(event) =>
 																	setBlankReasons((previous) => ({
 																		...previous,
-																		[message.messageId]: event.target.value,
+																		[message.messageId]: {
+																			value: event.target.value,
+																			savedValue:
+																				message.candidate
+																					?.intentionalBlankReason ??
+																				message.value?.intentionalBlankReason ??
+																				"",
+																		},
 																	}))
 																}
 																disabled={proposalReadOnly}
@@ -1447,7 +1485,7 @@ export function LocaleProposalWorkbench({
 																	message.facts.staleSource ||
 																	proposalReadOnly ||
 																	!(
-																		blankReasons[message.messageId] ??
+																		blankReasons[message.messageId]?.value ??
 																		message.candidate?.intentionalBlankReason ??
 																		message.value?.intentionalBlankReason ??
 																		""

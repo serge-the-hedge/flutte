@@ -68,7 +68,7 @@ function fixture(
 		sourceSelection: selected ? "selectedSnapshot" : "baseline",
 		sourceIsEligible: selected,
 		pendingReview: { count: 0, hasMore: false },
-		continueCursor: null,
+		continueCursor: null as number | null,
 		pendingQueueContinueCursor: null,
 		cursor: 0,
 		isDone: true,
@@ -76,6 +76,8 @@ function fixture(
 	};
 }
 let detail = fixture();
+let hiddenDetail = fixture();
+const listeners = new Set<() => void>();
 const snapshot = {
 	_id: "preview",
 	name: "English reviewed · PR 1672",
@@ -83,44 +85,55 @@ const snapshot = {
 	repository: "brickit",
 	kind: "preview",
 };
-const watch = spyOn(client, "watchQuery").mockImplementation(
-	(query, _args) => ({
-		onUpdate: () => () => {},
-		localQueryResult: () => {
-			switch (getFunctionName(query)) {
-				case "projects:get":
-					return {
-						name: "Brickit",
-						role: "owner",
-						type: "repository",
-					} as never;
-				case "localeProposals:getForReview":
-					return detail as never;
-				case "localeDelivery:forProposal":
-				case "localeDelivery:bindingForProposal":
-					return null as never;
-				case "snapshots:list":
-					return [snapshot] as never;
-				default:
-					return [] as never;
-			}
-		},
-		localQueryLogs: () => [],
-		journal: () => undefined,
-	}),
-);
+const watch = spyOn(client, "watchQuery").mockImplementation((query, args) => ({
+	onUpdate: (callback) => {
+		listeners.add(callback);
+		return () => {
+			listeners.delete(callback);
+		};
+	},
+	localQueryResult: () => {
+		switch (getFunctionName(query)) {
+			case "projects:get":
+				return {
+					name: "Brickit",
+					role: "owner",
+					type: "repository",
+				} as never;
+			case "localeProposals:getForReview":
+				return (
+					args.search || args.cursor > 0 ? hiddenDetail : detail
+				) as never;
+			case "localeDelivery:forProposal":
+			case "localeDelivery:bindingForProposal":
+				return null as never;
+			case "snapshots:list":
+				return [snapshot] as never;
+			default:
+				return [] as never;
+		}
+	},
+	localQueryLogs: () => [],
+	journal: () => undefined,
+}));
 const action = spyOn(client, "action").mockResolvedValue({
 	localeProposalId: "next",
 	carriedValueCount: 1,
 	remainingValueCount: 0,
 } as never);
+const mutation = spyOn(client, "mutation").mockResolvedValue(
+	undefined as never,
+);
 beforeEach(() => {
 	action.mockClear();
+	mutation.mockClear();
 	detail = fixture();
+	hiddenDetail = fixture();
 });
 afterAll(async () => {
 	watch.mockRestore();
 	action.mockRestore();
+	mutation.mockRestore();
 	await client.close();
 });
 function button(text: string) {
@@ -155,6 +168,44 @@ async function render() {
 			<RouterProvider router={router} />
 		</ConvexProvider>,
 	);
+}
+async function type(
+	input: HTMLInputElement | HTMLTextAreaElement,
+	value: string,
+) {
+	const prototype =
+		input.tagName === "TEXTAREA"
+			? HTMLTextAreaElement.prototype
+			: HTMLInputElement.prototype;
+	await act(async () => {
+		Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(
+			input,
+			value,
+		);
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+	});
+}
+async function expandValue() {
+	await act(async () =>
+		dom.container
+			.querySelector<HTMLButtonElement>('[aria-label="Expand hello"]')
+			?.click(),
+	);
+	const input =
+		dom.container.querySelector<HTMLTextAreaElement>("textarea") ??
+		dom.container.querySelector<HTMLInputElement>(
+			'[data-slot="input-group-control"]',
+		);
+	if (!input) throw new Error("Missing Locale value editor");
+	return input;
+}
+async function hideEditedValue() {
+	const search = dom.container.querySelector<HTMLInputElement>(
+		'[aria-label="Search review values"]',
+	);
+	if (!search) throw new Error("Missing review search");
+	await type(search, "another message");
+	expect(dom.container.querySelector('[aria-label="Expand hello"]')).toBeNull();
 }
 describe("Locale selected-source workbench", () => {
 	test("enables eligible selected-source finalization while ordinary stale work stays blocked", async () => {
@@ -258,5 +309,78 @@ describe("Locale selected-source workbench", () => {
 		expect(dom.container.querySelector('[role="combobox"]')).not.toBeNull();
 		expect(button("Continue on current source").disabled).toBe(false);
 		expect(action).not.toHaveBeenCalled();
+	});
+
+	test("keeps hidden value edits guarded after search and another Source disclosure", async () => {
+		detail = { ...fixture("draft", true, true), isCurrentBaseline: true };
+		hiddenDetail = { ...fixture(), isCurrentBaseline: true };
+		await render();
+		await type(await expandValue(), "Olá mundo");
+		await hideEditedValue();
+		await act(async () => button("Choose another source").click());
+		expect(button("Resolve unsaved edits").disabled).toBe(true);
+		expect(button("Save edits first").disabled).toBe(true);
+		expect(action).not.toHaveBeenCalled();
+		await act(async () => button("Discard unsaved edits").click());
+		expect(button("Continue on current source").disabled).toBe(false);
+		expect(button("Finalize catalog").disabled).toBe(false);
+	});
+
+	test("keeps a hidden Intentional Blank reason guarded without a value edit", async () => {
+		detail = fixture("draft", true, true);
+		detail.messages[0].value.value = "";
+		await render();
+		await expandValue();
+		const reason = dom.container.querySelector<HTMLInputElement>(
+			'[aria-label="Reason for intentionally blank hello"]',
+		);
+		if (!reason) throw new Error("Missing Intentional Blank reason");
+		await type(reason, "The label intentionally renders nothing");
+		await hideEditedValue();
+		expect(button("Resolve unsaved edits").disabled).toBe(true);
+		expect(button("Save edits first").disabled).toBe(true);
+		expect(action).not.toHaveBeenCalled();
+	});
+
+	test("keeps edits from an earlier page guarded until they are reverted", async () => {
+		detail = { ...fixture("draft", true, true), continueCursor: 1 };
+		await render();
+		await type(await expandValue(), "Olá mundo");
+		await act(async () => button("Next").click());
+		expect(
+			dom.container.querySelector('[aria-label="Expand hello"]'),
+		).toBeNull();
+		expect(button("Resolve unsaved edits").disabled).toBe(true);
+		expect(button("Save edits first").disabled).toBe(true);
+		await act(async () => button("Previous").click());
+		expect((await expandValue()).value).toBe("Olá mundo");
+		await act(async () => button("Revert changes").click());
+		expect(button("Continue on current source").disabled).toBe(false);
+		expect(button("Finalize catalog").disabled).toBe(false);
+	});
+
+	test("clears a successful save before its row leaves the query", async () => {
+		detail = fixture("draft", true, true);
+		await render();
+		await type(await expandValue(), "Olá mundo");
+		await act(async () => button("Save review").click());
+		expect(mutation).toHaveBeenCalledTimes(1);
+		await hideEditedValue();
+		expect(button("Continue on current source").disabled).toBe(false);
+		expect(button("Finalize catalog").disabled).toBe(false);
+	});
+
+	test("keeps query-acknowledged values saved after hiding them", async () => {
+		detail = fixture("draft", true, true);
+		await render();
+		await type(await expandValue(), "Olá mundo");
+		await act(async () => {
+			detail = fixture("draft", true, true);
+			detail.messages[0].value.value = "Olá mundo";
+			for (const listener of listeners) listener();
+		});
+		await hideEditedValue();
+		expect(button("Continue on current source").disabled).toBe(false);
+		expect(button("Finalize catalog").disabled).toBe(false);
 	});
 });
