@@ -192,8 +192,15 @@ receipts and review handoffs instead of writing a bulk posting script.
 
 ### New-Locale Translation Task
 
-Use [Translation Tasks](#post-translation-tasks) for agent work. A changed
-Baseline makes staging/finalization fail with `STALE_SOURCE`. An editor can
-continue against current Source, carrying forward still-compatible reviewed
-values and exposing the residue. For configuration, continuation, delivery, and
-binding, follow [Adding languages](https://github.com/serge-the-hedge/flutte/blob/main/docs/adding-languages.md).
+Use [Translation Tasks](#post-translation-tasks) for agent work. Ordinary creation
+pins the accepted Baseline; a later Baseline advance makes staging/finalization
+fail with `STALE_SOURCE`. An editor can continue against current Source, carrying
+still-compatible reviewed values and exposing the residue.
+
+An editor can also prepare or continue a task on an explicitly selected captured
+Source Snapshot. Use the returned task ID and its exact task Source, including
+metadata, through the same candidate/review endpoints. That selected pin remains
+reviewable across Baseline changes; it does not publish the snapshot or make its
+artifact deliverable outside the accepted Baseline. API task creation still
+defaults to accepted Source and does not choose a branch. For snapshot selection,
+continuation and later delivery, follow [Adding languages](https://github.com/serge-the-hedge/flutte/blob/main/docs/adding-languages.md).

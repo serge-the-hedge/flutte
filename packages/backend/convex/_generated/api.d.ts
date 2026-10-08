@@ -1,3 +1,5 @@
+import type * as localeSourceFactModel from "../localeSourceFactModel.js";
+import type * as localeSourceFacts from "../localeSourceFacts.js";
 /* eslint-disable */
 /**
  * Generated `api` utility.
@@ -88,6 +90,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  localeSourceFactModel: typeof localeSourceFactModel;
+  localeSourceFacts: typeof localeSourceFacts;
   messageTags: typeof messageTags;
   messageConstraints: typeof messageConstraints;
   contentModel: typeof contentModel;

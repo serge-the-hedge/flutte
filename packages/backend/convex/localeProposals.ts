@@ -36,6 +36,14 @@ import {
 	assertIntroductionCatalogPath,
 	introductionTargetFor,
 } from "./localeIntroductionTargets";
+import {
+	prepareSourceFacts,
+	readySourceFacts,
+	selectedSourceEvidence,
+	sourceFactFor,
+	sourceFactPage,
+	sourceFactsEligible,
+} from "./localeSourceFacts";
 import { assertMessageCharacterLimit } from "./messageConstraints";
 import { declaredPlaceholderNames, messageFacts } from "./messageFacts";
 import { requireEditor, requireViewer } from "./permissions";
@@ -105,6 +113,7 @@ type SourceEvidence = {
 	sourceCatalogPath: string;
 	sourceStorageId: Id<"_storage">;
 	isCurrentBaseline: boolean;
+	sourceIsEligible: boolean;
 };
 
 type ProposalValueInput = {
@@ -174,6 +183,8 @@ type LocaleProposalSummary = {
 	};
 	status: "draft" | "ready";
 	deliveryStatus: "draft" | "ready" | "stale";
+	sourceSelection: "baseline" | "selectedSnapshot";
+	sourceIsEligible: boolean;
 	progress: { total: number; staged: number; remaining: number };
 	diagnostics: { count: number; messages: string[] };
 	artifact?: { hash: string; byteLength?: number };
@@ -392,6 +403,7 @@ async function currentSourceEvidenceForSnapshot(
 		sourceCatalogPath: source.catalogPath,
 		sourceStorageId: source.storageId,
 		isCurrentBaseline: project.baselineSnapshotId === snapshotId,
+		sourceIsEligible: project.baselineSnapshotId === snapshotId,
 	};
 }
 
@@ -420,6 +432,8 @@ async function pinnedSourceEvidenceForProposal(
 			"Locale Proposal references altered source Catalog Document evidence.",
 		);
 	}
+	if (proposal.sourceSelection === "selectedSnapshot")
+		await readySourceFacts(ctx, proposal.sourceSnapshotFileId);
 	return {
 		projectId: project._id,
 		snapshotId: snapshot._id,
@@ -431,6 +445,7 @@ async function pinnedSourceEvidenceForProposal(
 		sourceCatalogPath: source.catalogPath,
 		sourceStorageId: source.storageId,
 		isCurrentBaseline: project.baselineSnapshotId === snapshot._id,
+		sourceIsEligible: sourceFactsEligible(project, proposal),
 	};
 }
 
@@ -530,34 +545,46 @@ type ProjectionSourceRow = {
 	declaredPlaceholderNamesComplete?: boolean;
 };
 
-async function currentSourceRowForProposal(
+export async function currentSourceRowForProposal(
 	ctx: QueryCtx | MutationCtx,
 	projectId: Id<"projects">,
 	proposal: Doc<"localeProposals">,
 	messageId: string,
-): Promise<ProjectionSourceRow> {
+): Promise<ProjectionSourceRow & { icuType: "plain" | "icu" }> {
+	const project = await projectFor(ctx, projectId);
+	if (!sourceFactsEligible(project, proposal)) sourceStaleError();
+	await pinnedSourceEvidenceForProposal(ctx, project, proposal);
+	if (proposal.sourceSelection === "selectedSnapshot") {
+		const row = await sourceFactFor(
+			ctx,
+			proposal.sourceSnapshotFileId,
+			messageId,
+		);
+		if (!row)
+			throw new ConvexError({
+				code: "NOT_FOUND",
+				message: "Locale Proposal message not found.",
+			});
+		return row;
+	}
 	const projection = await activeProjectionFor(ctx, projectId);
-	const row = projection
-		? await ctx.db
-				.query("catalogProjectionMessages")
-				.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-					q
-						.eq("projectionId", projection._id)
-						.eq("messageId", messageId)
-						.eq("isSource", true),
-				)
-				.unique()
-		: null;
-	if (
-		!projection ||
-		projection.snapshotId !== proposal.sourceSnapshotId ||
-		!row?.isSource
-	) {
+	const row =
+		projection?.snapshotId === proposal.sourceSnapshotId
+			? await ctx.db
+					.query("catalogProjectionMessages")
+					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
+						q
+							.eq("projectionId", projection._id)
+							.eq("messageId", messageId)
+							.eq("isSource", true),
+					)
+					.unique()
+			: null;
+	if (!row)
 		throw new ConvexError({
 			code: "STALE_BASIS",
 			message: "The Locale Proposal source basis is no longer current.",
 		});
-	}
 	return row;
 }
 
@@ -769,6 +796,9 @@ function proposalSummary(
 			runtimeLocale: proposal.runtimeLocale,
 		},
 		status: proposal.status,
+		sourceSelection: proposal.sourceSelection ?? ("baseline" as const),
+		sourceIsEligible:
+			isCurrentBaseline || proposal.sourceSelection === "selectedSnapshot",
 		deliveryStatus:
 			proposal.status === "ready"
 				? isCurrentBaseline
@@ -875,28 +905,12 @@ export const sourceMessageForProposal = internalQuery({
 			});
 		}
 		const project = await projectFor(ctx, args.projectId);
-		const projection = await activeProjectionFor(ctx, args.projectId);
-		const source = projection
-			? await ctx.db
-					.query("catalogProjectionMessages")
-					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-						q
-							.eq("projectionId", projection._id)
-							.eq("messageId", args.messageId)
-							.eq("isSource", true),
-					)
-					.unique()
-			: null;
-		if (
-			!source?.isSource ||
-			!projection ||
-			projection.snapshotId !== proposal.sourceSnapshotId
-		) {
-			throw new ConvexError({
-				code: "NOT_FOUND",
-				message: "Locale Proposal message not found.",
-			});
-		}
+		const source = await currentSourceRowForProposal(
+			ctx,
+			args.projectId,
+			proposal,
+			args.messageId,
+		);
 		return {
 			proposalId: proposal._id,
 			sourceSnapshotId: proposal.sourceSnapshotId,
@@ -947,6 +961,7 @@ export const begin = internalMutation({
 		projectId: v.id("projects"),
 		localeCode: v.string(),
 		fromProposalId: v.optional(v.id("localeProposals")),
+		sourceSelection: v.optional(v.literal("selectedSnapshot")),
 		sourceSnapshotId: v.id("sourceSnapshots"),
 		sourceSnapshotFileId: v.id("sourceSnapshotFiles"),
 		sourceCatalogPath: v.string(),
@@ -956,8 +971,24 @@ export const begin = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const project = await projectFor(ctx, args.projectId);
-		if (project.baselineSnapshotId !== args.sourceSnapshotId)
+		if (
+			args.sourceSelection !== "selectedSnapshot" &&
+			project.baselineSnapshotId !== args.sourceSnapshotId
+		)
 			sourceStaleError();
+		if (args.sourceSelection === "selectedSnapshot") {
+			const { file } = await selectedSourceEvidence(
+				ctx,
+				args.projectId,
+				args.sourceSnapshotId,
+			);
+			const index = await readySourceFacts(ctx, file._id);
+			if (
+				file._id !== args.sourceSnapshotFileId ||
+				index.messageCount !== args.sourceMessageCount
+			)
+				integrityError("Selected Source evidence is inconsistent.");
+		}
 		const localeCode = args.localeCode;
 		const configured = await introductionTargetFor(
 			ctx,
@@ -1044,6 +1075,8 @@ export const begin = internalMutation({
 		const timestamp = now();
 		return await ctx.db.insert("localeProposals", {
 			projectId: args.projectId,
+			sourceSelection: args.sourceSelection,
+			continuedFromProposalId: args.fromProposalId,
 			sourceSnapshotId: args.sourceSnapshotId,
 			sourceSnapshotFileId: args.sourceSnapshotFileId,
 			sourceCatalogPath: args.sourceCatalogPath,
@@ -1079,6 +1112,7 @@ export async function ensureLocaleProposalForReview(
 	userId: string,
 	localeCode: string,
 	fromProposalId?: Id<"localeProposals">,
+	sourceSnapshotId?: Id<"sourceSnapshots">,
 ): Promise<{ proposalId: Id<"localeProposals"> }> {
 	const project = await projectFor(ctx, projectId);
 	if (!project.baselineSnapshotId) {
@@ -1087,43 +1121,63 @@ export async function ensureLocaleProposalForReview(
 			message: "Accept a Baseline Snapshot before preparing a Locale Proposal.",
 		});
 	}
+	const snapshotId = sourceSnapshotId ?? project.baselineSnapshotId;
+	const selected = snapshotId !== project.baselineSnapshotId;
 	const existing = await ctx.db
 		.query("localeProposals")
 		.withIndex("by_project_and_sourceSnapshotId_and_localeCode", (q) =>
 			q
 				.eq("projectId", projectId)
-				.eq(
-					"sourceSnapshotId",
-					project.baselineSnapshotId as Id<"sourceSnapshots">,
-				)
+				.eq("sourceSnapshotId", snapshotId)
 				.eq("localeCode", localeCode),
 		)
 		.unique();
-	if (existing) return { proposalId: existing._id };
+	if (existing) {
+		if (selected && existing.sourceSelection !== "selectedSnapshot") {
+			throw new ConvexError({
+				code: "CONFLICT",
+				message:
+					"This historical proposal follows the accepted Baseline. Choose a different captured Snapshot or continue onto the current Baseline.",
+			});
+		}
+		return { proposalId: existing._id };
+	}
 	const source = await currentSourceEvidenceForSnapshot(
 		ctx,
 		project,
-		project.baselineSnapshotId,
+		snapshotId,
 	);
 	const projection = await activeProjectionFor(ctx, projectId);
-	if (!projection || projection.snapshotId !== source.snapshotId) {
+	if (
+		!selected &&
+		(!projection || projection.snapshotId !== source.snapshotId)
+	) {
 		throw new ConvexError({
 			code: "INTEGRITY",
 			message:
 				"The active Catalog Workspace does not match the Baseline Snapshot.",
 		});
 	}
+	const index = selected
+		? await readySourceFacts(
+				ctx,
+				(await selectedSourceEvidence(ctx, projectId, snapshotId)).file._id,
+			)
+		: null;
 	const proposalId: Id<"localeProposals"> = await ctx.runMutation(
 		internal.localeProposals.begin,
 		{
 			projectId,
 			localeCode,
 			fromProposalId,
+			sourceSelection: selected ? "selectedSnapshot" : undefined,
 			sourceSnapshotId: source.snapshotId,
 			sourceSnapshotFileId: source.sourceSnapshotFileId,
 			sourceCatalogPath: source.sourceCatalogPath,
 			sourceStorageId: source.sourceStorageId,
-			sourceMessageCount: projection.expectedKeyCount,
+			sourceMessageCount: index
+				? index.messageCount
+				: (projection ?? missingProjection()).expectedKeyCount,
 			createdBy: { kind: "user", id: userId },
 		},
 	);
@@ -1148,11 +1202,54 @@ export const ensureForReview = mutation({
 	},
 });
 
+/** Explicit editor preparation captures review eligibility without publishing Source. */
+export const prepareForReview = action({
+	args: {
+		projectId: v.id("projects"),
+		localeCode: v.string(),
+		sourceSnapshotId: v.id("sourceSnapshots"),
+	},
+	returns: v.object({ proposalId: v.id("localeProposals") }),
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ proposalId: Id<"localeProposals"> }> => {
+		const { userId }: { userId: string } = await ctx.runQuery(
+			internal.localeProposals.assertEditor,
+			{ projectId: args.projectId },
+		);
+		await prepareSourceFacts(ctx, args.projectId, args.sourceSnapshotId);
+		return await ctx.runMutation(
+			internal.localeProposals.ensureSelectedForReview,
+			{ ...args, userId },
+		);
+	},
+});
+export const ensureSelectedForReview = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		localeCode: v.string(),
+		sourceSnapshotId: v.id("sourceSnapshots"),
+		userId: v.string(),
+	},
+	returns: v.object({ proposalId: v.id("localeProposals") }),
+	handler: async (ctx, args) =>
+		await ensureLocaleProposalForReview(
+			ctx,
+			args.projectId,
+			args.userId,
+			args.localeCode,
+			undefined,
+			args.sourceSnapshotId,
+		),
+});
+
 export const ensureForCarryForward = internalMutation({
 	args: {
 		projectId: v.id("projects"),
 		userId: v.string(),
 		fromProposalId: v.id("localeProposals"),
+		sourceSnapshotId: v.optional(v.id("sourceSnapshots")),
 	},
 	handler: async (ctx, args) => {
 		const from = await ctx.db.get(args.fromProposalId);
@@ -1167,6 +1264,7 @@ export const ensureForCarryForward = internalMutation({
 			args.userId,
 			from.localeCode,
 			from._id,
+			args.sourceSnapshotId,
 		);
 	},
 });
@@ -1299,7 +1397,7 @@ export const valuesForCarryForward = internalQuery({
 		}
 		if (
 			toProposal.status !== "draft" ||
-			project.baselineSnapshotId !== toProposal.sourceSnapshotId
+			!sourceFactsEligible(project, toProposal)
 		) {
 			sourceStaleError();
 		}
@@ -1395,8 +1493,9 @@ export const carryForwardBatch = internalMutation({
 		}
 		if (
 			toProposal.status !== "draft" ||
-			project.baselineSnapshotId !== toProposal.sourceSnapshotId ||
-			projection?.snapshotId !== toProposal.sourceSnapshotId
+			!sourceFactsEligible(project, toProposal) ||
+			(toProposal.sourceSelection !== "selectedSnapshot" &&
+				projection?.snapshotId !== toProposal.sourceSnapshotId)
 		) {
 			sourceStaleError();
 		}
@@ -1504,14 +1603,18 @@ export async function carryForwardLocaleProposal(
 		projectId: Id<"projects">;
 		fromProposalId: Id<"localeProposals">;
 		userId: string;
+		sourceSnapshotId?: Id<"sourceSnapshots">;
 	},
 ): Promise<LocaleProposalCarryForwardResult> {
+	if (args.sourceSnapshotId)
+		await prepareSourceFacts(ctx, args.projectId, args.sourceSnapshotId);
 	const ensured: { proposalId: Id<"localeProposals"> } = await ctx.runMutation(
 		internal.localeProposals.ensureForCarryForward,
 		{
 			projectId: args.projectId,
 			userId: args.userId,
 			fromProposalId: args.fromProposalId,
+			sourceSnapshotId: args.sourceSnapshotId,
 		},
 	);
 	const toProposalId = ensured.proposalId;
@@ -1593,6 +1696,7 @@ export const carryForwardForReview = action({
 	args: {
 		projectId: v.id("projects"),
 		proposalId: v.id("localeProposals"),
+		sourceSnapshotId: v.optional(v.id("sourceSnapshots")),
 	},
 	handler: async (ctx, args): Promise<LocaleProposalCarryForwardResult> => {
 		const editor: { userId: string } = await ctx.runQuery(
@@ -1605,6 +1709,7 @@ export const carryForwardForReview = action({
 			projectId: args.projectId,
 			fromProposalId: args.proposalId,
 			userId: editor.userId,
+			sourceSnapshotId: args.sourceSnapshotId,
 		});
 	},
 });
@@ -1733,7 +1838,7 @@ export const stageBatch = internalMutation({
 		}
 		if (
 			proposal.sourceSnapshotId !== args.sourceSnapshotId ||
-			project.baselineSnapshotId !== proposal.sourceSnapshotId
+			!sourceFactsEligible(project, proposal)
 		) {
 			sourceStaleError();
 		}
@@ -1890,8 +1995,7 @@ export const recordDiagnostics = internalMutation({
 		if (proposal.status !== "draft") {
 			validationError("A finalized Locale Proposal is immutable.");
 		}
-		if (project.baselineSnapshotId !== proposal.sourceSnapshotId)
-			sourceStaleError();
+		if (!sourceFactsEligible(project, proposal)) sourceStaleError();
 		if (proposal.revision !== args.expectedRevision) {
 			throw new ConvexError({
 				code: "CONFLICT",
@@ -1969,7 +2073,7 @@ export const finalize = internalMutation({
 		}
 		if (
 			proposal.sourceSnapshotId !== args.sourceSnapshotId ||
-			project.baselineSnapshotId !== proposal.sourceSnapshotId
+			!sourceFactsEligible(project, proposal)
 		) {
 			sourceStaleError();
 		}
@@ -2349,7 +2453,7 @@ export async function stageProposal(
 		actor,
 		args.proposalId,
 	);
-	if (!source.isCurrentBaseline) sourceStaleError();
+	if (!source.sourceIsEligible) sourceStaleError();
 	if (!actor.tokenId) {
 		throw new ConvexError({
 			code: "UNAUTHORIZED",
@@ -2403,7 +2507,7 @@ export const stageForReview = mutation({
 			project,
 			proposal,
 		);
-		if (!source.isCurrentBaseline) sourceStaleError();
+		if (!source.sourceIsEligible) sourceStaleError();
 		const items = await assertProposalItemsAgainstCurrentSource(
 			ctx,
 			args.projectId,
@@ -2450,7 +2554,7 @@ export async function applyTaskReviewedValue(
 	const project = await projectFor(ctx, input.projectId);
 	const source = await pinnedSourceEvidenceForProposal(ctx, project, proposal);
 	if (
-		!source.isCurrentBaseline ||
+		!source.sourceIsEligible ||
 		source.snapshotId !== input.sourceSnapshotId
 	) {
 		sourceStaleError();
@@ -2528,7 +2632,7 @@ export const applyReviewedValue = internalMutation({
 			proposal,
 		);
 		if (
-			!source.isCurrentBaseline ||
+			!source.sourceIsEligible ||
 			source.snapshotId !== args.sourceSnapshotId
 		) {
 			sourceStaleError();
@@ -2674,6 +2778,13 @@ export const reviewStagedValue = mutation({
 	},
 });
 
+function missingProjection(): never {
+	throw new ConvexError({
+		code: "INTEGRITY",
+		message: "The proposal has no matching Source projection.",
+	});
+}
+
 export const getForReview = query({
 	args: {
 		proposalId: v.id("localeProposals"),
@@ -2766,7 +2877,7 @@ export const getForReview = query({
 								.eq("status", "published"),
 						)
 						.unique();
-		if (!projection) {
+		if (!projection && proposal.sourceSelection !== "selectedSnapshot") {
 			return {
 				proposal: proposalSummary(
 					proposal,
@@ -2789,6 +2900,8 @@ export const getForReview = query({
 				pendingReview: { count: 0, hasMore: false },
 				diagnostics,
 				isCurrentBaseline: source.isCurrentBaseline,
+				sourceIsEligible: source.sourceIsEligible,
+				sourceSelection: proposal.sourceSelection ?? ("baseline" as const),
 			};
 		}
 		const pendingAgentValueSummaryWindow =
@@ -2860,15 +2973,27 @@ export const getForReview = query({
 		const queuedSourceMessages = usePendingReviewQueue
 			? await Promise.all(
 					pendingAgentValues.map(async (value) => {
-						const message = await ctx.db
-							.query("catalogProjectionMessages")
-							.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-								q
-									.eq("projectionId", projection._id)
-									.eq("messageId", value.messageId)
-									.eq("isSource", true),
-							)
-							.unique();
+						const message =
+							proposal.sourceSelection === "selectedSnapshot"
+								? await sourceFactFor(
+										ctx,
+										proposal.sourceSnapshotFileId,
+										value.messageId,
+									)
+								: await ctx.db
+										.query("catalogProjectionMessages")
+										.withIndex(
+											"by_projection_and_messageId_and_isSource",
+											(q) =>
+												q
+													.eq(
+														"projectionId",
+														(projection ?? missingProjection())._id,
+													)
+													.eq("messageId", value.messageId)
+													.eq("isSource", true),
+										)
+										.unique();
 						if (!message) {
 							integrityError(
 								`Locale Proposal value "${value.messageId}" has no pinned Source.`,
@@ -2883,18 +3008,31 @@ export const getForReview = query({
 				? left.messageId.localeCompare(right.messageId)
 				: left.catalogIndex - right.catalogIndex,
 		);
+		const selectedWindow =
+			proposal.sourceSelection === "selectedSnapshot" &&
+			!usePendingReviewQueue &&
+			!completedReviewQueue
+				? await sourceFactPage(
+						ctx,
+						proposal.sourceSnapshotFileId,
+						cursor,
+						scanLimit + 1,
+					)
+				: null;
 		const sourceWindow =
 			usePendingReviewQueue || completedReviewQueue
 				? queuedSourceMessages
-				: await ctx.db
-						.query("catalogProjectionMessages")
-						.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
-							q
-								.eq("projectionId", projection._id)
-								.eq("isSource", true)
-								.gte("catalogIndex", cursor),
-						)
-						.take(scanLimit + 1);
+				: selectedWindow
+					? selectedWindow.rows
+					: await ctx.db
+							.query("catalogProjectionMessages")
+							.withIndex("by_projection_and_isSource_and_catalogIndex", (q) =>
+								q
+									.eq("projectionId", (projection ?? missingProjection())._id)
+									.eq("isSource", true)
+									.gte("catalogIndex", cursor),
+							)
+							.take(scanLimit + 1);
 		const sourcePage = usePendingReviewQueue
 			? sourceWindow
 			: sourceWindow.slice(0, scanLimit);
@@ -3108,7 +3246,9 @@ export const getForReview = query({
 			? pendingQueueContinueCursor !== null
 			: !completedReviewQueue &&
 				lastScanned !== undefined &&
-				(scannedCount < sourcePage.length || sourceWindow.length > scanLimit);
+				(scannedCount < sourcePage.length ||
+					sourceWindow.length > scanLimit ||
+					selectedWindow?.hasMore === true);
 		return {
 			proposal: proposalSummary(
 				proposal,
@@ -3132,6 +3272,8 @@ export const getForReview = query({
 			pendingReview,
 			diagnostics,
 			isCurrentBaseline: source.isCurrentBaseline,
+			sourceIsEligible: source.sourceIsEligible,
+			sourceSelection: proposal.sourceSelection ?? ("baseline" as const),
 		};
 	},
 });
@@ -3263,7 +3405,7 @@ export async function finalizeProposal(
 		actor,
 		proposalId,
 	);
-	if (!source.isCurrentBaseline) sourceStaleError();
+	if (!source.sourceIsEligible) sourceStaleError();
 	if (document.messages.length !== staged.proposal.sourceMessageCount) {
 		integrityError(
 			"Locale Proposal does not match its source message envelope.",

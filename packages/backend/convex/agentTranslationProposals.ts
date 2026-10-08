@@ -24,10 +24,7 @@ import {
 	readCandidateAuthorization,
 	revokeCandidateReviewGrant as revokeReview,
 } from "./agentReviews";
-import {
-	activeProjectionFor,
-	MAX_WORKING_CATALOG_KEYS,
-} from "./catalogProjection";
+import { MAX_WORKING_CATALOG_KEYS } from "./catalogProjection";
 import { applyAgentTargetValue } from "./catalogWorkspace";
 import { decisionForIdentity } from "./catalogWorkspaceDecisionQueries";
 import { readWorkspaceTarget as currentWorkspaceTarget } from "./catalogWorkspaceRead";
@@ -38,11 +35,13 @@ import { now, sha256Hex } from "./lib";
 import {
 	applyTaskReviewedValue,
 	carryForwardLocaleProposal,
+	currentSourceRowForProposal,
 	ensureLocaleProposalForReview,
 	finalizeProposal,
 	type LocaleProposalCarryForwardResult,
 	proposalDeliveryIdentity,
 } from "./localeProposals";
+import { prepareSourceFacts, sourceFactsEligible } from "./localeSourceFacts";
 import {
 	commitManagedTarget,
 	managedMessageName,
@@ -445,33 +444,23 @@ export async function currentLocaleProposalTarget(
 		});
 	}
 	const project = await ctx.db.get(proposal.projectId);
-	const projection = project
-		? await activeProjectionFor(ctx, proposal.projectId)
-		: null;
-	const sourceRow =
-		project && projection
-			? await ctx.db
-					.query("catalogProjectionMessages")
-					.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-						q
-							.eq("projectionId", projection._id)
-							.eq("messageId", messageId)
-							.eq("isSource", true),
-					)
-					.unique()
-			: null;
 	if (
 		!project ||
-		!projection ||
-		projection.snapshotId !== localeProposal.sourceSnapshotId ||
-		!sourceRow?.isSource ||
+		!sourceFactsEligible(project, localeProposal) ||
 		localeProposal.status !== "draft"
 	) {
 		throw new ConvexError({
 			code: "STALE_BASIS",
-			message: "The Locale Proposal is no longer an editable current draft.",
+			message:
+				"The Locale Proposal is no longer an editable draft on its Source pin.",
 		});
 	}
+	const sourceRow = await currentSourceRowForProposal(
+		ctx,
+		proposal.projectId,
+		localeProposal,
+		messageId,
+	);
 	return {
 		localeProposal,
 		source: {
@@ -717,17 +706,27 @@ async function createNewLocaleTaskForHuman(
 		title: string;
 		userId: string;
 		localeCode: string;
+		sourceSnapshotId?: Id<"sourceSnapshots">;
+		localeProposalId?: Id<"localeProposals">;
 	},
 ) {
 	assertBoundedString(input.title, "title", MAX_TASK_TITLE_BYTES);
-	const ensured = await ensureLocaleProposalForReview(
-		ctx,
-		input.projectId,
-		input.userId,
-		input.localeCode,
-	);
+	const ensured = input.localeProposalId
+		? { proposalId: input.localeProposalId }
+		: await ensureLocaleProposalForReview(
+				ctx,
+				input.projectId,
+				input.userId,
+				input.localeCode,
+				undefined,
+				input.sourceSnapshotId,
+			);
 	const localeProposal = await ctx.db.get(ensured.proposalId);
-	if (!localeProposal || localeProposal.projectId !== input.projectId) {
+	if (
+		!localeProposal ||
+		localeProposal.projectId !== input.projectId ||
+		localeProposal.localeCode !== input.localeCode
+	) {
 		throw new ConvexError({
 			code: "INTEGRITY",
 			message: "The new-Locale proposal was not created.",
@@ -758,35 +757,8 @@ async function createNewLocaleTaskForHuman(
 			targetCount: localeProposal.sourceMessageCount,
 		};
 	}
-	const existing = await ctx.db
-		.query("agentTranslationProposals")
-		.withIndex("by_project_and_token_and_clientProposalKey", (q) =>
-			q
-				.eq("projectId", input.projectId)
-				.eq("createdByTokenId", undefined)
-				.eq("clientProposalKey", title),
-		)
-		.unique();
-	if (existing) {
-		if (
-			existing.target.kind !== "localeProposal" ||
-			existing.target.localeProposalId !== localeProposal._id ||
-			existing.localeProposalTaskScope?.targetCount !==
-				localeProposal.sourceMessageCount
-		) {
-			throw new ConvexError({
-				code: "BAD_STATE",
-				message:
-					"The existing new-Locale task belongs to an older Baseline Snapshot.",
-			});
-		}
-		return {
-			taskId: existing._id,
-			title: existing.clientProposalKey,
-			localeCode: localeProposal.localeCode,
-			targetCount: localeProposal.sourceMessageCount,
-		};
-	}
+	// Human titles are display labels. The owner/proposal lookup above owns
+	// retries, so the same label can name work on another immutable Source pin.
 	if (localeProposal.status !== "draft") {
 		throw new ConvexError({
 			code: "BAD_STATE",
@@ -894,6 +866,57 @@ export const createTask = mutation({
 	},
 });
 
+/** Editors may deliberately prepare agent work against a captured Source pin. */
+export const createNewLocaleTaskOnSnapshot = action({
+	args: {
+		projectId: v.id("projects"),
+		title: v.string(),
+		localeCode: v.string(),
+		sourceSnapshotId: v.id("sourceSnapshots"),
+	},
+	returns: v.object({
+		taskId: v.id("agentTranslationProposals"),
+		title: v.string(),
+		localeCode: v.string(),
+		targetCount: v.number(),
+	}),
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		taskId: Id<"agentTranslationProposals">;
+		title: string;
+		localeCode: string;
+		targetCount: number;
+	}> => {
+		const { userId }: { userId: string } = await ctx.runQuery(
+			internal.localeProposals.assertEditor,
+			{ projectId: args.projectId },
+		);
+		await prepareSourceFacts(ctx, args.projectId, args.sourceSnapshotId);
+		return await ctx.runMutation(
+			internal.agentTranslationProposals.createSelectedNewLocaleTask,
+			{ ...args, userId },
+		);
+	},
+});
+export const createSelectedNewLocaleTask = internalMutation({
+	args: {
+		projectId: v.id("projects"),
+		title: v.string(),
+		localeCode: v.string(),
+		sourceSnapshotId: v.id("sourceSnapshots"),
+		userId: v.string(),
+	},
+	returns: v.object({
+		taskId: v.id("agentTranslationProposals"),
+		title: v.string(),
+		localeCode: v.string(),
+		targetCount: v.number(),
+	}),
+	handler: async (ctx, args) => await createNewLocaleTaskForHuman(ctx, args),
+});
+
 export const newLocaleContinuationBasis = internalQuery({
 	args: { taskId: v.id("agentTranslationProposals") },
 	handler: async (ctx, args) => {
@@ -951,6 +974,7 @@ export const createContinuedNewLocaleTask = internalMutation({
 			projectId: fromTask.projectId,
 			title: `${localeProposal.localeCode} · complete catalog · ${snapshot.commit.slice(0, 12)}`,
 			localeCode: localeProposal.localeCode,
+			localeProposalId: localeProposal._id,
 			userId: args.userId,
 		});
 		const created = await ctx.db.get(task.taskId);
@@ -971,7 +995,10 @@ export const createContinuedNewLocaleTask = internalMutation({
 /** Move a new-Locale task onto the current Source without discarding work
  * whose per-value Source fingerprint still matches. */
 export const continueNewLocaleTask = action({
-	args: { taskId: v.id("agentTranslationProposals") },
+	args: {
+		taskId: v.id("agentTranslationProposals"),
+		sourceSnapshotId: v.optional(v.id("sourceSnapshots")),
+	},
 	handler: async (
 		ctx,
 		args,
@@ -991,7 +1018,10 @@ export const continueNewLocaleTask = action({
 			internal.agentTranslationProposals.newLocaleContinuationBasis,
 			{ taskId: args.taskId },
 		);
-		const carried = await carryForwardLocaleProposal(ctx, basis);
+		const carried = await carryForwardLocaleProposal(ctx, {
+			...basis,
+			sourceSnapshotId: args.sourceSnapshotId,
+		});
 		const task: {
 			taskId: Id<"agentTranslationProposals">;
 			title: string;
@@ -3874,7 +3904,7 @@ type TaskFinalizationResult =
 			kind: "newLocale";
 			taskId: Id<"agentTranslationProposals">;
 			localeProposalId: Id<"localeProposals">;
-			deliveryStatus: "ready";
+			deliveryStatus: "ready" | "stale";
 	  };
 
 export const taskFinalizationContext = internalQuery({
@@ -3980,7 +4010,7 @@ export const finalizeTask = action({
 			kind: v.literal("newLocale"),
 			taskId: v.id("agentTranslationProposals"),
 			localeProposalId: v.id("localeProposals"),
-			deliveryStatus: v.literal("ready"),
+			deliveryStatus: v.union(v.literal("ready"), v.literal("stale")),
 		}),
 	),
 	handler: async (ctx, args): Promise<TaskFinalizationResult> => {
@@ -4007,7 +4037,7 @@ export const finalizeTask = action({
 			{ projectId: context.projectId },
 			context.localeProposalId,
 		);
-		if (proposal.deliveryStatus !== "ready") {
+		if (proposal.status !== "ready" || proposal.deliveryStatus === "draft") {
 			throw new ConvexError({
 				code: "INTEGRITY",
 				message: "The finalized new-Locale task has no ready artifact.",

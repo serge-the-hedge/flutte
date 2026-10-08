@@ -16,6 +16,8 @@ import {
 import { encodedSize } from "./catalogWorkspaceView";
 import { assertTargetValueContract } from "./contractTransforms";
 import { sha256Hex } from "./lib";
+import { currentSourceRowForProposal } from "./localeProposals";
+import { readySourceFacts, sourceFactsEligible } from "./localeSourceFacts";
 
 export const proposalSearchScope = v.union(
 	v.object({
@@ -66,7 +68,14 @@ function decodeCursor(raw: string | undefined, basis: string): string | null {
 
 function validExample(
 	value: Doc<"localeProposalValues">,
-	source: Doc<"catalogProjectionMessages">,
+	source: Pick<
+		Doc<"catalogProjectionMessages">,
+		| "sourceFingerprint"
+		| "argumentNames"
+		| "argumentNamesComplete"
+		| "declaredPlaceholderNames"
+		| "declaredPlaceholderNamesComplete"
+	>,
 	localeCode: string,
 ) {
 	if (
@@ -145,8 +154,17 @@ export const search = internalQuery({
 				message: "Locale Proposal not found.",
 			});
 		}
+		const project = await ctx.db.get(token.projectId);
+		const sourceLocale = project?.sourceLocaleId
+			? await ctx.db.get(project.sourceLocaleId)
+			: null;
 		const projection = await activeProjectionFor(ctx, token.projectId);
-		if (!projection || projection.snapshotId !== proposal.sourceSnapshotId) {
+		if (
+			!project ||
+			!sourceFactsEligible(project, proposal) ||
+			(proposal.sourceSelection !== "selectedSnapshot" &&
+				(!projection || projection.snapshotId !== proposal.sourceSnapshotId))
+		) {
 			throw new ConvexError({
 				code: "STALE_BASIS",
 				message:
@@ -161,7 +179,10 @@ export const search = internalQuery({
 				proposalId: proposal._id,
 				revision: proposal.revision,
 				snapshotId: proposal.sourceSnapshotId,
-				projectionId: projection._id,
+				projectionId:
+					proposal.sourceSelection === "selectedSnapshot"
+						? (await readySourceFacts(ctx, proposal.sourceSnapshotFileId))._id
+						: projection?._id,
 				options,
 			}),
 		);
@@ -203,15 +224,15 @@ export const search = internalQuery({
 		let hasMore = false;
 		for await (const value of rows) {
 			if (!value.messageId.startsWith(options.keyPrefix)) break;
-			const source = await ctx.db
-				.query("catalogProjectionMessages")
-				.withIndex("by_projection_and_messageId_and_isSource", (q) =>
-					q
-						.eq("projectionId", projection._id)
-						.eq("messageId", value.messageId)
-						.eq("isSource", true),
-				)
-				.unique();
+			const source = {
+				...(await currentSourceRowForProposal(
+					ctx,
+					token.projectId,
+					proposal,
+					value.messageId,
+				)),
+				localeCode: sourceLocale?.code ?? "en",
+			};
 			scanned += 1;
 			readBytes += encodedSize(value) + encodedSize(source);
 			const fields =

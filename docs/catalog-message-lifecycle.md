@@ -92,6 +92,12 @@ advance the Baseline, or establish delivery truth.
 `blabla sync --preview` explicitly captures a committed local branch under this
 rule, even when its commit descends from the Baseline. The operation remains
 preview-only through retries; a separate ordinary sync owns later publication.
+An editor may explicitly prepare or continue a new-Locale task on a captured
+Source Snapshot. That immutable selection permits authoring, independent review
+and finalization against its stored Source; it is separate from Baseline
+currency. Compatible reviewed carry retains its original authorization and blank
+reasons. A selected-source artifact remains ineligible for delivery until it is
+pinned to the accepted Baseline. See [Adding a language](adding-languages.md#translate-approved-copy-before-its-branch-merges).
 
 ## Human and agent decisions
 

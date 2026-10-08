@@ -65,6 +65,30 @@ advances before delivery, use **Continue on current source** and finalize again.
 This also applies when Source text is unchanged: compatible reviewed values
 carry forward, and changed or added source values remain review work.
 
+### Translate approved copy before its branch merges
+
+Capture the committed branch containing the approved English with
+`blabla sync --preview`. In the task, choose that captured Source Snapshot by
+commit when preparing or continuing the language. The task then reads, authors,
+reviews and finalizes against that exact Source, even while the accepted Baseline
+advances independently. Selecting a snapshot does not merge the branch, publish
+the snapshot, or include pending Source edits from Strings.
+Choosing the current accepted snapshot keeps the ordinary Baseline workflow.
+An existing proposal's original selection policy is retained; selecting its
+historical snapshot cannot turn a stale Baseline proposal into a new pinned draft.
+
+Continuation keeps compatible human-authored and independently reviewed values,
+including their review provenance and Intentional Blank reasons. Changed or new
+Source values remain translation work. Pending agent candidates are not carried,
+and existing destination values are preserved.
+
+A catalog finalized against a selected snapshot is complete for that Source;
+it is not yet eligible for repository delivery while that snapshot is outside
+the accepted Baseline. After the developer merges the approved copy, run ordinary
+`blabla sync`, continue on current Source, and finalize the resulting proposal.
+Unchanged reviewed pairs carry forward without another review. The existing
+delivery command and its Source checks then apply.
+
 ## Deliver and bind
 
 The finalized task shows the command to run in the application checkout:

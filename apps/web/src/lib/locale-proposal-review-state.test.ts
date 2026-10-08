@@ -105,3 +105,68 @@ describe("localeProposalReviewState", () => {
 		});
 	});
 });
+
+describe("selected Source Snapshot review", () => {
+	test("allows an eligible selected source draft to finish independently of the Baseline", () => {
+		expect(
+			localeProposalReviewState({
+				status: "draft",
+				isCurrentBaseline: false,
+				sourceSelection: "selectedSnapshot",
+				sourceIsEligible: true,
+				remaining: 0,
+				pendingReview: { count: 0, hasMore: false },
+			}),
+		).toMatchObject({ phase: "readyToFinalize", canFinalize: true });
+		expect(
+			localeProposalReviewState({
+				status: "draft",
+				isCurrentBaseline: false,
+				sourceSelection: "selectedSnapshot",
+				sourceIsEligible: true,
+				remaining: 0,
+				pendingReview: { count: 1, hasMore: false },
+			}),
+		).toMatchObject({ phase: "reviewing", canFinalize: false });
+	});
+
+	test("describes selected-source completion as review evidence instead of delivery readiness", () => {
+		const state = localeProposalReviewState({
+			status: "ready",
+			isCurrentBaseline: false,
+			sourceSelection: "selectedSnapshot",
+			sourceIsEligible: true,
+			remaining: 0,
+			pendingReview: { count: 0, hasMore: false },
+		});
+		expect(state).toMatchObject({
+			phase: "selectedSourceFinalized",
+			badgeLabel: "Reviewed for selected source",
+			canFinalize: false,
+		});
+		expect(state.emptyDescription).toContain("after the developer merges");
+	});
+
+	test("keeps ineligible selected drafts stale and recognizes their later accepted Baseline", () => {
+		const input = {
+			status: "draft" as const,
+			isCurrentBaseline: false,
+			sourceSelection: "selectedSnapshot" as const,
+			sourceIsEligible: false,
+			remaining: 0,
+			pendingReview: { count: 0, hasMore: false },
+		};
+		expect(localeProposalReviewState(input)).toMatchObject({
+			phase: "stale",
+			canFinalize: false,
+		});
+		expect(
+			localeProposalReviewState({
+				...input,
+				status: "ready",
+				isCurrentBaseline: true,
+				sourceIsEligible: true,
+			}),
+		).toMatchObject({ phase: "finalized" });
+	});
+});

@@ -16,11 +16,17 @@ import {
 	useNavigate,
 	useParams,
 } from "@tanstack/react-router";
-import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import {
+	useAction,
+	useMutation,
+	usePaginatedQuery,
+	useQuery,
+} from "convex/react";
 import { ArrowRight, Bot, KeyRound, Languages, PenLine } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { LocaleSelector } from "@/components/localization/locale-selector";
+import { LocaleSourceSelector } from "@/components/localization/locale-source-selector";
 import {
 	PageHeader,
 	ProjectShell,
@@ -36,6 +42,9 @@ function ProposalsIndexRoute() {
 	const convexProjectId = convexId<"projects">(projectId);
 	const project = useQuery(api.projects.get, { projectId: convexProjectId });
 	const createTask = useMutation(api.agentTranslationProposals.createTask);
+	const createTaskOnSnapshot = useAction(
+		api.agentTranslationProposals.createNewLocaleTaskOnSnapshot,
+	);
 	const navigate = useNavigate();
 	const [isStartingLocale, setIsStartingLocale] = useState(false);
 	const targets = useQuery(api.localeIntroductionTargets.list, {
@@ -43,6 +52,7 @@ function ProposalsIndexRoute() {
 	});
 	const locales = useQuery(api.locales.list, { projectId: convexProjectId });
 	const [localeCode, setLocaleCode] = useState<string | null>(null);
+	const [sourceSnapshotId, setSourceSnapshotId] = useState<string | null>(null);
 	const [filterCode, setFilterCode] = useState<string | null>(null);
 	const page = usePaginatedQuery(
 		api.agentTranslationProposals.listForReview,
@@ -74,12 +84,19 @@ function ProposalsIndexRoute() {
 		if (isStartingLocale || !localeCode) return;
 		setIsStartingLocale(true);
 		try {
-			const task = await createTask({
-				projectId: convexProjectId,
-				title: `${localeCode} · complete catalog`,
-				target: { kind: "newLocale", localeCode },
-				scope: { kind: "completeCatalog" },
-			});
+			const task = sourceSnapshotId
+				? await createTaskOnSnapshot({
+						projectId: convexProjectId,
+						title: `Translate ${localeCode}`,
+						localeCode,
+						sourceSnapshotId: convexId<"sourceSnapshots">(sourceSnapshotId),
+					})
+				: await createTask({
+						projectId: convexProjectId,
+						title: `${localeCode} · complete catalog`,
+						target: { kind: "newLocale", localeCode },
+						scope: { kind: "completeCatalog" },
+					});
 			await navigate({
 				to: "/projects/$projectId/proposals/$proposalId",
 				params: { projectId, proposalId: task.taskId },
@@ -172,6 +189,16 @@ function ProposalsIndexRoute() {
 							Ask an agent <ArrowRight data-icon="inline-end" />
 						</Button>
 					</div>
+					{localeCode ? (
+						<LocaleSourceSelector
+							baselineSnapshotId={project?.baselineSnapshotId}
+							key={projectId}
+							projectId={projectId}
+							value={sourceSnapshotId}
+							onChange={setSourceSnapshotId}
+							disabled={isStartingLocale || project?.role === "viewer"}
+						/>
+					) : null}
 				</CardContent>
 			</Card>
 			<LocaleSelector
