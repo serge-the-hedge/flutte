@@ -2201,6 +2201,8 @@ http.route({
 								localeCode: descriptor.localeCode,
 								targetCount: descriptor.targetCount,
 								candidateCount: descriptor.candidateCount,
+								localeProposalId: page.proposalId,
+								sourceSnapshotId: page.sourceSnapshotId,
 							},
 							targets,
 							guidance: await ctx.runQuery(

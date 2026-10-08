@@ -1,4 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, test, vi } from "vitest";
 import {
 	type AuthenticatedBackend,
 	authenticatedBackend,
@@ -120,7 +127,471 @@ async function fact(
 	};
 }
 
+/** Drive the installed runner through the real in-memory HTTP endpoints. */
+async function workflow(t: Backend, token: string) {
+	const directory = await mkdtemp(join(tmpdir(), "prepared-workflow-"));
+	const server = createServer(async (incoming, outgoing) => {
+		try {
+			let body = "";
+			for await (const chunk of incoming) body += chunk;
+			const response = await t.fetch(incoming.url ?? "", {
+				method: incoming.method,
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				...(body ? { body } : {}),
+			});
+			outgoing.writeHead(response.status, {
+				"Content-Type": "application/json",
+			});
+			outgoing.end(await response.text());
+		} catch {
+			outgoing.writeHead(500);
+			outgoing.end("Fixture request failed");
+		}
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing fixture port");
+	const origin = `http://127.0.0.1:${address.port}`;
+	const pacing = join(
+		tmpdir(),
+		`blabla-agent-${process.getuid?.() ?? "user"}`,
+		createHash("sha256").update(`${origin}\0${token}`).digest("hex"),
+	);
+	return {
+		directory,
+		async run(args: string[], body?: unknown) {
+			const child = spawn(
+				process.execPath,
+				[
+					fileURLToPath(
+						new URL(
+							"../../../agent-kit/_blabla/scripts/blabla-workflow.mjs",
+							import.meta.url,
+						),
+					),
+					...args,
+					"--state",
+					directory,
+					...(body === undefined ? [] : ["--body", "-"]),
+				],
+				{
+					env: {
+						...process.env,
+						BLABLA_PROFILE: undefined,
+						BLABLA_API_URL: origin,
+						BLABLA_TOKEN: token,
+						BLABLA_AGENT_URL: undefined,
+						BLABLA_AGENT_TOKEN: undefined,
+					},
+					stdio: ["pipe", "pipe", "pipe"],
+				},
+			);
+			let output = "";
+			let error = "";
+			child.stdout.on("data", (data) => {
+				output += data;
+			});
+			child.stderr.on("data", (data) => {
+				error += data;
+			});
+			const done = new Promise<number | null>((resolve, reject) => {
+				child.on("close", resolve);
+				child.on("error", reject);
+			});
+			child.stdin.end(body === undefined ? undefined : JSON.stringify(body));
+			expect(await done, error).toBe(0);
+			return JSON.parse(output) as {
+				work: string[];
+				submittedScopeComplete: boolean;
+				reviewHandoff: string | null;
+				counts: {
+					prepared: number;
+					preparedIntentionalBlank: number;
+					pendingReview: number;
+					accepted: number;
+					missing: number;
+				};
+				allLatestReviewed: boolean;
+				allTargetsReviewed: boolean;
+			};
+		},
+		async close() {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(directory, { recursive: true, force: true });
+			await rm(pacing, { recursive: true, force: true });
+		},
+	};
+}
+
 describe("immutable selected Locale Source", () => {
+	test("staging is not prepared proof for unreviewed, stale, invalid, obsolete-blank or over-limit values", async () => {
+		const content = {
+			good: "Good",
+			unreviewed: "Plain",
+			stale: "Plain",
+			invalid: "Hello {name}",
+			reason: "Plain",
+			limit: "Plain",
+		};
+		const f = await setup(content);
+		const selected = await ingest(
+			f.user,
+			f.projectId,
+			"invalid-prepared",
+			content,
+			"divergent",
+		);
+		const task = await f.user.action(
+			api.agentTranslationProposals.createNewLocaleTaskOnSnapshot,
+			{
+				projectId: f.projectId,
+				title: "Check proof",
+				localeCode: "pt",
+				sourceSnapshotId: selected,
+			},
+		);
+		const proposalId = await proposalFor(f.user, task.taskId);
+		await f.user.mutation(api.localeProposals.stageForReview, {
+			projectId: f.projectId,
+			proposalId,
+			items: await Promise.all(
+				Object.entries(content).map(async ([messageId, source]) => ({
+					messageId,
+					value: messageId === "invalid" ? "Olá {name}" : "pt",
+					sourceFingerprint: await sha256Hex(source),
+				})),
+			),
+		});
+		await f.t.run(async (ctx) => {
+			for (const value of await ctx.db
+				.query("localeProposalValues")
+				.withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+				.collect()) {
+				if (value.messageId === "unreviewed")
+					await ctx.db.patch(value._id, {
+						updatedBy: { kind: "agent", id: f.translator.tokenId },
+					});
+				if (value.messageId === "stale")
+					await ctx.db.patch(value._id, { sourceFingerprint: "0".repeat(64) });
+				if (value.messageId === "invalid")
+					await ctx.db.patch(value._id, { value: "Olá {xxxx}" });
+				if (value.messageId === "reason") {
+					const item = {
+						messageId: value.messageId,
+						value: value.value,
+						sourceFingerprint: value.sourceFingerprint,
+						intentionalBlankReason: "Old",
+					};
+					await ctx.db.patch(value._id, {
+						intentionalBlankReason: item.intentionalBlankReason,
+						byteLength: bytes(item),
+					});
+				}
+			}
+		});
+		await f.user.mutation(api.messageConstraints.setCharacterLimit, {
+			projectId: f.projectId,
+			messageId: "limit",
+			characterLimit: 1,
+			expectedCharacterLimit: null,
+		});
+		const page = await request<{
+			targets: Array<{ messageId: string; preparedValue: unknown }>;
+		}>(f.t, f.translator.token, `translation-tasks/${task.taskId}`);
+		expect(
+			page.targets
+				.filter((row) => row.preparedValue)
+				.map((row) => row.messageId),
+		).toEqual(["good"]);
+		const ordinaryTask = await f.user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId: f.projectId,
+				title: "Default stale",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		const ordinaryId = await proposalFor(f.user, ordinaryTask.taskId);
+		await f.user.mutation(api.localeProposals.stageForReview, {
+			projectId: f.projectId,
+			proposalId: ordinaryId,
+			items: [
+				{
+					messageId: "good",
+					value: "pt",
+					sourceFingerprint: await sha256Hex("Good"),
+				},
+			],
+		});
+		await ingest(f.user, f.projectId, "advance", content, "descendant");
+		const stalePage = await request<{
+			targets: Array<{ preparedValue: unknown }>;
+		}>(f.t, f.translator.token, `translation-tasks/${ordinaryTask.taskId}`);
+		expect(stalePage.targets.every((row) => row.preparedValue === null)).toBe(
+			true,
+		);
+	});
+
+	test("prepared proof does not duplicate legal large target bytes and retains bounded continuations", async () => {
+		const source = "字".repeat(80_000);
+		const target = "文".repeat(60_000);
+		const f = await setup({ first: source, second: source });
+		const selected = await ingest(
+			f.user,
+			f.projectId,
+			"large-prepared",
+			{ first: source, second: source },
+			"divergent",
+		);
+		const task = await f.user.action(
+			api.agentTranslationProposals.createNewLocaleTaskOnSnapshot,
+			{
+				projectId: f.projectId,
+				title: "Large proof",
+				localeCode: "pt",
+				sourceSnapshotId: selected,
+			},
+		);
+		const proposalId = await proposalFor(f.user, task.taskId);
+		await f.user.mutation(api.localeProposals.stageForReview, {
+			projectId: f.projectId,
+			proposalId,
+			items: [
+				{
+					messageId: "first",
+					value: target,
+					sourceFingerprint: await sha256Hex(source),
+				},
+				{
+					messageId: "second",
+					value: target,
+					sourceFingerprint: await sha256Hex(source),
+				},
+			],
+		});
+		const first = await request<{
+			targets: Array<{
+				targetValue: string;
+				preparedValue: { value?: string; valueFingerprint: string };
+			}>;
+			nextCursor: number | null;
+		}>(f.t, f.translator.token, `translation-tasks/${task.taskId}`);
+		expect(first.targets).toHaveLength(1);
+		expect(first.targets[0].targetValue).toBe(target);
+		expect(first.targets[0].preparedValue).toMatchObject({
+			valueFingerprint: await sha256Hex(target),
+		});
+		expect(first.targets[0].preparedValue.value).toBeUndefined();
+		expect(first.nextCursor).toBe(1);
+		const second = await request<{
+			targets: Array<{ preparedValue: unknown }>;
+			nextCursor: number | null;
+		}>(
+			f.t,
+			f.translator.token,
+			`translation-tasks/${task.taskId}?cursor=${first.nextCursor}`,
+		);
+		expect(second.targets).toHaveLength(1);
+		expect(second.targets[0].preparedValue).not.toBeNull();
+		expect(second.nextCursor).toBeNull();
+	});
+	test("actual task API and runner preserve reviewed carry while only 27 changed values need candidates and independent review", async () => {
+		const changed = Object.fromEntries(
+			Array.from({ length: 27 }, (_, index) => [
+				`changed${index}`,
+				`Before ${index}`,
+			]),
+		);
+		const original = { same: "Same", blank: "Hide", ...changed };
+		const f = await setup(original);
+		const oldTask = await f.user.mutation(
+			api.agentTranslationProposals.createTask,
+			{
+				projectId: f.projectId,
+				title: "Original carry",
+				target: { kind: "newLocale", localeCode: "pt" },
+				scope: { kind: "completeCatalog" },
+			},
+		);
+		const oldProposal = await proposalFor(f.user, oldTask.taskId);
+		const items = await Promise.all(
+			Object.entries(original).map(async ([messageId, source]) => ({
+				messageId,
+				value: messageId === "blank" ? "" : `pt ${messageId}`,
+				sourceFingerprint: await sha256Hex(source),
+				...(messageId === "blank"
+					? { intentionalBlankReason: "Reviewed hidden label" }
+					: {}),
+			})),
+		);
+		for (let offset = 0; offset < items.length; offset += 16)
+			await f.user.mutation(api.localeProposals.stageForReview, {
+				projectId: f.projectId,
+				proposalId: oldProposal,
+				items: items.slice(offset, offset + 16),
+			});
+		const selected = await ingest(
+			f.user,
+			f.projectId,
+			"carry-pr",
+			{
+				...original,
+				...Object.fromEntries(
+					Object.keys(changed).map((key) => [key, `After ${key}`]),
+				),
+			},
+			"divergent",
+		);
+		const continued = await f.user.action(
+			api.agentTranslationProposals.continueNewLocaleTask,
+			{ taskId: oldTask.taskId, sourceSnapshotId: selected },
+		);
+		expect(continued).toMatchObject({
+			carriedValueCount: 2,
+			incompatibleValueCount: 27,
+			remainingValueCount: 27,
+		});
+		const first = await request<{
+			task: { localeProposalId: string; sourceSnapshotId: string };
+			targets: Array<{
+				messageId: string;
+				candidate: unknown;
+				preparedValue: {
+					valueFingerprint: string;
+					intentionalBlankReason?: string;
+					basis: unknown;
+					provenance: { updatedBy: unknown };
+				} | null;
+			}>;
+		}>(f.t, f.translator.token, `translation-tasks/${continued.taskId}`);
+		expect(first.task).toMatchObject({
+			localeProposalId: continued.localeProposalId,
+			sourceSnapshotId: selected,
+		});
+		expect(first.targets[0]).toMatchObject({
+			candidate: null,
+			preparedValue: {
+				valueFingerprint: await sha256Hex("pt same"),
+				basis: {
+					localeProposalId: continued.localeProposalId,
+					snapshotId: selected,
+					sourceFingerprint: await sha256Hex("Same"),
+				},
+				provenance: { updatedBy: { kind: "user" } },
+			},
+		});
+		expect(first.targets[1].preparedValue?.intentionalBlankReason).toBe(
+			"Reviewed hidden label",
+		);
+		const runner = await workflow(f.t, f.translator.token);
+		try {
+			const initial = await runner.run(["task", "read", continued.taskId]);
+			expect(initial.work).toHaveLength(14);
+			expect(initial.work).not.toContain("same");
+			expect(initial.work).not.toContain("blank");
+			const revisions: string[] = [];
+			for (
+				let page = initial;
+				!page.submittedScopeComplete;
+				page = await runner.run(["task", "read", continued.taskId])
+			) {
+				const submitted = await runner.run(
+					["task", "submit", continued.taskId],
+					{
+						items: page.work.map((messageId) => ({
+							messageId,
+							candidate: { kind: "value", value: `pt updated ${messageId}` },
+						})),
+					},
+				);
+				if (submitted.reviewHandoff) {
+					const handoff = JSON.parse(
+						await readFile(submitted.reviewHandoff, "utf8"),
+					) as { revisions: Array<{ revisionId: string }> };
+					revisions.push(...handoff.revisions.map((row) => row.revisionId));
+				}
+			}
+			expect(revisions).toHaveLength(27);
+			const pending = await runner.run([
+				"task",
+				"status",
+				continued.taskId,
+				"--restart",
+			]);
+			expect(pending.counts).toMatchObject({
+				prepared: 1,
+				preparedIntentionalBlank: 1,
+				pendingReview: 27,
+				accepted: 0,
+				missing: 0,
+			});
+			expect(pending.allTargetsReviewed).toBe(false);
+			await expect(
+				f.user.action(api.agentTranslationProposals.finalizeTask, {
+					taskId: continued.taskId,
+				}),
+			).rejects.toThrow();
+			await f.user.mutation(api.projects.setAgentReviewPolicy, {
+				projectId: f.projectId,
+				enabled: true,
+			});
+			const reviewer = await f.user.mutation(api.apiTokens.create, {
+				projectId: f.projectId,
+				name: "Independent carry residue",
+				scopes: ["read", "review"],
+			});
+			vi.useFakeTimers({ toFake: ["Date"] });
+			try {
+				for (const revisionId of revisions) {
+					vi.setSystemTime(Date.now() + 1500);
+					const context = await request<{ reviewToken: string }>(
+						f.t,
+						reviewer.token,
+						`candidate-reviews/${revisionId}`,
+					);
+					await request(
+						f.t,
+						reviewer.token,
+						`candidate-reviews/${revisionId}`,
+						{
+							reviewToken: context.reviewToken,
+							decision: { kind: "accept" },
+						},
+					);
+				}
+			} finally {
+				vi.useRealTimers();
+			}
+			const complete = await runner.run([
+				"task",
+				"status",
+				continued.taskId,
+				"--restart",
+			]);
+			expect(complete.counts).toMatchObject({
+				prepared: 1,
+				preparedIntentionalBlank: 1,
+				accepted: 27,
+				pendingReview: 0,
+				missing: 0,
+			});
+			expect(complete.allLatestReviewed).toBe(false);
+			expect(complete.allTargetsReviewed).toBe(true);
+			expect(
+				await f.user.action(api.agentTranslationProposals.finalizeTask, {
+					taskId: continued.taskId,
+				}),
+			).toMatchObject({ deliveryStatus: "stale" });
+		} finally {
+			await runner.close();
+		}
+	}, 30_000);
 	test("same human title prepares distinct pins and each retry retains its task and candidates", async () => {
 		const f = await setup();
 		const firstPin = await ingest(
@@ -373,6 +844,16 @@ describe("immutable selected Locale Source", () => {
 		expect(carriedValue?.reviewAuthorization).toEqual(
 			originValue?.reviewAuthorization,
 		);
+		const carriedPage = await request<{
+			targets: Array<{
+				candidate: unknown;
+				preparedValue: { provenance: { reviewAuthorization: unknown } };
+			}>;
+		}>(f.t, f.translator.token, `translation-tasks/${carried.taskId}`);
+		expect(carriedPage.targets[0].candidate).toBeNull();
+		expect(
+			carriedPage.targets[0].preparedValue.provenance.reviewAuthorization,
+		).toEqual(originValue?.reviewAuthorization);
 		expect(
 			await f.t.run((ctx) => ctx.db.get(candidate.revisionId)),
 		).toMatchObject({ proposalId: task.taskId, value: "Bem-vindo" });

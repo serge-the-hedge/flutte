@@ -747,6 +747,8 @@ test("status counts blanks, rejected, pending and missing separately and resumes
 		rejected: 0,
 		pendingReview: 0,
 		missing: 0,
+		prepared: 0,
+		preparedIntentionalBlank: 0,
 	});
 	const done = ok(await server.run(["task", "status", "task"]));
 	assert.equal(done.complete, true);
@@ -757,11 +759,237 @@ test("status counts blanks, rejected, pending and missing separately and resumes
 		rejected: 1,
 		pendingReview: 1,
 		missing: 1,
+		prepared: 0,
+		preparedIntentionalBlank: 0,
 	});
 	assert.equal(
 		ok(await server.run(["task", "status", "task"])).rows,
 		undefined,
 	);
+});
+
+/** @param {string} messageId @param {string} [value] */
+function preparedTarget(messageId, value = "Reviewed") {
+	const sourceFingerprint = createHash("sha256").update("Source").digest("hex");
+	return {
+		messageId,
+		sourceValue: "Source",
+		sourceFingerprint,
+		targetValue: value,
+		staged: true,
+		candidate: null,
+		preparedValue: {
+			valueFingerprint: createHash("sha256").update(value).digest("hex"),
+			...(value === ""
+				? { intentionalBlankReason: "Reviewed hidden label" }
+				: {}),
+			basis: {
+				kind: "localeProposal",
+				localeProposalId: "proposal",
+				snapshotId: "snapshot",
+				sourceFingerprint,
+			},
+			provenance: {
+				valueId: `value-${messageId}`,
+				updatedBy: { kind: "user", id: "human" },
+				updatedAt: 1,
+			},
+		},
+	};
+}
+
+test("prepared values complete authoring and target coverage without inventing candidate reviews", async (t) => {
+	const targets = [preparedTarget("value"), preparedTarget("blank", "")].map(
+		(target, index) => ({
+			...target,
+			preparedValue: {
+				...target.preparedValue,
+				provenance: {
+					...target.preparedValue.provenance,
+					updatedBy: { kind: "agent", id: "reviewer" },
+					reviewAuthorization: {
+						reviewerTokenId: "reviewer",
+						candidateRevisionId: "original-revision",
+						authorizedByUserId: "human",
+						authorizedAt: 1,
+						...(index === 0
+							? { kind: "projectPolicy", policyRevision: 1 }
+							: { kind: "candidateGrant", grantId: "grant", grantRevision: 1 }),
+					},
+				},
+			},
+		}),
+	);
+	const server = await fixture("task", (_request, response) =>
+		json(response, {
+			task: {
+				taskId: "task",
+				localeCode: "de",
+				targetCount: 2,
+				localeProposalId: "proposal",
+				sourceSnapshotId: "snapshot",
+			},
+			targets,
+			nextCursor: null,
+		}),
+	);
+	t.after(() => server.close());
+	const read = ok(await server.run(["task", "read", "task"]));
+	assert.deepEqual(read.work, []);
+	assert.equal(read.reviewHandoff, null);
+	assert.equal(read.submittedScopeComplete, true);
+	const coverage = ok(await server.run(["task", "status", "task"]));
+	assert.equal(coverage.allLatestReviewed, false);
+	assert.equal(coverage.allTargetsReviewed, true);
+	assert.deepEqual(coverage.counts, {
+		accepted: 0,
+		intentionalBlank: 0,
+		rejected: 0,
+		pendingReview: 0,
+		missing: 0,
+		prepared: 1,
+		preparedIntentionalBlank: 1,
+	});
+	const saved = JSON.parse(
+		await readFile(join(server.directory, "state", "status.json"), "utf8"),
+	);
+	assert.equal(saved.rows.value.revisionId, null);
+	assert.deepEqual(saved.rows.value.preparedValue, targets[0].preparedValue);
+});
+
+test("candidate feedback takes precedence over prepared values; legacy staging remains work", async (t) => {
+	const targets = [
+		{
+			...preparedTarget("pending"),
+			candidate: { revisionId: "pending", value: "New", latestReview: null },
+		},
+		{
+			...preparedTarget("rejected"),
+			candidate: {
+				revisionId: "rejected",
+				value: "Bad",
+				latestReview: { decision: { kind: "reject" } },
+			},
+		},
+		{
+			messageId: "legacy",
+			sourceValue: "Source",
+			targetValue: "Staged",
+			staged: true,
+			candidate: null,
+		},
+	];
+	const server = await fixture("task", (_request, response) =>
+		json(response, {
+			task: {
+				taskId: "task",
+				localeCode: "de",
+				targetCount: 3,
+				localeProposalId: "proposal",
+				sourceSnapshotId: "snapshot",
+			},
+			targets,
+			nextCursor: null,
+		}),
+	);
+	t.after(() => server.close());
+	const read = ok(await server.run(["task", "read", "task"]));
+	assert.deepEqual(read.work, ["rejected", "legacy"]);
+	const coverage = ok(await server.run(["task", "status", "task"]));
+	assert.equal(coverage.allTargetsReviewed, false);
+	const counts = /** @type {Row} */ (coverage.counts);
+	assert.equal(counts.prepared, 0);
+	assert.equal(counts.pendingReview, 1);
+	assert.equal(counts.rejected, 1);
+	assert.equal(counts.missing, 1);
+	const binding = JSON.parse(
+		await readFile(join(server.directory, "state", "binding.json"), "utf8"),
+	);
+	assert.equal(binding.version, 1);
+	await writeFile(
+		join(server.directory, "state", "status.json"),
+		JSON.stringify({
+			complete: true,
+			counts: {
+				accepted: 1,
+				intentionalBlank: 0,
+				rejected: 0,
+				pendingReview: 0,
+				missing: 0,
+			},
+			allLatestReviewed: true,
+		}),
+	);
+	assert.equal(
+		ok(await server.run(["task", "status", "task"])).allTargetsReviewed,
+		true,
+	);
+});
+
+test("malformed prepared authority, value, Source and destination evidence fail closed", async (t) => {
+	let target = preparedTarget("value");
+	const server = await fixture("task", (_request, response) =>
+		json(response, {
+			task: {
+				taskId: "task",
+				localeCode: "de",
+				targetCount: 1,
+				localeProposalId: "proposal",
+				sourceSnapshotId: "snapshot",
+			},
+			targets: [target],
+			nextCursor: null,
+		}),
+	);
+	t.after(() => server.close());
+	const broken = [
+		{
+			...preparedTarget("value"),
+			preparedValue: {
+				...preparedTarget("value").preparedValue,
+				provenance: {
+					valueId: "value",
+					updatedBy: { kind: "agent", id: "author" },
+					updatedAt: 1,
+				},
+			},
+		},
+		{
+			...preparedTarget("value"),
+			preparedValue: {
+				...preparedTarget("value").preparedValue,
+				valueFingerprint: "wrong",
+			},
+		},
+		{ ...preparedTarget("value"), sourceValue: "Changed" },
+		{
+			...preparedTarget("value"),
+			preparedValue: {
+				...preparedTarget("value").preparedValue,
+				basis: {
+					...preparedTarget("value").preparedValue.basis,
+					localeProposalId: "other",
+				},
+			},
+		},
+		{
+			...preparedTarget("blank", ""),
+			preparedValue: {
+				...preparedTarget("blank", "").preparedValue,
+				intentionalBlankReason: "",
+			},
+		},
+	];
+	for (const [index, value] of broken.entries()) {
+		target = /** @type {ReturnType<typeof preparedTarget>} */ (value);
+		const result = await server.run(
+			["task", "read", "task"],
+			undefined,
+			`invalid-${index}`,
+		);
+		assert.notEqual(result.code, 0);
+		assert.equal(JSON.parse(result.stderr).error.code, "INVALID_RESPONSE");
+	}
 });
 
 test("shared credential pacing honors a 429 across concurrent reviewer states", async (t) => {

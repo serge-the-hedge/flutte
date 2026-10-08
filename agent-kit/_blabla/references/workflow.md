@@ -85,7 +85,9 @@ not inherently wrong-script text.
 After submission, when `reviewHandoff` is non-null, pass that file and brief version to a
 separate reviewer agent. The file carries exact revision IDs. Continue `task read`
 until `submittedScopeComplete`. Empty pages can have a continuation. A cursor
-advances only after its page has candidates; draft files do not advance progress.
+advances only after its page has candidates or server-proven reviewed prepared
+values; draft files and `staged: true` alone do not advance progress. Prepared
+carry remains separate from new candidates and produces no review handoff.
 Use `task read ... --restart` to revisit feedback from the start. A rejected
 terminal task requires an assigned correction task; do not rewrite accepted work.
 
@@ -109,7 +111,7 @@ Inspection selects the saved page for submission and preserves the ordinary scan
 checkpoint and separate `task status` observations. Its output (and subsequent
 submit output) includes `inspectionCursor`, `inspectedPageComplete` and
 `scanCheckpoint`. `inspectedPageComplete` means this page has no missing or
-rejected candidates; even a final inspected page cannot establish whole-task
+rejected candidates or unprepared values; even a final inspected page cannot establish whole-task
 coverage. `submittedScopeComplete` reports the saved ordinary scan. Resume
 `task read` at that checkpoint, and rescan `task status --restart` for fresh review
 coverage after corrections.
@@ -224,10 +226,23 @@ node <workflow> task status TASK_ID --state <task-state> --profile <translator>
 ```
 
 Each invocation scans up to four pages and checkpoints. Repeat without `--restart`
-until `complete:true`. Counts distinguish accepted values, intentional blanks,
-rejected, pending review and missing candidates. `allLatestReviewed` requires every
-target to have an accepted latest revision. Results carry observation times; a
+until `complete:true`. Counts distinguish accepted candidate revisions (`accepted`),
+reviewed candidate blanks (`intentionalBlank`), rejected/pending/missing candidates,
+and server-proven existing values (`prepared`, `preparedIntentionalBlank`). Current
+candidate feedback takes precedence over prepared evidence. `allLatestReviewed`
+requires every target to have an accepted latest candidate revision;
+`allTargetsReviewed` also accounts for authorized prepared values and blanks.
+For example, a complete continued catalog with one prepared value, one prepared
+blank, and one accepted residue candidate has `allTargetsReviewed: true` and
+`allLatestReviewed: false`. It has one candidate review, not three. Results carry observation times; a
 multi-page scan is not an atomic release-readiness assertion. Rescan after changes.
+
+Existing version-1 task states remain resumable. After adopting a reviewed bundle
+that recognizes carry, repeat ordinary `task read` to fetch its saved page from
+the server; do not edit local state. Use `task status --restart` to refresh an
+older cached coverage scan. Absent prepared evidence stays ordinary missing work;
+malformed proof fails closed. Unknown writes still require recovery of the exact
+saved submission before reading or inspecting another page.
 
 Account for every requested key/locale pair across tasks. Report proposed,
 recorded-reviewed, finalized, delivered and activated states precisely. For new
