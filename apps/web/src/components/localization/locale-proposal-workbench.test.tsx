@@ -57,7 +57,11 @@ function fixture(
 							edgeWhitespaceMismatch: false,
 							staleSource: false,
 						},
-						value: { value: "Olá", updatedBy: { kind: "user", id: "human" } },
+						value: {
+							value: "Olá",
+							updatedBy: { kind: "user", id: "human" },
+							intentionalBlankReason: undefined as string | undefined,
+						},
 						candidate: null,
 						review: null,
 					},
@@ -382,5 +386,48 @@ describe("Locale selected-source workbench", () => {
 		await hideEditedValue();
 		expect(button("Continue on current source").disabled).toBe(false);
 		expect(button("Finalize catalog").disabled).toBe(false);
+	});
+
+	test("locks the Intentional Blank reason while its submitted review is saving", async () => {
+		detail = fixture("draft", true, true);
+		detail.messages[0].value.value = "";
+		detail.messages[0].facts.state = "awaiting";
+		let finishSave!: () => void;
+		const pendingSave = new Promise<void>((resolve) => {
+			finishSave = resolve;
+		});
+		mutation.mockImplementationOnce(async () => {
+			await pendingSave;
+			return undefined as never;
+		});
+		await render();
+		const valueEditor = await expandValue();
+		const reason = dom.container.querySelector<HTMLInputElement>(
+			'[aria-label="Reason for intentionally blank hello"]',
+		);
+		if (!reason) throw new Error("Missing Intentional Blank reason");
+		const submittedReason = "The label intentionally renders nothing";
+		await type(reason, submittedReason);
+		await act(async () => button("Mark intentional blank").click());
+		expect(reason.disabled).toBe(true);
+		expect(valueEditor.disabled).toBe(true);
+		expect(button("Mark intentional blank").disabled).toBe(true);
+		reason.blur();
+		reason.focus();
+		expect(document.activeElement).not.toBe(reason);
+		expect(reason.value).toBe(submittedReason);
+		expect(mutation.mock.calls[0][1]).toMatchObject({
+			decision: { kind: "intentionalBlank", reason: submittedReason },
+		});
+		await act(async () => {
+			detail = fixture("draft", true, true);
+			detail.messages[0].value.value = "";
+			detail.messages[0].value.intentionalBlankReason = submittedReason;
+			for (const listener of listeners) listener();
+			finishSave();
+		});
+		expect(reason.disabled).toBe(false);
+		expect(reason.value).toBe(submittedReason);
+		expect(button("Continue on current source").disabled).toBe(false);
 	});
 });

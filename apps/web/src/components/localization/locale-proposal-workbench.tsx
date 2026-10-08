@@ -1471,7 +1471,11 @@ export function LocaleProposalWorkbench({
 																		},
 																	}))
 																}
-																disabled={proposalReadOnly}
+																disabled={
+																	proposalReadOnly ||
+																	queueIsLoading ||
+																	busy !== null
+																}
 															/>
 															<Button
 																size="sm"
