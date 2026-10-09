@@ -248,7 +248,9 @@ independent review; current accepted candidate revisions remain protected.
 An editor can also prepare or continue a task on an explicitly selected captured
 Source Snapshot. Use the returned task ID and its exact task Source, including
 metadata, through the same candidate/review endpoints. That selected pin remains
-reviewable across Baseline changes; it does not publish the snapshot or make its
-artifact deliverable outside the accepted Baseline. API task creation still
-defaults to accepted Source and does not choose a branch. For snapshot selection,
+reviewable across Baseline changes; it does not publish the snapshot or activate
+the language. A finalized selected artifact can be prepared as a PR on a matching
+review branch with the Repository Adapter's explicit `deliver-locale --base`;
+ordinary integration-branch delivery still requires accepted Source. API task
+creation defaults to accepted Source and does not choose a branch. For snapshot selection,
 continuation and later delivery, follow [Adding languages](https://github.com/serge-the-hedge/flutte/blob/main/docs/adding-languages.md).
