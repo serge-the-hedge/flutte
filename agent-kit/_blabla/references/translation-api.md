@@ -240,6 +240,10 @@ The ordinary workflow recognizes compatible reviewed carry through
 `preparedValue`, advances pages containing only that evidence, and submits only
 the remaining `work`. Preserve the original approvals instead of creating new
 candidates for carried values. See [coverage semantics](workflow.md#recovery-and-completion).
+For human-assigned corrections to specified prepared values in an open task,
+use [explicit prepared revision](workflow.md#explicitly-revise-prepared-carry).
+It creates ordinary inert candidates, preserves no-op carry and requires fresh
+independent review; current accepted candidate revisions remain protected.
 
 An editor can also prepare or continue a task on an explicitly selected captured
 Source Snapshot. Use the returned task ID and its exact task Source, including

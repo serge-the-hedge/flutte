@@ -798,6 +798,442 @@ function preparedTarget(messageId, value = "Reviewed") {
 	};
 }
 
+/** @param {Row[]} targets */
+async function preparedFixture(targets) {
+	const state = {
+		targets,
+		status: "open",
+		snapshot: "snapshot",
+		loseResponse: false,
+		recordWrite: true,
+	};
+	/** @type {Row[]} */ const posts = [];
+	const server = await fixture("task", async (request, response) => {
+		if (request.method === "POST") {
+			const submitted = await body(request);
+			posts.push(submitted);
+			if (state.recordWrite) {
+				for (const item of /** @type {{messageId:string,candidate:{kind:string,value?:string,reason?:string}}[]} */ (
+					submitted.items
+				)) {
+					const target = state.targets.find(
+						(target) => target.messageId === item.messageId,
+					);
+					assert.ok(target);
+					target.candidate = {
+						revisionId: `new-${item.messageId}`,
+						value: item.candidate.kind === "value" ? item.candidate.value : "",
+						...(item.candidate.kind === "intentionalBlank"
+							? { intentionalBlankReason: item.candidate.reason }
+							: {}),
+						latestReview: null,
+					};
+				}
+			}
+			if (state.loseResponse) return response.destroy();
+			return json(response, { recorded: true });
+		}
+		json(response, {
+			task: {
+				taskId: "task",
+				localeCode: "de",
+				targetCount: state.targets.length,
+				localeProposalId: "proposal",
+				sourceSnapshotId: state.snapshot,
+				status: state.status,
+			},
+			targets: state.targets,
+			guidance: { voiceGuide: "Precise" },
+			nextCursor: null,
+		});
+	});
+	return { ...server, state, posts };
+}
+
+test("explicit prepared corrections keep default protection, scan evidence and pending review authority", async (t) => {
+	const targets = [
+		preparedTarget("value"),
+		preparedTarget("blank", ""),
+		preparedTarget("unchanged"),
+	];
+	const server = await preparedFixture(targets);
+	t.after(() => server.close());
+	const submission = {
+		items: [
+			{ messageId: "value", candidate: { kind: "value", value: "Corrected" } },
+			{
+				messageId: "blank",
+				candidate: {
+					kind: "intentionalBlank",
+					reason: "Explicitly reassigned reason",
+				},
+			},
+			{
+				messageId: "unchanged",
+				candidate: { kind: "value", value: "Reviewed" },
+			},
+		],
+	};
+	ok(await server.run(["task", "read", "task"]));
+	ok(await server.run(["task", "status", "task"]));
+	const cursorPath = join(server.directory, "state/cursor.json");
+	const statusPath = join(server.directory, "state/status.json");
+	const cursorBytes = await readFile(cursorPath, "utf8");
+	const statusBytes = await readFile(statusPath, "utf8");
+	const blocked = await server.run(["task", "submit", "task"], submission);
+	assert.equal(JSON.parse(blocked.stderr).error.code, "ALREADY_REVIEWED");
+	assert.equal(server.posts.length, 0);
+	ok(await server.run(["task", "inspect", "task", "--cursor", "0"]));
+	const corrected = ok(
+		await server.run(
+			["task", "submit", "task", "--revise-prepared"],
+			submission,
+		),
+	);
+	assert.equal(corrected.submitted, 2);
+	assert.deepEqual(corrected.preservedPrepared, ["unchanged"]);
+	assert.deepEqual(server.posts, [{ items: submission.items.slice(0, 2) }]);
+	assert.equal(corrected.inspectionCursor, 0);
+	assert.equal(await readFile(cursorPath, "utf8"), cursorBytes);
+	assert.equal(await readFile(statusPath, "utf8"), statusBytes);
+	assert.equal(targets[0].targetValue, "Reviewed");
+	assert.equal(targets[1].targetValue, "");
+	assert.deepEqual(
+		targets[0].preparedValue,
+		preparedTarget("value").preparedValue,
+	);
+	assert.equal(/** @type {unknown[]} */ (corrected.revisions).length, 2);
+	const coverage = ok(
+		await server.run(["task", "status", "task", "--restart"]),
+	);
+	assert.equal(coverage.allTargetsReviewed, false);
+	assert.equal(/** @type {Row} */ (coverage.counts).pendingReview, 2);
+});
+
+test("same prepared bytes and blank reason preserve carry without candidates or handoff", async (t) => {
+	const targets = [preparedTarget("value"), preparedTarget("blank", "")];
+	const original = structuredClone(targets);
+	const server = await preparedFixture(targets);
+	t.after(() => server.close());
+	ok(await server.run(["task", "read", "task"]));
+	const result = ok(
+		await server.run(["task", "submit", "task", "--revise-prepared"], {
+			items: [
+				{ messageId: "value", candidate: { kind: "value", value: "Reviewed" } },
+				{
+					messageId: "blank",
+					candidate: {
+						kind: "intentionalBlank",
+						reason: "Reviewed hidden label",
+					},
+				},
+			],
+		}),
+	);
+	assert.equal(result.submitted, 0);
+	assert.deepEqual(result.preservedPrepared, ["value", "blank"]);
+	assert.equal(result.reviewHandoff, null);
+	assert.deepEqual(result.revisions, []);
+	assert.equal(server.posts.length, 0);
+	assert.deepEqual(targets, original);
+});
+
+test("prepared correction reassesses full carry proof, Source, metadata, limits and open task; reviewed candidates remain protected", async (t) => {
+	const server = await preparedFixture([preparedTarget("value")]);
+	t.after(() => server.close());
+	const submission = {
+		items: [
+			{ messageId: "value", candidate: { kind: "value", value: "Corrected" } },
+		],
+	};
+	const original = preparedTarget("value");
+	const changes = [
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				provenance: { ...original.preparedValue.provenance, updatedAt: 2 },
+			},
+		},
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				provenance: {
+					...original.preparedValue.provenance,
+					valueId: "replaced-value",
+				},
+			},
+		},
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				provenance: {
+					...original.preparedValue.provenance,
+					updatedBy: { kind: "user", id: "other-human" },
+				},
+			},
+		},
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				provenance: {
+					...original.preparedValue.provenance,
+					updatedBy: { kind: "agent", id: "reviewer" },
+					reviewAuthorization: {
+						kind: "projectPolicy",
+						reviewerTokenId: "reviewer",
+						candidateRevisionId: "revision",
+						authorizedByUserId: "human",
+						authorizedAt: 1,
+						policyRevision: 1,
+					},
+				},
+			},
+		},
+		{ ...original, preparedValue: undefined },
+		{ ...original, metadataJson: '{"description":"Changed"}' },
+		{
+			...original,
+			sourceValue: "Changed Source",
+			sourceFingerprint: createHash("sha256")
+				.update("Changed Source")
+				.digest("hex"),
+			preparedValue: {
+				...original.preparedValue,
+				basis: {
+					...original.preparedValue.basis,
+					sourceFingerprint: createHash("sha256")
+						.update("Changed Source")
+						.digest("hex"),
+				},
+			},
+		},
+		{ ...original, characterLimit: 3 },
+	];
+	for (const changed of changes) {
+		server.state.targets = [original];
+		ok(await server.run(["task", "read", "task", "--restart"]));
+		server.state.targets = [changed];
+		const result = await server.run(
+			["task", "submit", "task", "--revise-prepared"],
+			submission,
+		);
+		assert.equal(JSON.parse(result.stderr).error.code, "REASSESS");
+	}
+	server.state.targets = [original];
+	ok(await server.run(["task", "read", "task", "--restart"]));
+	server.state.status = "accepted";
+	assert.equal(
+		JSON.parse(
+			(
+				await server.run(
+					["task", "submit", "task", "--revise-prepared"],
+					submission,
+				)
+			).stderr,
+		).error.code,
+		"REASSESS",
+	);
+	server.state.status = "open";
+	server.state.snapshot = "other-snapshot";
+	server.state.targets = [
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				basis: {
+					...original.preparedValue.basis,
+					snapshotId: "other-snapshot",
+				},
+			},
+		},
+	];
+	assert.equal(
+		JSON.parse(
+			(
+				await server.run(
+					["task", "submit", "task", "--revise-prepared"],
+					submission,
+				)
+			).stderr,
+		).error.code,
+		"REASSESS",
+	);
+	server.state.snapshot = "snapshot";
+	server.state.targets = [{ ...original, characterLimit: 3 }];
+	ok(await server.run(["task", "read", "task", "--restart"]));
+	assert.equal(
+		JSON.parse(
+			(
+				await server.run(
+					["task", "submit", "task", "--revise-prepared"],
+					submission,
+				)
+			).stderr,
+		).error.code,
+		"CHARACTER_LIMIT_EXCEEDED",
+	);
+	for (const blank of [false, true]) {
+		server.state.targets = [
+			{
+				...original,
+				candidate: {
+					revisionId: "accepted",
+					value: blank ? "" : "Accepted",
+					...(blank ? { intentionalBlankReason: "Reviewed blank" } : {}),
+					latestReview: {
+						decision: { kind: blank ? "intentionalBlank" : "accept" },
+					},
+				},
+			},
+		];
+		ok(await server.run(["task", "read", "task", "--restart"]));
+		assert.equal(
+			JSON.parse(
+				(
+					await server.run(
+						["task", "submit", "task", "--revise-prepared"],
+						submission,
+					)
+				).stderr,
+			).error.code,
+			"ALREADY_REVIEWED",
+		);
+	}
+	assert.equal(server.posts.length, 0);
+});
+
+test("unknown prepared correction binds flag, body, cursor and proof, and recovers an already reviewed write before carry drift", async (t) => {
+	const server = await preparedFixture([preparedTarget("value")]);
+	t.after(() => server.close());
+	server.state.loseResponse = true;
+	const submission = {
+		items: [
+			{ messageId: "value", candidate: { kind: "value", value: "Corrected" } },
+		],
+	};
+	const submit = ["task", "submit", "task", "--revise-prepared"];
+	ok(await server.run(["task", "read", "task"]));
+	assert.equal((await server.run(submit, submission)).code, 1);
+	const pagePath = join(server.directory, "state/page.json");
+	const bytes = await readFile(pagePath, "utf8");
+	const intent = JSON.parse(
+		await readFile(join(server.directory, "state/submission.json"), "utf8"),
+	);
+	assert.equal(intent.revisePrepared, true);
+	assert.deepEqual(intent.preparedProofs, [
+		{
+			messageId: "value",
+			targetValue: "Reviewed",
+			preparedValue: preparedTarget("value").preparedValue,
+		},
+	]);
+	for (const [args, input] of [
+		[["task", "submit", "task"], submission],
+		[
+			submit,
+			{
+				items: [
+					{ messageId: "value", candidate: { kind: "value", value: "Other" } },
+				],
+			},
+		],
+	]) {
+		const result = await server.run(/** @type {string[]} */ (args), input);
+		assert.equal(JSON.parse(result.stderr).error.code, "UNKNOWN_WRITE");
+	}
+	for (const cursorChange of [true, false]) {
+		const changed = JSON.parse(bytes);
+		if (cursorChange) changed.cursor = 7;
+		else changed.page.targets[0].preparedValue.provenance.updatedAt = 2;
+		await writeFile(pagePath, JSON.stringify(changed));
+		assert.equal(
+			JSON.parse((await server.run(submit, submission)).stderr).error.code,
+			"UNKNOWN_WRITE",
+		);
+	}
+	await writeFile(pagePath, bytes);
+	server.state.targets = [
+		{
+			...preparedTarget("value", "Corrected"),
+			candidate: {
+				revisionId: "new-value",
+				value: "Corrected",
+				latestReview: { decision: { kind: "accept" } },
+			},
+		},
+	];
+	const recovered = ok(await server.run(submit, submission));
+	assert.equal(server.posts.length, 1);
+	assert.equal(recovered.submitted, 1);
+	assert.equal(recovered.reviewHandoff, null);
+	assert.deepEqual(recovered.revisions, []);
+	assert.equal(
+		JSON.parse(
+			await readFile(join(server.directory, "state/submission.json"), "utf8"),
+		).outcome,
+		"recorded",
+	);
+});
+
+test("unrecorded lost prepared write cannot retry against drifted carry", async (t) => {
+	const original = preparedTarget("value");
+	const server = await preparedFixture([original]);
+	t.after(() => server.close());
+	server.state.loseResponse = true;
+	server.state.recordWrite = false;
+	const submission = {
+		items: [
+			{ messageId: "value", candidate: { kind: "value", value: "Corrected" } },
+		],
+	};
+	const submit = ["task", "submit", "task", "--revise-prepared"];
+	ok(await server.run(["task", "read", "task"]));
+	assert.equal((await server.run(submit, submission)).code, 1);
+	server.state.targets = [
+		{
+			...original,
+			preparedValue: {
+				...original.preparedValue,
+				provenance: { ...original.preparedValue.provenance, updatedAt: 2 },
+			},
+		},
+	];
+	assert.equal(
+		JSON.parse((await server.run(submit, submission)).stderr).error.code,
+		"REASSESS",
+	);
+	assert.equal(server.posts.length, 1);
+	server.state.targets = [original];
+	server.state.loseResponse = false;
+	server.state.recordWrite = true;
+	ok(await server.run(submit, submission));
+	assert.equal(server.posts.length, 2);
+});
+
+test("revise-prepared is a boolean restricted to task submit", async (t) => {
+	const server = await preparedFixture([preparedTarget("value")]);
+	t.after(() => server.close());
+	for (const args of [
+		["task", "read", "task", "--revise-prepared"],
+		["task", "inspect", "task", "--cursor", "0", "--revise-prepared"],
+		["task", "status", "task", "--revise-prepared"],
+		["task", "reuse", "task", "--source", "other", "--revise-prepared"],
+		["review", "submit", "--revise-prepared"],
+		["task", "submit", "task", "--revise-prepared", "true"],
+		["task", "submit", "task", "--revise-prepared", "--revise-prepared"],
+	]) {
+		assert.equal(
+			JSON.parse((await server.run(args)).stderr).error.code,
+			"INVALID_ARGUMENT",
+		);
+	}
+	assert.equal(server.posts.length, 0);
+});
+
 test("prepared values complete authoring and target coverage without inventing candidate reviews", async (t) => {
 	const targets = [preparedTarget("value"), preparedTarget("blank", "")].map(
 		(target, index) => ({

@@ -91,6 +91,43 @@ carry remains separate from new candidates and produces no review handoff.
 Use `task read ... --restart` to revisit feedback from the start. A rejected
 terminal task requires an assigned correction task; do not rewrite accepted work.
 
+### Explicitly revise prepared carry
+
+Use this branch only when a human explicitly assigns corrections to specified
+carried values in an **open new-Locale task**. Read and assess its fresh page, or
+[inspect an observed cursor](#inspect-a-known-page) if the scan has passed it:
+
+```text
+node <workflow> task submit TASK_ID --revise-prepared --state <task-state> --profile <translator> --body candidates.json
+```
+
+The exact `items` list is the assigned correction scope. The boolean flag is only
+valid for `task submit`; it acknowledges the assignment and grants no review
+authority. Without it, prepared carry remains protected. It bypasses only
+`prepared` and `preparedIntentionalBlank`, never accepted current candidates.
+The runner compares fresh task Source and metadata, target, complete prepared
+basis, value fingerprint, attribution and review authorization with the assessed
+saved page before writing. Drift requires reassessment.
+
+An identical nonblank value, or blank with the same reason, preserves the carry
+without creating a candidate or review handoff. `preservedPrepared` lists those
+identities separately from `submitted`. Changed values/reasons become ordinary
+pending candidates beside the unchanged prepared value; they need fresh
+independent review. Existing carry authority cannot approve the new revision.
+
+Unknown writes bind the exact body, original cursor, edit flag and assessed
+prepared proof. Recover using `submission.json` as the body **and the same flag**;
+do not edit saved state. An exact recorded candidate recovers before checking
+carry that its independent review may already have replaced. If no candidate
+exists, unchanged carry proof is required before retrying. The fresh GET-to-POST
+comparison does not provide an atomic staged-value compare-and-set; server
+Source/candidate checks and fresh independent review still apply.
+
+After review, restart and complete `task status` for fresh latest-candidate
+coverage and verify the requested values. Before finalization, require that
+coverage and any assigned equality checks: finalization consumes staged reviewed
+values and does not itself prove a pending correction has been accepted.
+
 ### Inspect a known page
 
 To revisit a known correction, reuse a cursor previously returned by this task:
@@ -210,7 +247,7 @@ the server coverage scan below, including revisions omitted from a decision file
 | Interrupted worker / output exhaustion | Resume the same state and assigned scope; inspect saved files before regenerating work. Dead local owners are recovered. |
 | Local lock `BUSY` | Resume the same command and state after contention subsides. The runner bounds retries for lock handoffs. |
 | Invalid worker lock | Preserve the lock and state files; report the filesystem code or invalid-JSON diagnostic for investigation. |
-| Unknown candidate write | Repeat `task submit` with `<task-state>/submission.json` as the body. It reads the server before resubmitting identical candidates. |
+| Unknown candidate write | Repeat `task submit` with `<task-state>/submission.json` as the body and the original `--revise-prepared` flag, if used. It reads the server before resubmitting identical candidates. |
 | Unknown review write | Repeat the exact saved decisions. The runner reads recorded results before writing. |
 | `429` | The runner shares pacing, honors retry timing, and bounds retries. If still blocked, resume later with the same state. |
 | `REASSESS`, `STALE_BASIS` | Read fresh evidence and assess again. Never replay a stale verdict. |

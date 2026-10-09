@@ -968,6 +968,88 @@ describe("immutable selected Locale Source", () => {
 					.collect(),
 			),
 		).toEqual(originalValues);
+		// A correction candidate is inert beside carry; only its independent review applies it.
+		await request(
+			f.t,
+			f.translator.token,
+			`translation-tasks/${continued.taskId}/candidates`,
+			{
+				items: [
+					{
+						messageId: "same",
+						candidate: { kind: "value", value: "Explicit correction" },
+					},
+				],
+			},
+		);
+		const destinationValues = () =>
+			f.t.run((ctx) =>
+				ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal", (q) =>
+						q.eq("proposalId", destination.proposalId),
+					)
+					.collect(),
+			);
+		expect(await destinationValues()).toEqual(values);
+		const correctionPage = await f.user.query(
+			api.localeProposals.getForReview,
+			{
+				proposalId: destination.proposalId,
+				taskId: continued.taskId,
+				limit: 16,
+			},
+		);
+		const correction = correctionPage?.messages.find(
+			(message) => message.messageId === "same",
+		)?.candidate;
+		if (!correction) throw new Error("Missing correction candidate");
+		expect(correction).toMatchObject({
+			value: "Explicit correction",
+			review: null,
+		});
+		const reviewer = await f.user.mutation(api.apiTokens.create, {
+			projectId: f.projectId,
+			name: "Independent carry correction",
+			scopes: ["read", "review"],
+		});
+		await f.user.mutation(api.projects.setAgentReviewPolicy, {
+			projectId: f.projectId,
+			enabled: true,
+		});
+		const review = await request<{ reviewToken: string }>(
+			f.t,
+			reviewer.token,
+			`candidate-reviews/${correction.revisionId}`,
+		);
+		await request(
+			f.t,
+			reviewer.token,
+			`candidate-reviews/${correction.revisionId}`,
+			{ reviewToken: review.reviewToken, decision: { kind: "accept" } },
+		);
+		const correctedValues = await destinationValues();
+		expect(
+			correctedValues.find((value) => value.messageId === "same"),
+		).toMatchObject({
+			value: "Explicit correction",
+			updatedBy: { kind: "agent", id: reviewer.tokenId },
+			reviewAuthorization: {
+				candidateRevisionId: correction.revisionId,
+				reviewerTokenId: reviewer.tokenId,
+			},
+		});
+		expect(
+			correctedValues.find((value) => value.messageId === "blank"),
+		).toEqual(values.find((value) => value.messageId === "blank"));
+		expect(
+			await f.t.run((ctx) =>
+				ctx.db
+					.query("localeProposalValues")
+					.withIndex("by_proposal", (q) => q.eq("proposalId", old))
+					.collect(),
+			),
+		).toEqual(originalValues);
 		await ingest(f.user, f.projectId, "next", next, "descendant");
 		expect(
 			(
