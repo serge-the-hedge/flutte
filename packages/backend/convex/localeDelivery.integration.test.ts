@@ -138,6 +138,127 @@ async function fixture(
 }
 
 describe("Locale delivery observation and binding realization", () => {
+	test("a finalized selected Source is observed and bound only after accepted ingestion", async () => {
+		const { t, user, projectId, baseline } = await fixture();
+		await t.run((ctx) => ctx.db.patch(projectId, { repository: "repo" }));
+		const selectedContent = sourceContent.replace("Hello", "Approved English");
+		const captured = await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "approved-copy",
+			lineage: {
+				baselineCommit: "baseline",
+				relationship: "divergent",
+				mergeBase: "baseline",
+			},
+			files: [{ catalogPath: "intl_en.arb", content: selectedContent }],
+		});
+		if (!captured.snapshotId)
+			throw new Error("Expected selected Source capture");
+		const { proposalId } = await user.action(
+			api.localeProposals.prepareForReview,
+			{
+				projectId,
+				localeCode: "pt",
+				sourceSnapshotId: captured.snapshotId,
+			},
+		);
+		await user.mutation(api.localeProposals.stageForReview, {
+			projectId,
+			proposalId,
+			items: [
+				{
+					messageId: "greeting",
+					value: "Olá",
+					sourceFingerprint: await sha256Hex("Approved English"),
+				},
+				{
+					messageId: "quiet",
+					value: "",
+					sourceFingerprint: await sha256Hex("Hidden"),
+					intentionalBlankReason: "This label is deliberately hidden.",
+				},
+			],
+		});
+		const finalized = await user.action(api.localeProposals.finalizeForReview, {
+			projectId,
+			proposalId,
+		});
+		expect(finalized).toMatchObject({
+			status: "ready",
+			deliveryStatus: "stale",
+			sourceSelection: "selectedSnapshot",
+		});
+		const artifact = await user.action(api.localeProposals.artifactForReview, {
+			projectId,
+			proposalId,
+		});
+		const files = [
+			{ catalogPath: "intl_en.arb", content: selectedContent },
+			{ catalogPath: "intl_pt.arb", content: artifact.catalog.content },
+		];
+		const lineage = {
+			baselineCommit: "baseline",
+			relationship: "descendant" as const,
+			mergeBase: "baseline",
+		};
+		await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "locale-review-branch",
+			lineage: { ...lineage, relationship: "divergent" },
+			files,
+		});
+		expect(
+			(await t.run((ctx) => ctx.db.get(projectId)))?.baselineSnapshotId,
+		).toBe(baseline.snapshotId);
+		expect(
+			await user.query(api.localeDelivery.forProposal, { proposalId }),
+		).toBeNull();
+		expect(await user.query(api.locales.list, { projectId })).toHaveLength(1);
+		const accepted = await user.action(api.snapshots.ingest, {
+			projectId,
+			repository: "repo",
+			commit: "merged-integration",
+			lineage,
+			files,
+		});
+		expect(
+			await user.query(api.localeDelivery.forProposal, { proposalId }),
+		).toMatchObject({
+			status: "observed",
+			snapshotId: accepted.snapshotId,
+		});
+		const localeId = await user.mutation(api.locales.create, {
+			projectId,
+			code: "pt",
+		});
+		await user.action(api.locales.bind, {
+			localeId,
+			catalogPath: "intl_pt.arb",
+		});
+		const cards = await readWorkspaceKeyCards(user, projectId);
+		for (const key of cards.keys)
+			expect(
+				key.values.find((value) => value.localeId === localeId),
+			).toMatchObject({
+				valueState: "settled",
+			});
+		const decisions = await t.run((ctx) =>
+			ctx.db.query("catalogWorkspaceDecisionRecords").take(3),
+		);
+		expect(decisions).toHaveLength(2);
+		expect(
+			decisions.every(
+				(decision) =>
+					decision.localeProposalId === proposalId &&
+					decision.recordedBy.kind === "user",
+			),
+		).toBe(true);
+		expect(
+			decisions.find((decision) => decision.kind === "intentionalBlank"),
+		).toMatchObject({ reason: "This label is deliberately hidden." });
+	});
 	test.each(["formatting", "other source", "other target"])(
 		"preserves reviewed pairs when delivery changes only %s",
 		async (change) => {

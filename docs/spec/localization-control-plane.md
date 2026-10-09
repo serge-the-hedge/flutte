@@ -10,7 +10,7 @@ when a product decision changes.
 | --- | --- |
 | Snapshot ingest, reconciliation, catalog navigation and manual editing | Implemented |
 | Translation Tasks, immutable agent candidates, human or authorized independent agent review | Implemented; human review is the default |
-| Explicit captured Source for new languages | Implemented for editor-selected preparation and continuation, authoring, review and finalization. Baseline publication and repository delivery remain separate; see [selected Source workflow](../adding-languages.md#translate-approved-copy-before-its-branch-merges). |
+| Explicit captured Source for new languages | Implemented for editor-selected preparation and continuation, authoring, review, finalization and explicit locale-only review-branch delivery with exact checkout Source validation. Baseline publication, combined Release delivery and accepted observation remain separate; see [selected Source workflow](../adding-languages.md#translate-approved-copy-before-its-branch-merges). |
 | Release assessment, bundles, configured language delivery and binding | Implemented, including immutable exact-message positive selection or whole-message deferral during Release Preparation, Strings selection handoff, script/region variants over an existing language base and adapter-owned locale-subtag preservation. Positive selection covers Source and all existing targets together; complete new-Locale additions remain separate. Exact artifact observation and per-value review preservation are separate, and binding realizes the current Snapshot without re-ingestion. See [workflow and capacity](../adding-languages.md). |
 | Introduced Messages and per-Locale First Review | Implemented; batches cannot complete pending First Review |
 | Code Context Manifest, source AST extraction and context scopes (§10) | Planned; sync currently submits bound catalog files and Git provenance |
@@ -341,9 +341,17 @@ not an inference from the snapshot's mutable publication status. The selected
 proposal uses its own stored Source for authoring, review and finalization;
 unrelated Baseline changes do not change that Source. The same compatible-value
 carry rules apply. This operation leaves the accepted Catalog Workspace and
-pending Source Proposals intact. A complete selected-source artifact is not
-delivery-ready outside the accepted Baseline; after ordinary ingestion, continue
-to the accepted Source and finalize before delivery.
+pending Source Proposals intact. A complete selected-source artifact can prepare
+its own local review branch through `deliver-locale --base <branch>`, requiring
+that named branch to be checked out and its entire Source file to match the
+captured commit exactly. Source selection, immutable artifact identity,
+repository origin and target branch/HEAD are rechecked before publishing the
+local branch. Several locale PRs can form a stack over the same unchanged Source
+without any merge or Baseline advancement. Ordinary delivery eligibility remains
+separate: without an explicit base, continue to accepted Source and finalize
+after ordinary ingestion. Combined Release delivery keeps its current-Baseline
+requirements. Selected-source PR creation supplies no delivery observation or
+active locale binding.
 
 ---
 

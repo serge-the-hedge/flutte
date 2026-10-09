@@ -96,8 +96,12 @@ An editor may explicitly prepare or continue a new-Locale task on a captured
 Source Snapshot. That immutable selection permits authoring, independent review
 and finalization against its stored Source; it is separate from Baseline
 currency. Compatible reviewed carry retains its original authorization and blank
-reasons. A selected-source artifact remains ineligible for delivery until it is
-pinned to the accepted Baseline. See [Adding a language](adding-languages.md#translate-approved-copy-before-its-branch-merges).
+reasons. A finalized selected-source artifact can prepare its own locale review
+PR through explicit `deliver-locale --base <checked-out-branch>` when the whole
+checkout Source file matches its captured commit exactly. This leaves Baseline
+currency and publication separate: ordinary and combined Release delivery still
+require current Baseline evidence, and only later accepted ingestion observes
+delivery. See [Adding a language](adding-languages.md#translate-approved-copy-before-its-branch-merges).
 
 ## Human and agent decisions
 

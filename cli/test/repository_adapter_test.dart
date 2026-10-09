@@ -3,10 +3,14 @@ import 'dart:io';
 
 import 'package:blabla_cli/locale_proposal_adapter.dart';
 import 'package:blabla_cli/release_delivery_adapter.dart';
+import 'package:blabla_cli/runtime_locale_registration.dart';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
+import '../bin/blabla.dart' as cli;
+
 void main() {
+  reviewBranchDeliveryTests();
   for (final deliverRelease in [false, true]) {
     test(
       'refuses a complete new Locale over a changed source catalog in ${deliverRelease ? 'combined' : 'standalone'} delivery',
@@ -1326,6 +1330,406 @@ esac
   });
 }
 
+void reviewBranchDeliveryTests() {
+  test('base is a locale-only option with one explicit value', () async {
+    for (final args in [
+      ['deliver', '--base', 'copy'],
+      ['sync', '--base', 'copy'],
+      ['deliver-portuguese', '--base', 'copy'],
+      ['deliver-locale', '--base'],
+      ['deliver-locale', '--base', 'copy', '--base', 'other'],
+    ]) {
+      final errors = <String>[];
+      expect(
+        await cli.runCli(
+          args,
+          environment: {},
+          write: (_) {},
+          writeError: errors.add,
+        ),
+        1,
+      );
+      expect(
+        errors.join(),
+        anyOf(
+          contains('Unknown option'),
+          contains('needs a value'),
+          contains('more than once'),
+        ),
+      );
+    }
+  });
+
+  test(
+    'review delivery rejects missing selection, unfinished proposals and unsafe bases',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      final artifact = await portugueseArtifact(fixture);
+      await fixture.git(['switch', '-c', 'copy/approved']);
+      for (final (selection, status, base) in [
+        ('baseline', 'ready', 'copy/approved'),
+        ('unknown', 'ready', 'copy/approved'),
+        ('selectedSnapshot', 'draft', 'copy/approved'),
+        ('selectedSnapshot', 'ready', 'other/base'),
+        ('selectedSnapshot', 'ready', '-main'),
+        ('selectedSnapshot', 'ready', 'main;echo injected'),
+        ('selectedSnapshot', 'ready', 'main\nother'),
+        ('selectedSnapshot', 'ready', 'HEAD'),
+        ('selectedSnapshot', 'ready', 'copy/../main'),
+      ]) {
+        await expectLater(
+          RepositoryAdapter().deliver(
+            requestFor(
+              fixture,
+              artifact,
+              baseBranch: base,
+              gateway: StaticLocaleProposalGateway(
+                artifact,
+                sourceSelection: selection,
+                status: status,
+                deliveryStatus: 'stale',
+              ),
+            ),
+          ),
+          throwsA(isA<RepositoryAdapterException>()),
+        );
+        expect(
+          await fixture.git(['branch', '--show-current']),
+          'copy/approved',
+        );
+        expect(await fixture.git(['rev-parse', 'HEAD']), fixture.commit);
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+      }
+    },
+  );
+
+  test(
+    'selected Source cannot bypass ordinary or combined Baseline delivery',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.addGermanCatalog();
+      final release = await existingLocaleRelease(fixture);
+      final artifact = await combinedPortugueseArtifact(fixture, release);
+      final gateway = StaticLocaleProposalGateway(
+        artifact,
+        sourceSelection: 'selectedSnapshot',
+        deliveryStatus: 'stale',
+      );
+      await expectLater(
+        RepositoryAdapter().deliver(
+          requestFor(fixture, artifact, gateway: gateway),
+        ),
+        throwsA(isA<RepositoryAdapterException>()),
+      );
+      await expectLater(
+        ReleaseRepositoryAdapter().deliver(
+          ReleaseDeliveryRequest(
+            checkout: fixture.root,
+            recordId: release.releaseRecord.id,
+            flutter: testFlutter(fixture.flutterExecutable),
+            gateway: StaticReleaseGateway(release),
+            write: (_) {},
+            localeProposal: LocaleProposalDeliveryInput(
+              proposalId: artifact.proposalId,
+              gateway: gateway,
+            ),
+          ),
+        ),
+        throwsA(isA<RepositoryAdapterException>()),
+      );
+      expect(await fixture.git(['branch', '--show-current']), 'develop');
+    },
+  );
+
+  for (final source in [
+    '{"@@locale":"en","welcome":"Changed, {name}!"}',
+    '{"@@locale":"en","welcome":"Welcome, {name}!","@welcome":{"description":"Changed guidance"}}',
+    '{ "@@locale":"en","welcome":"Welcome, {name}!"}',
+  ]) {
+    test('review branch refuses changed full Source bytes: $source', () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      final artifact = await portugueseArtifact(fixture);
+      await fixture.git(['switch', '-c', 'copy/approved']);
+      await fixture
+          .file('packages/brickit_generated/lib/l10n/intl_en.arb')
+          .writeAsString(source);
+      await fixture.git(['add', '.']);
+      await fixture.git(['commit', '-m', 'change Source']);
+      final head = await fixture.git(['rev-parse', 'HEAD']);
+      await expectLater(
+        RepositoryAdapter().deliver(
+          requestFor(
+            fixture,
+            artifact,
+            baseBranch: 'copy/approved',
+            gateway: StaticLocaleProposalGateway(
+              artifact,
+              sourceSelection: 'selectedSnapshot',
+              deliveryStatus: 'stale',
+            ),
+          ),
+        ),
+        throwsA(
+          isA<RepositoryAdapterException>().having(
+            (error) => error.message,
+            'message',
+            contains('Source Catalog changed'),
+          ),
+        ),
+      );
+      expect(await fixture.git(['rev-parse', 'HEAD']), head);
+    });
+  }
+
+  for (final change in ['selection', 'artifact', 'origin', 'head', 'branch']) {
+    test(
+      'review delivery rechecks $change before publishing its branch',
+      () async {
+        final fixture = await BrickitFixture.create();
+        addTearDown(fixture.dispose);
+        final artifact = await portugueseArtifact(fixture);
+        await fixture.git(['switch', '-c', 'copy/approved']);
+        final summary = LocaleProposalSummary(
+          proposalId: artifact.proposalId,
+          sourceSnapshotId: artifact.sourceSnapshot.id,
+          status: 'ready',
+          deliveryStatus: 'stale',
+          sourceSelection: 'selectedSnapshot',
+        );
+        final runner = CountingCommandRunner(
+          onFirstGeneration: () async {
+            if (change == 'origin')
+              await fixture.git([
+                'remote',
+                'set-url',
+                'origin',
+                'https://github.com/other/repo.git',
+              ]);
+            if (change == 'head')
+              await fixture.git([
+                'commit',
+                '--allow-empty',
+                '-m',
+                'concurrent commit',
+              ]);
+            if (change == 'branch')
+              await fixture.git(['switch', '-c', 'other/branch']);
+          },
+        );
+        final gateway = SequencedLocaleProposalGateway(
+          artifact,
+          summaries: [
+            summary,
+            if (change == 'selection')
+              LocaleProposalSummary(
+                proposalId: artifact.proposalId,
+                sourceSnapshotId: artifact.sourceSnapshot.id,
+                status: 'ready',
+                deliveryStatus: 'ready',
+                sourceSelection: 'baseline',
+              )
+            else
+              summary,
+          ],
+          laterArtifact: change == 'artifact'
+              ? LocaleProposalArtifact(
+                  version: artifact.version,
+                  proposalId: artifact.proposalId,
+                  sourceSnapshot: artifact.sourceSnapshot,
+                  locale: const ProposedLocale(
+                    code: 'pt',
+                    label: 'Changed label',
+                    runtimeLocale: 'pt-BR',
+                  ),
+                  catalog: artifact.catalog,
+                )
+              : null,
+        );
+        await expectLater(
+          RepositoryAdapter(runner: runner).deliver(
+            requestFor(
+              fixture,
+              artifact,
+              baseBranch: 'copy/approved',
+              gateway: gateway,
+            ),
+          ),
+          throwsA(isA<RepositoryAdapterException>()),
+        );
+        expect(
+          await fixture.git(['branch', '--list', 'blabla/locale-proposal-*']),
+          isEmpty,
+        );
+        expect(
+          await fixture
+              .file('packages/brickit_generated/lib/l10n/intl_pt.arb')
+              .exists(),
+          isFalse,
+        );
+      },
+    );
+  }
+
+  test(
+    'six stacked locale PR branches retain registrations and pin one selected Source',
+    () async {
+      final fixture = await BrickitFixture.create();
+      addTearDown(fixture.dispose);
+      await fixture.git(['switch', '-c', 'copy/approved']);
+      await fixture.file('tools/flutter').writeAsString(r'''#!/bin/sh
+set -eu
+[ "$1" = "gen-l10n" ]
+shared=lib/l10n/app_localizations.dart
+printf 'class AppLocalizations {}\n' > "$shared"
+for language in en zh ja it ko nl tr; do
+  [ -f "lib/l10n/intl_$language.arb" ] || continue
+  case "$language" in
+    en) class=AppLocalizations ;;
+    zh) class=AppLocalizationsZh ;;
+    ja) class=AppLocalizationsJa ;;
+    it) class=AppLocalizationsIt ;;
+    ko) class=AppLocalizationsKo ;;
+    nl) class=AppLocalizationsNl ;;
+    tr) class=AppLocalizationsTr ;;
+  esac
+  printf "// case '%s': %s\n" "$language" "$class" >> "$shared"
+  [ "$language" != en ] || continue
+  printf 'class %s {}\n' "$class" > "lib/l10n/app_localizations_$language.dart"
+  if [ "$language" = zh ] && [ -f lib/l10n/intl_zh_Hant_TW.arb ]; then
+    printf 'class AppLocalizationsZhHantTw {}\n' >> lib/l10n/app_localizations_zh.dart
+    printf '// AppLocalizationsZhHantTw\n' >> "$shared"
+  fi
+done
+''');
+      await fixture
+          .file('packages/brickit_generated/lib/l10n/intl_zh.arb')
+          .writeAsString('{"@@locale":"zh","welcome":"你好, {name}!"}');
+      final runtimeConstants = fixture.file(
+        'packages/brickit/lib/constants/locale_const.dart',
+      );
+      await runtimeConstants.writeAsString(
+        addRuntimeLocaleMapping(await runtimeConstants.readAsString(), 'zh-CN'),
+      );
+      final selection = fixture.file(
+        'packages/brickit/lib/blocs/user/user_bloc.dart',
+      );
+      await selection.parent.create(recursive: true);
+      await selection.writeAsString(
+        'final computedLocale = BrickitLocaleConstants.localeFromTag(locale);\nsave(event.locale.toLanguageTag());',
+      );
+      final generated = await Process.run(fixture.flutterExecutable, [
+        'gen-l10n',
+      ], workingDirectory: fixture.file('packages/brickit_generated').path);
+      expect(generated.exitCode, 0, reason: '${generated.stderr}');
+      await fixture.git(['add', '.']);
+      await fixture.git([
+        'commit',
+        '-m',
+        'prepared CTA and existing Chinese base',
+      ]);
+      final sourceCommit = await fixture.git(['rev-parse', 'HEAD']);
+      var base = 'copy/approved';
+      final introduced = <LocaleProposalArtifact>[];
+      for (final (code, runtime) in [
+        ('ja', 'ja'),
+        ('it', 'it-IT'),
+        ('ko', 'ko'),
+        ('nl', 'nl'),
+        ('tr', 'tr'),
+        ('zh-HANT-TW', 'zh-Hant-TW'),
+      ]) {
+        final locale = ProposedLocale(
+          code: code,
+          label: code,
+          runtimeLocale: runtime,
+        );
+        final content = jsonEncode({
+          '@@locale': locale.arbLocale,
+          'welcome': '$code {name}',
+        });
+        final artifact = LocaleProposalArtifact(
+          version: 1,
+          proposalId: 'proposal_${code.replaceAll('-', '_')}',
+          sourceSnapshot: SourceSnapshotIdentity(
+            id: 'selected_123',
+            repository: 'github.com/brickit-app/brickit-flutter',
+            commit: sourceCommit,
+            manifestHash: 'a' * 64,
+            catalogPath: 'packages/brickit_generated/lib/l10n/intl_en.arb',
+          ),
+          locale: locale,
+          catalog: ProposedCatalog(
+            fileName: 'intl_${locale.arbLocale}.arb',
+            catalogPath:
+                'packages/brickit_generated/lib/l10n/intl_${locale.arbLocale}.arb',
+            content: content,
+            contentHash: sha256.convert(utf8.encode(content)).toString(),
+          ),
+        );
+        final baseHead = await fixture.git(['rev-parse', 'HEAD']);
+        final result = await RepositoryAdapter().deliver(
+          requestFor(
+            fixture,
+            artifact,
+            baseBranch: base,
+            gateway: StaticLocaleProposalGateway(
+              artifact,
+              sourceSelection: 'selectedSnapshot',
+              deliveryStatus: 'stale',
+            ),
+          ),
+        );
+        expect(
+          result.pullRequestCommand,
+          contains('--base $base --head ${result.branchName}'),
+        );
+        expect(await fixture.git(['rev-parse', 'HEAD^']), baseHead);
+        final message = await fixture.git(['log', '-1', '--format=%B']);
+        expect(message, contains('Blabla-Delivery-Base: $base'));
+        expect(message, contains('Blabla-Applied-Onto: $baseHead'));
+        introduced.add(artifact);
+        final registration = await fixture
+            .file('packages/brickit/lib/constants/locale_const.dart')
+            .readAsString();
+        final shared = await fixture
+            .file('packages/brickit_generated/lib/l10n/app_localizations.dart')
+            .readAsString();
+        for (final previous in introduced) {
+          expect(
+            await fixture.file(previous.catalog.catalogPath!).readAsString(),
+            previous.catalog.content,
+          );
+          expect(
+            registration,
+            contains(
+              previous.locale.languageCode == 'zh'
+                  ? 'zhHantTWLocale'
+                  : '${previous.locale.languageCode}Locale',
+            ),
+          );
+          expect(shared, contains(previous.locale.generatedClass));
+        }
+        expect(await fixture.git(['status', '--porcelain']), isEmpty);
+        base = result.branchName;
+      }
+      expect(
+        await fixture.git([
+          'diff',
+          '--name-only',
+          sourceCommit,
+          'HEAD',
+          '--',
+          'packages/brickit_generated/lib/l10n/intl_en.arb',
+        ]),
+        isEmpty,
+      );
+    },
+  );
+}
+
 Future<ReleaseSummary> existingLocaleRelease(BrickitFixture fixture) async {
   return ReleaseSummary(
     releaseRecord: ReleaseRecordIdentity(
@@ -1408,12 +1812,14 @@ DeliveryRequest requestFor(
   LocaleProposalArtifact artifact, {
   LocaleProposalGateway? gateway,
   String? flutterExecutable,
+  String? baseBranch,
 }) => DeliveryRequest(
   checkout: fixture.root,
   proposalId: artifact.proposalId,
   flutter: testFlutter(flutterExecutable ?? fixture.flutterExecutable),
   gateway: gateway ?? StaticLocaleProposalGateway(artifact),
   write: (_) {},
+  baseBranch: baseBranch,
 );
 
 ResolvedFlutter testFlutter(String executable) => ResolvedFlutter(
@@ -1429,11 +1835,13 @@ class StaticLocaleProposalGateway implements LocaleProposalGateway {
     this.artifact, {
     this.status = 'ready',
     this.deliveryStatus = 'ready',
+    this.sourceSelection = 'baseline',
   });
 
   final LocaleProposalArtifact artifact;
   final String status;
   final String deliveryStatus;
+  final String sourceSelection;
 
   @override
   Future<LocaleProposalSummary> readProposal(String proposalId) async =>
@@ -1442,6 +1850,7 @@ class StaticLocaleProposalGateway implements LocaleProposalGateway {
         sourceSnapshotId: artifact.sourceSnapshot.id,
         status: status,
         deliveryStatus: deliveryStatus,
+        sourceSelection: sourceSelection,
       );
 
   @override
@@ -1450,11 +1859,17 @@ class StaticLocaleProposalGateway implements LocaleProposalGateway {
 }
 
 class SequencedLocaleProposalGateway implements LocaleProposalGateway {
-  SequencedLocaleProposalGateway(this.artifact, {required this.summaries});
+  SequencedLocaleProposalGateway(
+    this.artifact, {
+    required this.summaries,
+    this.laterArtifact,
+  });
 
   final LocaleProposalArtifact artifact;
   final List<LocaleProposalSummary> summaries;
+  final LocaleProposalArtifact? laterArtifact;
   var _summaryReadCount = 0;
+  var _artifactReadCount = 0;
 
   @override
   Future<LocaleProposalSummary> readProposal(String proposalId) async {
@@ -1467,7 +1882,7 @@ class SequencedLocaleProposalGateway implements LocaleProposalGateway {
 
   @override
   Future<LocaleProposalArtifact> readArtifact(String proposalId) async =>
-      artifact;
+      _artifactReadCount++ == 0 ? artifact : laterArtifact ?? artifact;
 }
 
 class StaticReleaseGateway implements ReleaseGateway {

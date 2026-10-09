@@ -150,8 +150,33 @@ blabla deliver --release <release-record-id> --locale-proposal <proposal-id> --c
 Omit `--locale-proposal` for existing-Locale work only. To deliver a new Locale
 on its own, run `blabla deliver-locale --proposal <proposal-id>`. The old
 `deliver-portuguese` name remains a deprecated alias. Each delivery accepts one
-new Locale; repeat the same flow for the next language after merging and syncing
-the preceding delivery.
+new Locale. Ordinary delivery repeats after merging and syncing the preceding
+delivery, continuing and finalizing remaining proposals on the current Baseline.
+
+To prepare a locale PR against approved copy on an unmerged branch, capture that
+committed branch with `blabla sync --preview`, select it in the task, review and
+finalize, then run from its named checkout:
+
+```sh
+blabla deliver-locale --proposal <proposal-id> --base <checked-out-branch>
+```
+
+Only a finalized proposal with an explicit selected Source pin can use `--base`;
+missing selection metadata or a stale ordinary Baseline proposal cannot.
+The option is exclusive to `deliver-locale` and must match the current branch.
+The full Source file must be byte-identical to the captured commit, including
+metadata and formatting. Existing repository, artifact, runtime, Flutter and
+checkout checks remain in force, with target base and HEAD recorded in commit
+trailers. The suggested PR command targets that explicit base; the artifact's
+configured integration branch is unchanged.
+
+Multiple locale PRs can stack on preceding locale review branches while their
+Source remains identical to the same capture. Sibling PRs overlap in runtime
+registration and shared generated files; combine those additions and regenerate
+before merging. This mode never advances Baseline, observes delivery or activates
+a language. Ordinary accepted integration sync and deliberate binding close that
+loop. Combined `deliver --release ... --locale-proposal ...` remains strict
+against current Baseline and has no `--base` option.
 
 A project editor configures the catalog code, label, path, and explicit Runtime
 Locale Mapping before a task starts. This Brickit adapter supports language and

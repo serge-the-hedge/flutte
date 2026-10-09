@@ -640,8 +640,8 @@ export async function stageLocaleDeliveries(
 				);
 			continue;
 		}
-		// Proposal source snapshots are created from an accepted Baseline. The action
-		// only runs inside a prospective accepted descendant or explicit realization.
+		// The proposal may pin a selected Preview. Observation still runs only
+		// inside a prospective accepted descendant or explicit binding realization.
 		if (++observations > 128)
 			throw new ConvexError({
 				code: "LIMIT_EXCEEDED",

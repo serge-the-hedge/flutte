@@ -92,6 +92,7 @@ void main() {
 
       expect(summary.status, 'ready');
       expect(summary.deliveryStatus, 'ready');
+      expect(summary.sourceSelection, 'baseline');
       expect(artifact.catalog.content, catalog);
       expect(
         artifact.catalog.catalogPath,
@@ -107,6 +108,34 @@ void main() {
       );
       expect(warnings, hasLength(1));
       expect(warnings.single, contains(newerVersion));
+    },
+  );
+
+  test(
+    'reads explicit Source selection without inferring it from readiness',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'proposalId': 'selected_123',
+            'sourceSnapshotId': 'snapshot_123',
+            'status': 'ready',
+            'deliveryStatus': 'stale',
+            'sourceSelection': 'selectedSnapshot',
+          }),
+        );
+        await request.response.close();
+      });
+      final gateway = HttpLocaleProposalGateway(
+        baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+        token: 'fixture-token',
+      );
+      final summary = await gateway.readProposal('selected_123');
+      expect(summary.sourceSelection, 'selectedSnapshot');
+      expect(summary.deliveryStatus, 'stale');
     },
   );
 
