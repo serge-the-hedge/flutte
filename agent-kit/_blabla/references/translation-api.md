@@ -240,11 +240,17 @@ The ordinary workflow recognizes compatible reviewed carry through
 `preparedValue`, advances pages containing only that evidence, and submits only
 the remaining `work`. Preserve the original approvals instead of creating new
 candidates for carried values. See [coverage semantics](workflow.md#recovery-and-completion).
+For human-assigned corrections to specified prepared values in an open task,
+use [explicit prepared revision](workflow.md#explicitly-revise-prepared-carry).
+It creates ordinary inert candidates, preserves no-op carry and requires fresh
+independent review; current accepted candidate revisions remain protected.
 
 An editor can also prepare or continue a task on an explicitly selected captured
 Source Snapshot. Use the returned task ID and its exact task Source, including
 metadata, through the same candidate/review endpoints. That selected pin remains
-reviewable across Baseline changes; it does not publish the snapshot or make its
-artifact deliverable outside the accepted Baseline. API task creation still
-defaults to accepted Source and does not choose a branch. For snapshot selection,
+reviewable across Baseline changes; it does not publish the snapshot or activate
+the language. A finalized selected artifact can be prepared as a PR on a matching
+review branch with the Repository Adapter's explicit `deliver-locale --base`;
+ordinary integration-branch delivery still requires accepted Source. API task
+creation defaults to accepted Source and does not choose a branch. For snapshot selection,
 continuation and later delivery, follow [Adding languages](https://github.com/serge-the-hedge/flutte/blob/main/docs/adding-languages.md).

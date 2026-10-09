@@ -814,12 +814,13 @@ export function LocaleProposalWorkbench({
 					</AlertTitle>
 					<AlertDescription>
 						{detail.proposal.status === "ready"
-							? "This finalized artifact is review evidence, not accepted for delivery."
+							? "This finalized catalog can be prepared as a PR on a review branch whose Source matches this snapshot."
 							: detail.sourceIsEligible
 								? "You can edit, review, and finalize this catalog for its selected Source."
 								: "This selected Source is no longer eligible for edits."}{" "}
-						Delivery uses the accepted Source after any unmerged copy is merged
-						and synced.
+						Preparing a PR does not update the accepted Source or activate the
+						language. For delivery on the integration branch, continue on the
+						accepted Source.
 					</AlertDescription>
 				</Alert>
 			) : null}

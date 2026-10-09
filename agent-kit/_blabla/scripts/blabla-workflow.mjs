@@ -642,8 +642,30 @@ function sameCandidate(target, item) {
 		: target.candidate.value === "" &&
 				target.candidate.intentionalBlankReason === item.candidate.reason;
 }
-/** @param {Client} api @param {string} taskId @param {string} directory @param {unknown} body */
-async function taskSubmit(api, taskId, directory, body) {
+/** Capture the full assessed carry proof, including attribution and review authority.
+ * @param {RecordValue} target */
+function preparedProof(target) {
+	return {
+		targetValue: target.targetValue,
+		preparedValue: target.preparedValue,
+	};
+}
+/** @param {RecordValue} target @param {Candidate} item */
+function samePrepared(target, item) {
+	return item.candidate.kind === "value"
+		? target.targetValue === item.candidate.value
+		: target.targetValue === "" &&
+				object(target.preparedValue) &&
+				target.preparedValue.intentionalBlankReason === item.candidate.reason;
+}
+/** @param {Client} api @param {string} taskId @param {string} directory @param {unknown} body @param {boolean} [revisePrepared] */
+async function taskSubmit(
+	api,
+	taskId,
+	directory,
+	body,
+	revisePrepared = false,
+) {
 	const items = candidates(body);
 	const saved = record(await read(join(directory, "page.json")), "Saved page");
 	if (
@@ -658,28 +680,46 @@ async function taskSubmit(api, taskId, directory, body) {
 	const inspecting = saved.mode === "inspect";
 	const intentPath = join(directory, "submission.json");
 	const previous = await optional(intentPath);
+	const before = page(saved.page);
+	const preparedProofs = revisePrepared
+		? items.flatMap((item) => {
+				const target = before.targets.find(
+					(target) => target.messageId === item.messageId,
+				);
+				return target?.candidate === null && object(target.preparedValue)
+					? [{ messageId: item.messageId, ...preparedProof(target) }]
+					: [];
+			})
+		: [];
 	if (
 		object(previous) &&
 		previous.outcome === "unknown" &&
 		(previous.cursor !== saved.cursor ||
-			JSON.stringify(previous.items) !== JSON.stringify(items))
+			JSON.stringify(previous.items) !== JSON.stringify(items) ||
+			(previous.revisePrepared ?? false) !== revisePrepared ||
+			(revisePrepared &&
+				(previous.taskId !== taskId ||
+					!isDeepStrictEqual(previous.preparedProofs, preparedProofs))))
 	)
 		throw new Failure(
 			"UNKNOWN_WRITE",
-			"Recover the saved submission on its original page with identical input before changing it.",
+			"Recover the saved submission on its original page with identical input, edit flag and assessed prepared proof before changing it.",
 		);
-	const before = page(saved.page);
 	const current = await getPage(api, taskId, saved.cursor);
 	if (
 		before.task.taskId !== taskId ||
 		before.task.localeCode !== current.task.localeCode ||
 		before.task.format !== current.task.format ||
+		(revisePrepared &&
+			(before.task.localeProposalId !== current.task.localeProposalId ||
+				before.task.sourceSnapshotId !== current.task.sourceSnapshotId)) ||
 		JSON.stringify(before.guidance) !== JSON.stringify(current.guidance)
 	)
 		throw new Failure(
 			"REASSESS",
 			"Task identity or guidance changed. Read and reassess the page.",
 		);
+	const preservedPrepared = /** @type {string[]} */ ([]);
 	const pending = items.filter((item) => {
 		const prior = before.targets.find(
 			(target) => target.messageId === item.messageId,
@@ -696,13 +736,30 @@ async function taskSubmit(api, taskId, directory, body) {
 			prior.sourceValue !== live.sourceValue ||
 			JSON.stringify(prior.source) !== JSON.stringify(live.source) ||
 			prior.context !== live.context ||
-			prior.characterLimit !== live.characterLimit
+			prior.characterLimit !== live.characterLimit ||
+			(revisePrepared &&
+				(prior.sourceFingerprint !== live.sourceFingerprint ||
+					!isDeepStrictEqual(prior.metadataJson, live.metadataJson)))
 		)
 			throw new Failure(
 				"REASSESS",
 				`Source, target or limits changed for ${item.messageId}. Read and reassess.`,
 			);
+		// Recover an exact recorded write before comparing carry that its review may have replaced.
 		if (sameCandidate(live, item)) return false;
+		const kind = reviewKind(live);
+		const revisingCarry =
+			revisePrepared && ["prepared", "preparedIntentionalBlank"].includes(kind);
+		if (
+			revisePrepared &&
+			object(prior.preparedValue) &&
+			prior.candidate === null &&
+			!isDeepStrictEqual(preparedProof(prior), preparedProof(live))
+		)
+			throw new Failure(
+				"REASSESS",
+				`Prepared value or authority changed for ${item.messageId}. Read and reassess.`,
+			);
 		if (
 			prior.targetValue !== live.targetValue ||
 			JSON.stringify(prior.candidate) !== JSON.stringify(live.candidate)
@@ -717,12 +774,31 @@ async function taskSubmit(api, taskId, directory, body) {
 				"intentionalBlank",
 				"prepared",
 				"preparedIntentionalBlank",
-			].includes(reviewKind(live))
+			].includes(kind) &&
+			!revisingCarry
 		)
 			throw new Failure(
 				"ALREADY_REVIEWED",
 				`Preserve reviewed ${item.messageId}; use an explicitly assigned correction task.`,
 			);
+		if (revisingCarry) {
+			if (
+				before.task.status !== "open" ||
+				current.task.status !== "open" ||
+				prior.candidate !== null ||
+				live.candidate !== null ||
+				!object(prior.preparedValue) ||
+				!isDeepStrictEqual(preparedProof(prior), preparedProof(live))
+			)
+				throw new Failure(
+					"REASSESS",
+					`Revising ${item.messageId} requires an open new-Locale task and unchanged assessed prepared proof.`,
+				);
+			if (samePrepared(live, item)) {
+				preservedPrepared.push(item.messageId);
+				return false;
+			}
+		}
 		const limit = live.characterLimit;
 		if (
 			typeof limit === "number" &&
@@ -735,7 +811,16 @@ async function taskSubmit(api, taskId, directory, body) {
 			);
 		return true;
 	});
-	await save(intentPath, { items, outcome: "unknown", cursor: saved.cursor });
+	const intent = {
+		taskId,
+		items,
+		cursor: saved.cursor,
+		revisePrepared,
+		preparedProofs,
+	};
+	// Pure preservation performs no write whose outcome could be unknown.
+	if (preservedPrepared.length !== items.length)
+		await save(intentPath, { ...intent, outcome: "unknown" });
 	if (pending.length) {
 		try {
 			const receipt = await api(
@@ -755,7 +840,7 @@ async function taskSubmit(api, taskId, directory, body) {
 				error.info.status < 500
 			)
 				await save(intentPath, {
-					items,
+					...intent,
 					outcome: "rejected",
 					error: error.info,
 				});
@@ -768,13 +853,30 @@ async function taskSubmit(api, taskId, directory, body) {
 		const target = after.targets.find(
 			(target) => target.messageId === item.messageId,
 		);
+		if (preservedPrepared.includes(item.messageId)) {
+			const prior = before.targets.find(
+				(target) => target.messageId === item.messageId,
+			);
+			if (
+				!target ||
+				!prior ||
+				target.candidate !== null ||
+				!isDeepStrictEqual(preparedProof(prior), preparedProof(target)) ||
+				!samePrepared(target, item)
+			)
+				throw new Failure(
+					"REASSESS",
+					"Preserved prepared value changed; read and reassess the page.",
+				);
+			continue;
+		}
 		if (!target || !sameCandidate(target, item))
 			throw new Failure(
 				"REASSESS",
 				"Submitted candidate differs from current server evidence; inspect the saved submission.",
 			);
 	}
-	await save(intentPath, { items, outcome: "recorded", cursor: saved.cursor });
+	await save(intentPath, { ...intent, outcome: "recorded" });
 	await save(join(directory, "page.json"), {
 		cursor: saved.cursor,
 		...(inspecting ? { mode: "inspect" } : {}),
@@ -794,7 +896,8 @@ async function taskSubmit(api, taskId, directory, body) {
 		: null;
 	return {
 		taskId,
-		submitted: items.length,
+		submitted: items.length - preservedPrepared.length,
+		...(revisePrepared ? { preservedPrepared } : {}),
 		remainingOnPage: remaining,
 		reviewHandoff: review.path,
 		revisions: review.revisions,
@@ -1241,6 +1344,9 @@ Inspect and its submit preserve the scan checkpoint and status observations.
 inspectedPageComplete covers only that page; submittedScopeComplete covers the saved scan.
 Inspection clears page selection before fetching; after failure, read or inspect again.
 Submissions use the server's ICU and character-limit validation and save review handoffs.
+task submit --revise-prepared acknowledges an explicit assignment to correct the submitted
+carried values in an open new-Locale task. It grants no review authority; unchanged
+prepared values/reasons are preserved without candidates. Recover with the same flag.
 task reuse copies exact reviewed authorship as fresh pending candidates, saves receipts
 and review handoffs, and scans 4 source pages per call. Use separate reuse state.
 task status scans 4 pages per call (--max-pages 1..32), checkpoints, and resumes.
@@ -1284,6 +1390,7 @@ export async function main(argv) {
 				"--restart",
 				"--source",
 				"--cursor",
+				"--revise-prepared",
 			].includes(flag) ||
 			flags.has(flag)
 		)
@@ -1291,9 +1398,18 @@ export async function main(argv) {
 				"INVALID_ARGUMENT",
 				"Unknown or repeated workflow option.",
 			);
-		if (flag === "--restart") flags.set(flag, "true");
+		if (["--restart", "--revise-prepared"].includes(flag))
+			flags.set(flag, "true");
 		else flags.set(flag, string(rest[++index], flag));
 	}
+	if (
+		flags.has("--revise-prepared") &&
+		!(role === "task" && command === "submit")
+	)
+		throw new Failure(
+			"INVALID_ARGUMENT",
+			"--revise-prepared is only for task submit under an explicit prepared-value correction assignment.",
+		);
 	if (
 		(flags.has("--max-pages") &&
 			!(role === "task" && ["status", "reuse"].includes(command))) ||
@@ -1403,7 +1519,13 @@ export async function main(argv) {
 									inspectCursor,
 								})
 							: command === "submit"
-								? await taskSubmit(api, taskId, directory, body)
+								? await taskSubmit(
+										api,
+										taskId,
+										directory,
+										body,
+										flags.has("--revise-prepared"),
+									)
 								: await taskStatus(
 										api,
 										taskId,

@@ -54,6 +54,10 @@ when requested. Repository source authoring stays in its source checkout.
    authorized reviewed draft examples. Inspect the exact failed revision when
    correcting a rejection. Preserve already reviewed values unless the assignment
    explicitly calls for further edits.
+   For specified carried-value corrections in an open new-Locale task, follow
+   [explicit prepared revision](../_blabla/references/workflow.md#explicitly-revise-prepared-carry).
+   This opt-in does not permit rewriting accepted current candidates or approving
+   the new revision.
 5. Apply the [translation rules](../_blabla/references/translation-api.md#translation-rules)
    to every candidate. Use returned `format`: managed `plain` text treats braces literally; App
    messages preserve their executable contract. Preserve exact
