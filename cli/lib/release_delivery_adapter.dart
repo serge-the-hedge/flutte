@@ -168,12 +168,13 @@ class ReleaseRepositoryAdapter {
     final summary = await request.gateway.readRelease(request.recordId);
     _validateSummary(summary, request.recordId);
     final localeInput = request.localeProposal;
-    final localeArtifact = localeInput == null
+    final preparedLocale = localeInput == null
         ? null
         : await _localeDelivery.prepare(
             localeInput.gateway,
             localeInput.proposalId,
           );
+    final localeArtifact = preparedLocale?.artifact;
     if (localeArtifact != null) {
       _validateCombinedProvenance(summary, localeArtifact);
     }
@@ -360,7 +361,7 @@ class ReleaseRepositoryAdapter {
       if (localeArtifact != null) {
         await _localeDelivery.ensureUnchanged(
           localeInput!.gateway,
-          localeArtifact,
+          preparedLocale!,
         );
       }
 

@@ -82,12 +82,28 @@ including their review provenance and Intentional Blank reasons. Changed or new
 Source values remain translation work. Pending agent candidates are not carried,
 and existing destination values are preserved.
 
-A catalog finalized against a selected snapshot is complete for that Source;
-it is not yet eligible for repository delivery while that snapshot is outside
-the accepted Baseline. After the developer merges the approved copy, run ordinary
-`blabla sync`, continue on current Source, and finalize the resulting proposal.
-Unchanged reviewed pairs carry forward without another review. The existing
-delivery command and its Source checks then apply.
+A catalog finalized against a selected snapshot is complete for that Source.
+To prepare its own review PR before the approved copy merges, check out the named
+branch containing that exact Source and run:
+
+```sh
+blabla deliver-locale --proposal <proposal-id> --base <checked-out-branch>
+```
+
+The explicit base must match the checkout's current branch. This mode requires
+an immutable editor-selected Source pin and a finalized artifact; a stale
+ordinary Baseline proposal cannot use it. The whole Source file at checkout HEAD
+must match the captured commit exactly, including metadata and formatting.
+The command creates a local locale review branch and suggests a PR targeting
+the explicit base. Repository identity, Source, artifact, runtime registration,
+Flutter generation and checkout stability checks still apply. It does not
+advance the accepted Baseline, observe delivery, or activate the language.
+
+Without `--base`, delivery still requires the current accepted Baseline and the
+configured integration branch. After the developer merges the approved copy,
+ordinary `blabla sync`, continuation on current Source and finalization prepare
+that ordinary path. Unchanged reviewed pairs carry forward without another
+review. Combined Release delivery always requires current Baseline evidence.
 
 ## Deliver and bind
 
@@ -162,9 +178,17 @@ its translations or activates its language.
 ## Several languages and capacity
 
 Prepare several configured languages in parallel. Deliver one new language per
-command, merge and sync, then repeat. After each sync, continue and re-finalize
-any remaining prepared tasks against the current Baseline before delivering
-them. A ready existing-Locale release can include one new language pinned to
+command. For ordinary Baseline delivery, merge and sync, then continue and
+re-finalize remaining tasks against the current Baseline before delivering them.
+For selected Source, use explicit `--base` to prepare several review PRs without
+merging. A stack can base each locale PR on the preceding locale branch while all
+artifacts pin the same unchanged Source. Each PR then adds one catalog and its
+runtime support. Sibling PRs from one base overlap in runtime registration and
+shared generated files; resolve those additions together and regenerate before
+merging. Ordinary sync and deliberate binding still follow the actual merged
+integration branch.
+
+A ready existing-Locale release can include one new language pinned to
 the release’s same Baseline Snapshot, using the Release screen’s optional
 language selector or `deliver --release <id> --locale-proposal <proposal-id>`.
 The Release Delta must leave the proposal's Source catalog unchanged. A pending

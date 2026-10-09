@@ -109,9 +109,14 @@ validation diagnostics. It does not create an active Locale or bind a file.
 Returns the durable proposal review summary, including bounded diagnostics from
 the last failed finalization attempt. `sourceSelection` distinguishes ordinary
 Baseline preparation from an editor-selected snapshot, and `sourceIsEligible`
-states whether its pin still supports review/finalization. Delivery eligibility
-remains separate: a complete selected-snapshot artifact can still have
-`deliveryStatus: "stale"` until continued onto accepted Source.
+states whether its pin still supports review/finalization. `deliveryStatus`
+describes ordinary current-Baseline delivery eligibility: a complete selected
+artifact can still have `deliveryStatus: "stale"`. The CLI's explicit locale-only
+`deliver-locale --base <checked-out-branch>` can prepare a review PR from a
+finalized `sourceSelection: "selectedSnapshot"` artifact after exact checkout
+Source validation. It cannot use a historical ordinary-Baseline proposal or
+advance Baseline, observe delivery, or bind a locale. Combined Release delivery
+retains current-Baseline requirements.
 
 #### `GET /locale-proposals/template?proposalId=...&cursor=0&limit=16`
 

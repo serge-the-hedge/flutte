@@ -29,6 +29,8 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
       sourceSnapshotId: _requiredString(response, 'sourceSnapshotId'),
       status: _requiredString(response, 'status'),
       deliveryStatus: _requiredString(response, 'deliveryStatus'),
+      sourceSelection:
+          _optionalString(response, 'sourceSelection') ?? 'baseline',
     );
   }
 

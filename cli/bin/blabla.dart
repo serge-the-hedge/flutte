@@ -100,13 +100,14 @@ Future<int> runCli(
         'Note: deliver-portuguese is deprecated. Use `blabla deliver-locale --proposal <id>`.',
       );
     }
-    final options = _options(arguments.skip(1).toList(), const {
+    final options = _options(arguments.skip(1).toList(), {
       'checkout',
       'proposal',
       'server',
       'token',
       'profile',
       'flutter-sdk',
+      if (arguments.first == 'deliver-locale') 'base',
     });
     final proposalId = _requiredOption(options, 'proposal');
     final credentials = await resolveCredentials(
@@ -132,6 +133,7 @@ Future<int> runCli(
         flutter: flutter,
         gateway: gateway,
         write: output,
+        baseBranch: options['base'],
       ),
     );
     return 0;
@@ -440,7 +442,7 @@ const _usage = '''Usage:
   blabla --version
   blabla sync [options]
   blabla deliver --release <release-record-id> [--locale-proposal <proposal-id>] [options]
-  blabla deliver-locale --proposal <proposal-id> [options]
+  blabla deliver-locale --proposal <proposal-id> [--base <branch>] [options]
   blabla login --profile <name> --server <url> [--token-stdin] [--replace]
   blabla profiles
   blabla logout --profile <name>
@@ -448,6 +450,8 @@ const _usage = '''Usage:
 Options:
   sync                 Read bound ARB files and submit one durable snapshot
   --preview         Capture a local branch without changing the accepted catalog (sync only)
+  --base <branch>   Deliver a finalized selected-Source Locale on this checked-out
+                     review branch (deliver-locale only); use it as the PR base
   --checkout <path>  Brickit checkout (defaults to the current directory)
   --server <url>     Blabla deployment (or BLABLA_API_URL)
   --token <token>    Token (or BLABLA_TOKEN); login prefers hidden input

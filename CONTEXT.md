@@ -85,9 +85,10 @@ _Avoid_: current catalog, latest branch
 
 **Integration Branch**:
 The project-level Git ref from which Repository Adapter syncs are accepted and
-against which reviewed locale delivery pull requests are based. For the current
-Brickit integration this is `develop`; a checkout on another branch is not a
-valid sync or delivery source.
+against which ordinary reviewed delivery pull requests are based. Brickit uses
+`develop`. A complete new-Locale addition reviewed against an explicitly selected
+Source Snapshot may instead target a matching review branch. That delivery does
+not advance the accepted Baseline or activate the Locale.
 _Avoid_: whatever branch happens to be checked out, latest branch
 
 **Baseline Lineage**:

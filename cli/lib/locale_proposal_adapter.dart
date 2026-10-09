@@ -104,12 +104,25 @@ class LocaleProposalSummary {
     required this.sourceSnapshotId,
     required this.status,
     required this.deliveryStatus,
+    this.sourceSelection = 'baseline',
   });
 
   final String proposalId;
   final String sourceSnapshotId;
   final String status;
   final String deliveryStatus;
+  final String sourceSelection;
+}
+
+enum LocaleDeliveryPolicy { currentBaseline, selectedSource }
+
+/// Freezes the artifact and its eligibility rule for the final remote recheck.
+class PreparedLocaleDelivery {
+  const PreparedLocaleDelivery._(this.artifact, this._summary, this._policy);
+
+  final LocaleProposalArtifact artifact;
+  final LocaleProposalSummary _summary;
+  final LocaleDeliveryPolicy _policy;
 }
 
 /// The adapter's only Blabla seam. The concrete HTTP client is deliberately
@@ -153,42 +166,61 @@ class LocaleDelivery {
   String generatedLocalePath(LocaleProposalArtifact artifact) =>
       '$_l10nDirectory/app_localizations_${artifact.locale.languageCode}.dart';
 
-  Future<LocaleProposalArtifact> prepare(
-    LocaleProposalGateway gateway,
-    String proposalId,
-  ) async {
-    await ensureCurrent(gateway, proposalId);
-    final artifact = await gateway.readArtifact(proposalId);
-    validateArtifact(artifact, proposalId);
-    return artifact;
-  }
-
-  Future<void> ensureCurrent(
+  Future<PreparedLocaleDelivery> prepare(
     LocaleProposalGateway gateway,
     String proposalId, {
-    String? expectedSnapshotId,
+    LocaleDeliveryPolicy policy = LocaleDeliveryPolicy.currentBaseline,
   }) async {
-    final summary = await gateway.readProposal(proposalId);
-    if (summary.proposalId != proposalId ||
-        summary.status != 'ready' ||
-        summary.deliveryStatus != 'ready' ||
-        (expectedSnapshotId != null &&
-            summary.sourceSnapshotId != expectedSnapshotId)) {
+    final summary = await _eligibleSummary(gateway, proposalId, policy);
+    final artifact = await gateway.readArtifact(proposalId);
+    validateArtifact(artifact, proposalId);
+    if (artifact.sourceSnapshot.id != summary.sourceSnapshotId) {
       throw RepositoryAdapterException(
-        'The Locale Proposal is not a current finalized delivery artifact.',
+        'The Locale Proposal artifact does not match its prepared Source Snapshot.',
       );
     }
+    return PreparedLocaleDelivery._(artifact, summary, policy);
+  }
+
+  Future<LocaleProposalSummary> _eligibleSummary(
+    LocaleProposalGateway gateway,
+    String proposalId,
+    LocaleDeliveryPolicy policy,
+  ) async {
+    final summary = await gateway.readProposal(proposalId);
+    final eligible = switch (policy) {
+      LocaleDeliveryPolicy.currentBaseline => summary.deliveryStatus == 'ready',
+      LocaleDeliveryPolicy.selectedSource =>
+        summary.sourceSelection == 'selectedSnapshot',
+    };
+    if (summary.proposalId != proposalId ||
+        summary.status != 'ready' ||
+        !eligible) {
+      throw RepositoryAdapterException(
+        policy == LocaleDeliveryPolicy.selectedSource
+            ? 'Review-branch delivery requires a finalized Locale Proposal with an explicitly selected Source Snapshot.'
+            : 'The Locale Proposal is not a current finalized delivery artifact.',
+      );
+    }
+    return summary;
   }
 
   Future<void> ensureUnchanged(
     LocaleProposalGateway gateway,
-    LocaleProposalArtifact expected,
+    PreparedLocaleDelivery prepared,
   ) async {
-    await ensureCurrent(
+    final expected = prepared.artifact;
+    final summary = await _eligibleSummary(
       gateway,
       expected.proposalId,
-      expectedSnapshotId: expected.sourceSnapshot.id,
+      prepared._policy,
     );
+    if (summary.sourceSnapshotId != prepared._summary.sourceSnapshotId ||
+        summary.sourceSelection != prepared._summary.sourceSelection) {
+      throw RepositoryAdapterException(
+        'The Locale Proposal Source selection changed while delivery was being prepared.',
+      );
+    }
     final current = await gateway.readArtifact(expected.proposalId);
     validateArtifact(current, expected.proposalId);
     if (current.sourceSnapshot.id != expected.sourceSnapshot.id ||
@@ -272,6 +304,8 @@ class LocaleDelivery {
     final sourceDiff = await runner.run('git', [
       'diff',
       '--quiet',
+      '--no-ext-diff',
+      '--no-textconv',
       artifact.sourceSnapshot.commit,
       checkoutCommit,
       '--',
@@ -399,6 +433,7 @@ class DeliveryRequest {
     required this.flutter,
     required this.gateway,
     required this.write,
+    this.baseBranch,
   });
 
   final Directory checkout;
@@ -406,6 +441,7 @@ class DeliveryRequest {
   final ResolvedFlutter flutter;
   final LocaleProposalGateway gateway;
   final void Function(String line) write;
+  final String? baseBranch;
 }
 
 class DeliveryResult {
@@ -432,16 +468,29 @@ class RepositoryAdapter {
   static const _localeDelivery = LocaleDelivery();
 
   Future<DeliveryResult> deliver(DeliveryRequest request) async {
-    final artifact = await _localeDelivery.prepare(
+    final explicitBase = request.baseBranch;
+    if (explicitBase != null &&
+        (!_isValidIntegrationBranch(explicitBase) || explicitBase == 'HEAD')) {
+      throw RepositoryAdapterException(
+        '--base must name a local review branch, using only letters, numbers, dots, underscores, slashes, and hyphens.',
+      );
+    }
+    final prepared = await _localeDelivery.prepare(
       request.gateway,
       request.proposalId,
+      policy: explicitBase == null
+          ? LocaleDeliveryPolicy.currentBaseline
+          : LocaleDeliveryPolicy.selectedSource,
     );
+    final artifact = prepared.artifact;
+    final baseBranch =
+        explicitBase ?? artifact.sourceSnapshot.integrationBranch;
 
     final checkout = await _repositoryRoot(request.checkout);
     final currentBranch = await _currentBranch(checkout);
-    if (currentBranch != artifact.sourceSnapshot.integrationBranch) {
+    if (currentBranch != baseBranch) {
       throw RepositoryAdapterException(
-        'This checkout is on $currentBranch, but this proposal delivers into ${artifact.sourceSnapshot.integrationBranch}. Check out ${artifact.sourceSnapshot.integrationBranch} and retry.',
+        'This checkout is on $currentBranch, but this proposal delivers into $baseBranch. Check out $baseBranch and retry.',
       );
     }
     final appliedOnto = await _git(checkout, ['rev-parse', 'HEAD']);
@@ -491,19 +540,20 @@ class RepositoryAdapter {
       await _git(staging.root, [
         'commit',
         '-m',
-        'feat(l10n): add ${artifact.locale.code}\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}',
+        'feat(l10n): add ${artifact.locale.code}\n\nBlabla-Locale-Proposal: ${artifact.proposalId}\nBlabla-Source-Snapshot: ${artifact.sourceSnapshot.id}\nBlabla-Delivery-Base: $baseBranch\nBlabla-Applied-Onto: $appliedOnto',
       ]);
 
       await staging.verifyCandidate({...baseline.files, ...candidateFiles});
 
-      await _localeDelivery.ensureUnchanged(request.gateway, artifact);
+      await _localeDelivery.ensureUnchanged(request.gateway, prepared);
+      await _ensureArtifactMatchesCheckout(checkout, artifact, appliedOnto);
       await _ensureRelevantPathsAreClean(checkout);
       await _ensureIndexIsClean(checkout);
       await staging.ensureCheckoutUnchanged(currentBranch);
       await staging.publish(branchName);
 
       final pullRequestCommand =
-          'gh pr create --base ${artifact.sourceSnapshot.integrationBranch} --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
+          'gh pr create --base $baseBranch --head $branchName --title "feat(l10n): add ${artifact.locale.code}"';
       request.write('Created local branch $branchName.');
       if (baseline.files.isNotEmpty) {
         request.write(
