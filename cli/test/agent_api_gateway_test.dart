@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -205,4 +206,70 @@ void main() {
       ),
     );
   });
+
+  test('times out a Locale proposal read waiting for headers', () async {
+    await _expectRequestTimeout(sendPartialBody: false);
+  });
+
+  test(
+    'times out a Locale proposal artifact read waiting for its full body',
+    () async {
+      await _expectRequestTimeout(sendPartialBody: true);
+    },
+  );
+}
+
+Future<void> _expectRequestTimeout({required bool sendPartialBody}) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(() => server.close(force: true));
+  final received = Completer<void>();
+  final disconnected = Completer<void>();
+  server.listen((request) async {
+    expect(
+      request.uri.path,
+      '/api/agent/v1/locale-proposals${sendPartialBody ? '/artifact' : ''}',
+    );
+    final socket = await request.response.detachSocket(writeHeaders: false);
+    addTearDown(socket.destroy);
+    socket.listen((_) {}, onDone: disconnected.complete);
+    if (sendPartialBody) {
+      socket.add(
+        ascii.encode(
+          'HTTP/1.1 200 OK\r\n'
+          'Content-Type: application/json\r\n'
+          'Content-Length: 100\r\n\r\n'
+          '{"',
+        ),
+      );
+      await socket.flush();
+    }
+    received.complete();
+  });
+
+  final gateway = HttpLocaleProposalGateway(
+    baseUrl: Uri.parse('http://${server.address.address}:${server.port}'),
+    token: 'timeout-fixture-token',
+    requestTimeout: const Duration(milliseconds: 250),
+  );
+  final read = sendPartialBody
+      ? gateway.readArtifact('timeout-fixture-proposal')
+      : gateway.readProposal('timeout-fixture-proposal');
+  await expectLater(
+    read.timeout(const Duration(seconds: 1)),
+    throwsA(
+      isA<RepositoryAdapterException>().having(
+        (error) => error.message,
+        'message',
+        allOf(
+          contains('timed out'),
+          contains('network'),
+          contains('retry'),
+          isNot(contains('timeout-fixture-token')),
+          isNot(contains('timeout-fixture-proposal')),
+        ),
+      ),
+    ),
+  );
+  await received.future.timeout(const Duration(seconds: 1));
+  await disconnected.future.timeout(const Duration(seconds: 1));
 }
