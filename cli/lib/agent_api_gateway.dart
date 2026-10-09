@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,11 +15,15 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
     required this.baseUrl,
     required this.token,
     this.onWarning,
+    this.requestTimeout = const Duration(seconds: 30),
   });
 
   final Uri baseUrl;
   final String token;
   final void Function(String line)? onWarning;
+
+  /// One deadline for connecting, receiving headers, and reading the full body.
+  final Duration requestTimeout;
   final _compatibility = CliCompatibility();
 
   @override
@@ -82,35 +87,43 @@ class HttpLocaleProposalGateway implements LocaleProposalGateway {
   Future<Map<String, Object?>> _get(Uri uri) async {
     final client = HttpClient();
     try {
-      final request = await client.getUrl(uri);
-      request.followRedirects = false;
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      _compatibility.stamp(request.headers);
-      final response = await request.close();
-      final body = await utf8.decoder.bind(response).join();
-      if (response.statusCode != HttpStatus.ok) {
-        throw RepositoryAdapterException(
-          'Blabla rejected the Locale proposal request (${response.statusCode}). ${_errorMessage(body)}',
-        );
-      }
-      _compatibility.check(
-        response.headers,
-        onWarning: (line) => onWarning?.call(redactApiToken(line, token)),
+      return await _readResponse(client, uri).timeout(requestTimeout);
+    } on TimeoutException {
+      throw RepositoryAdapterException(
+        'Blabla timed out while reading the Locale proposal. Check your network connection and retry.',
       );
-      try {
-        return _object(jsonDecode(body));
-      } on FormatException {
-        throw RepositoryAdapterException(
-          'Blabla returned an invalid Locale proposal response.',
-        );
-      }
     } on SocketException catch (error) {
       throw RepositoryAdapterException(
         'Could not reach Blabla to read the Locale proposal: ${error.message}',
       );
     } finally {
       client.close(force: true);
+    }
+  }
+
+  Future<Map<String, Object?>> _readResponse(HttpClient client, Uri uri) async {
+    final request = await client.getUrl(uri);
+    request.followRedirects = false;
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    _compatibility.stamp(request.headers);
+    final response = await request.close();
+    final body = await utf8.decoder.bind(response).join();
+    if (response.statusCode != HttpStatus.ok) {
+      throw RepositoryAdapterException(
+        'Blabla rejected the Locale proposal request (${response.statusCode}). ${_errorMessage(body)}',
+      );
+    }
+    _compatibility.check(
+      response.headers,
+      onWarning: (line) => onWarning?.call(redactApiToken(line, token)),
+    );
+    try {
+      return _object(jsonDecode(body));
+    } on FormatException {
+      throw RepositoryAdapterException(
+        'Blabla returned an invalid Locale proposal response.',
+      );
     }
   }
 
