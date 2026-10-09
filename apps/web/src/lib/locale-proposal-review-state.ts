@@ -43,7 +43,7 @@ export function localeProposalReviewState(input: {
 			badgeLabel: "Reviewed for selected source",
 			emptyTitle: "Selected source catalog finalized",
 			emptyDescription:
-				"This artifact records review for the selected Source Snapshot. Continue on the accepted source after the developer merges it to prepare delivery.",
+				"Prepare a PR on a review branch whose Source matches this snapshot, or continue on the accepted Source for delivery on the integration branch. Preparing a PR does not activate the language.",
 			canFinalize: false,
 		};
 	}

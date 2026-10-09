@@ -239,7 +239,10 @@ describe("Locale selected-source workbench", () => {
 		detail = fixture("ready");
 		await render();
 		expect(dom.container.textContent).toContain("Reviewed for selected source");
-		expect(dom.container.textContent).toContain("not accepted for delivery");
+		expect(dom.container.textContent).toContain("PR on a review branch");
+		expect(dom.container.textContent).toContain(
+			"does not update the accepted Source",
+		);
 		expect(dom.container.textContent).not.toContain(
 			"deliver-locale --proposal",
 		);

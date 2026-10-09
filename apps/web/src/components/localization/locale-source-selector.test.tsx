@@ -72,7 +72,7 @@ describe("new Locale Source selection", () => {
 		expect(dom.container.querySelector("output")?.textContent).toBe("preview");
 		expect(dom.container.textContent).toContain(commit);
 		expect(dom.container.textContent).toContain(
-			"Delivery requires continuation",
+			"Delivery on the integration branch uses the accepted Source",
 		);
 		await choose("Current accepted source");
 		expect(dom.container.querySelector("output")?.textContent).toBe("current");

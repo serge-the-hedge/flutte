@@ -144,7 +144,10 @@ describe("selected Source Snapshot review", () => {
 			badgeLabel: "Reviewed for selected source",
 			canFinalize: false,
 		});
-		expect(state.emptyDescription).toContain("after the developer merges");
+		expect(state.emptyDescription).toContain(
+			"review branch whose Source matches",
+		);
+		expect(state.emptyDescription).toContain("does not activate the language");
 	});
 
 	test("keeps ineligible selected drafts stale and recognizes their later accepted Baseline", () => {

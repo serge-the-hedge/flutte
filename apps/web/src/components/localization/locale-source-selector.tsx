@@ -122,7 +122,7 @@ function LocaleSourceChoices({
 						{" · "}
 						{selected.repository}. Review stays pinned to this Source Snapshot.
 						{selected._id !== baselineSnapshotId
-							? " Delivery requires continuation on the accepted Source."
+							? " A finalized catalog can become a PR on a matching review branch. Delivery on the integration branch uses the accepted Source."
 							: null}
 					</>
 				) : (
